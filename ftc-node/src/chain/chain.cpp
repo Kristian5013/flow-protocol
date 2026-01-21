@@ -658,8 +658,8 @@ bool Chain::activateBestChain(std::vector<BlockEvent>& events, const BlockIndex*
             continue;
         }
 
-        // Check if more work
-        if (best_tip == nullptr || index->chain_work > best_tip->chain_work) {
+        // Check if more work (use compare256 for little-endian comparison)
+        if (best_tip == nullptr || compare256(index->chain_work, best_tip->chain_work) > 0) {
             best_tip = index;
         }
     }
