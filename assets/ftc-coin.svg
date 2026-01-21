@@ -2,23 +2,25 @@
   <!-- Orange rounded square background -->
   <rect x="0" y="0" width="256" height="256" rx="52" ry="52" fill="#F7931A"/>
 
-  <!-- White F symbol with vertical lines extending above and below -->
-  <g fill="none" stroke="#FFFFFF" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Vertical line of F -->
-    <path d="M 100 48 L 100 208"/>
+  <!-- Tilted F symbol (~14 degrees like Bitcoin) -->
+  <g transform="rotate(14, 128, 128)">
+    <g fill="none" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Main vertical stem -->
+      <path d="M 110 56 L 110 200"/>
 
-    <!-- Top horizontal bar -->
-    <path d="M 100 72 L 168 72"/>
+      <!-- Top horizontal bar -->
+      <path d="M 110 82 L 170 82"/>
 
-    <!-- Middle horizontal bar -->
-    <path d="M 100 128 L 152 128"/>
+      <!-- Middle horizontal bar -->
+      <path d="M 110 130 L 155 130"/>
 
-    <!-- Top extending line (above F) -->
-    <path d="M 100 32 L 100 48"/>
-    <path d="M 156 32 L 156 56"/>
+      <!-- Top serifs -->
+      <path d="M 110 40 L 110 56"/>
+      <path d="M 150 40 L 150 66"/>
 
-    <!-- Bottom extending line (below F) -->
-    <path d="M 100 208 L 100 224"/>
-    <path d="M 132 208 L 132 224"/>
+      <!-- Bottom serifs -->
+      <path d="M 110 200 L 110 216"/>
+      <path d="M 142 200 L 142 216"/>
+    </g>
   </g>
 </svg>
