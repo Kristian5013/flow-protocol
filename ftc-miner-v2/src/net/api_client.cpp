@@ -319,9 +319,15 @@ uint32_t APIClient::getDifficulty() {
 APIClient::NetworkStats APIClient::getNetworkStats() {
     NetworkStats stats;
 
-    // Get peer count from /status endpoint
+    // Get peer count and height from /status endpoint
     std::string status_response = httpGet("/status");
     if (!status_response.empty()) {
+        // Look for "height":N in chain object
+        size_t height_pos = status_response.find("\"height\":");
+        if (height_pos != std::string::npos) {
+            stats.height = std::stoi(status_response.substr(height_pos + 9));
+        }
+
         // Look for "peers":{"connected":N}
         size_t peers_pos = status_response.find("\"peers\":");
         if (peers_pos != std::string::npos) {

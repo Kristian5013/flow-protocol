@@ -445,6 +445,9 @@ int main(int argc, char** argv) {
             auto net_stats = api_client.getNetworkStats();
             stats.peer_count = net_stats.peer_count;
             stats.active_miners = net_stats.active_miners;
+            if (net_stats.height > 0) {
+                stats.block_height = net_stats.height;
+            }
         }
 
         // Update stats from GPUs
