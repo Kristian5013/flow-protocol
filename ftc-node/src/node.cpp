@@ -1058,15 +1058,31 @@ void Node::stop() {
 void Node::waitForShutdown() {
     std::unique_lock<std::mutex> lock(shutdown_mutex_);
 
-    // Periodically save peers while waiting for shutdown
+    // Periodically save peers and print status while waiting for shutdown
     while (!shutdown_requested_) {
-        // Wait for 60 seconds or until shutdown is requested
-        if (shutdown_cv_.wait_for(lock, std::chrono::seconds(60), [this] { return shutdown_requested_; })) {
+        // Wait for 30 seconds or until shutdown is requested
+        if (shutdown_cv_.wait_for(lock, std::chrono::seconds(30), [this] { return shutdown_requested_; })) {
             break;  // Shutdown requested
         }
-        // Save peers every 60 seconds
+
         lock.unlock();
+
+        // Save peers
         savePeers();
+
+        // Print status update
+        auto tip = chain_ ? chain_->getTip() : nullptr;
+        uint32_t height = tip ? tip->height : 0;
+        size_t peers = peer_manager_ ? peer_manager_->getPeerCount() : 0;
+        size_t mempool_size = mempool_ ? mempool_->size() : 0;
+        size_t active_miners = 0;
+        if (p2pool_ && p2pool_->isRunning()) {
+            active_miners = p2pool_->getMinerCount();
+        }
+
+        LOG_NOTICE("[Status] Height: {} | Peers: {} | Miners: {} | Mempool: {} txs",
+                   height, peers, active_miners, mempool_size);
+
         lock.lock();
     }
 
