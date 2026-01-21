@@ -2,6 +2,28 @@
 
 A fully decentralized cryptocurrency with Keccak-256 proof-of-work and P2Pool mining.
 
+[![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-blue?logo=telegram)](https://t.me/flow_protocol_main)
+
+---
+
+## Network Status
+
+| Node | Address | API | Status |
+|------|---------|-----|--------|
+| Main Node | `211.201.177.236:17318` | [API](http://211.201.177.236:17319/status) | **Online** |
+
+**Connect to the network:**
+```bash
+./ftc-node --addnode=211.201.177.236:17318
+```
+
+**Start mining:**
+```bash
+./ftc-miner -o 211.201.177.236:17319 -u YOUR_WALLET_ADDRESS
+```
+
+---
+
 **Genesis Block:** `Kristian Pilatovich 20091227 - First Real P2P`
 
 ## Features
