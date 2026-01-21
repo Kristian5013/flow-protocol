@@ -1,6 +1,12 @@
 # FTC (Flow Token Chain)
 
-A fully decentralized cryptocurrency with Keccak-256 proof-of-work and P2Pool mining.
+<p align="center">
+  <img src="assets/ftc-logo-256.svg" alt="FTC Logo" width="128" height="128"/>
+</p>
+
+<p align="center">
+  <strong>A fully decentralized cryptocurrency with Keccak-256 proof-of-work and P2Pool mining.</strong>
+</p>
 
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-blue?logo=telegram)](https://t.me/flow_protocol_main)
 
