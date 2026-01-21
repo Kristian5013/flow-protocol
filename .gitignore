@@ -1,0 +1,42 @@
+# Build directories
+build/
+bin/
+obj/
+out/
+
+# IDE
+.vs/
+.vscode/
+*.vcxproj.user
+*.suo
+*.sln.docstates
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Dependencies
+vcpkg_installed/
+packages/
+
+# Data files
+*.dat
+*.db
+*.log
+
+# Temp
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# Keep release binaries
+!release/*.exe
