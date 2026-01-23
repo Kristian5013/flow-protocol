@@ -16,14 +16,16 @@
 
 ## Network
 
-| Node | Address | API | Status |
-|------|---------|-----|--------|
-| Seed Node | `[2406:5900:2:d47::1234]:17318` | [Status](http://[2406:5900:2:d47::1234]:17319/status) | **Online** |
+| Node | Address | Region | Status |
+|------|---------|--------|--------|
+| Seed Node 1 | `[2406:5900:2:d47::1234]:17318` | Asia | **Online** |
+| Seed Node 2 | `[2600:1f18:2a2a:6f10:d463:f827:7b2c:c26b]:17318` | US-East (AWS) | **Online** |
 
 **Connect to the network:**
 ```bash
 # Add to peers.dat:
 [2406:5900:2:d47::1234]:17318
+[2600:1f18:2a2a:6f10:d463:f827:7b2c:c26b]:17318
 ```
 
 ## Features
@@ -50,10 +52,11 @@ curl http://[::1]:17319/wallet/new
 ```
 
 ### 3. Configure peers
-Add seed node to `peers.dat` in data directory:
+Add seed nodes to `peers.dat` in data directory:
 ```
 # peers.dat (IPv6 format)
 [2406:5900:2:d47::1234]:17318
+[2600:1f18:2a2a:6f10:d463:f827:7b2c:c26b]:17318
 ```
 
 ### 4. Start mining
