@@ -14,6 +14,18 @@
 
 **Genesis Block:** `Kristian Pilatovich 20091227 - First Real P2P`
 
+## Network
+
+| Node | Address | API | Status |
+|------|---------|-----|--------|
+| Seed Node | `[2406:5900:2:d47::1234]:17318` | [Status](http://[2406:5900:2:d47::1234]:17319/status) | **Online** |
+
+**Connect to the network:**
+```bash
+# Add to peers.dat:
+[2406:5900:2:d47::1234]:17318
+```
+
 ## Features
 
 - **Keccak-256 PoW** - ASIC-resistant mining algorithm
@@ -38,10 +50,10 @@ curl http://[::1]:17319/wallet/new
 ```
 
 ### 3. Configure peers
-Add peer addresses to `peers.dat` in data directory:
+Add seed node to `peers.dat` in data directory:
 ```
 # peers.dat (IPv6 format)
-[2001:db8::1]:17318
+[2406:5900:2:d47::1234]:17318
 ```
 
 ### 4. Start mining
