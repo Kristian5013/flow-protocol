@@ -23,7 +23,9 @@ Linux:
 NETWORK INFO
 ============
 
-Mainnet Seed Node: [2406:5900:2:d47::1234]:17318
+Seed Nodes:
+  [2406:5900:2:d47::1234]:17318        (Asia)
+  [2600:1f18:2a2a:6f10:d463:f827:7b2c:c26b]:17318  (US-East, AWS)
 
 Ports:
   17318 - P2P (TCP/IPv6)  - Node-to-node communication
@@ -50,8 +52,9 @@ Your node needs IPv6 connectivity to join the main network.
    Windows: %APPDATA%\FTC\peers.dat
    Linux:   ~/.ftc/peers.dat
 
-   Content:
+   Content (add both seed nodes):
    [2406:5900:2:d47::1234]:17318
+   [2600:1f18:2a2a:6f10:d463:f827:7b2c:c26b]:17318
 
 3. Start the node:
 
@@ -72,7 +75,10 @@ chmod +x ftc-node-linux
 
 # 2. Create data directory and peers file
 mkdir -p ~/.ftc
-echo "[2406:5900:2:d47::1234]:17318" > ~/.ftc/peers.dat
+cat > ~/.ftc/peers.dat << EOF
+[2406:5900:2:d47::1234]:17318
+[2600:1f18:2a2a:6f10:d463:f827:7b2c:c26b]:17318
+EOF
 
 # 3. Run node
 ./ftc-node-linux --verbose
@@ -129,6 +135,7 @@ Step 1: Generate a wallet
 Step 2: Configure network
   Create %APPDATA%\FTC\peers.dat with content:
   [2406:5900:2:d47::1234]:17318
+  [2600:1f18:2a2a:6f10:d463:f827:7b2c:c26b]:17318
 
 Step 3: Start the node
   ftc-node.exe --verbose
