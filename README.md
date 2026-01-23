@@ -5,28 +5,10 @@
 </p>
 
 <p align="center">
-  <strong>A fully decentralized cryptocurrency with Keccak-256 proof-of-work and P2Pool mining.</strong>
+  <strong>A fully decentralized cryptocurrency with Keccak-256 proof-of-work.</strong>
 </p>
 
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-blue?logo=telegram)](https://t.me/flow_protocol_main)
-
----
-
-## Network Status
-
-| Node | Address | API | Status |
-|------|---------|-----|--------|
-| Main Node | `211.201.177.236:17318` | [API](http://211.201.177.236:17319/status) | **Online** |
-
-**Connect to the network:**
-```bash
-./ftc-node --addnode=211.201.177.236:17318
-```
-
-**Start mining:**
-```bash
-./ftc-miner -o 211.201.177.236:17319 -u YOUR_WALLET_ADDRESS
-```
 
 ---
 
@@ -35,17 +17,19 @@
 ## Features
 
 - **Keccak-256 PoW** - ASIC-resistant mining algorithm
-- **P2Pool** - Decentralized mining pool (no central pool server)
 - **UTXO Model** - Bitcoin-like transaction model
 - **Bech32 Addresses** - Modern address format (`ftc1...`)
-- **Dual-Stack IPv4/IPv6** - Full network support
+- **IPv6-Only Network** - Modern internet protocol
+- **REST API** - Full node control via HTTP
+- **Self-Connection Prevention** - Automatic local IP detection
 
 ## Quick Start
 
 ### 1. Generate a wallet
 ```bash
 ./ftc-keygen
-# Save the private key securely!
+# Or via API:
+curl http://[::1]:17319/wallet/new
 ```
 
 ### 2. Start the node
@@ -53,14 +37,22 @@
 ./ftc-node
 ```
 
-### 3. Start mining
-```bash
-./ftc-miner -o 127.0.0.1:17319 -u YOUR_WALLET_ADDRESS --no-interactive
+### 3. Configure peers
+Add peer addresses to `peers.dat` in data directory:
+```
+# peers.dat (IPv6 format)
+[2001:db8::1]:17318
 ```
 
-### 4. Check balance
+### 4. Start mining
 ```bash
-./ftc-wallet balance YOUR_WALLET_ADDRESS
+./ftc-miner
+# Follow the prompts to enter your wallet address
+```
+
+### 5. Check balance
+```bash
+curl http://[::1]:17319/balance/YOUR_ADDRESS
 ```
 
 ---
@@ -70,7 +62,7 @@
 | Component | Description |
 |-----------|-------------|
 | `ftc-node` | Full blockchain node with REST API |
-| `ftc-miner` | GPU miner (OpenCL) with TUI |
+| `ftc-miner` | GPU/CPU miner with TUI |
 | `ftc-wallet` | Command-line wallet |
 | `ftc-keygen` | Offline key generator |
 
@@ -80,16 +72,14 @@
 
 | Port | Protocol | Description |
 |------|----------|-------------|
-| 17318 | TCP | P2P network |
+| 17318 | TCP | P2P network (IPv6) |
 | 17319 | HTTP | REST API |
-| 17320 | TCP | P2Pool |
-| 3333 | TCP | Stratum mining |
 
 ---
 
 ## REST API Reference
 
-Base URL: `http://127.0.0.1:17319`
+Base URL: `http://[::1]:17319`
 
 ### Node Status
 
@@ -113,9 +103,11 @@ Returns node status and network info.
     "fees": 5000
   },
   "peers": {
-    "connected": 8,
-    "inbound": 3,
-    "outbound": 5
+    "nodes": 8,
+    "connections": 12,
+    "inbound": 4,
+    "outbound": 8,
+    "known_addresses": 25
   }
 }
 ```
@@ -134,7 +126,7 @@ Health check endpoint for monitoring.
 ```
 
 #### GET /genesis
-Returns genesis block information for verification.
+Returns genesis block information.
 
 **Response:**
 ```json
@@ -163,6 +155,7 @@ Get block by height or hash.
 ```json
 {
   "hash": "00000000abc123...",
+  "height": 100,
   "version": 1,
   "prev_hash": "00000000def456...",
   "merkle_root": "abcdef123456...",
@@ -180,29 +173,6 @@ Get transaction by ID.
 **Parameters:**
 - `txid` - Transaction ID (64 hex chars)
 
-**Response:**
-```json
-{
-  "txid": "abc123...",
-  "version": 1,
-  "inputs": [
-    {
-      "txid": "prev_txid...",
-      "vout": 0,
-      "script_sig": "...",
-      "sequence": 4294967295
-    }
-  ],
-  "outputs": [
-    {
-      "value": 5000000000,
-      "script_pubkey": "0014..."
-    }
-  ],
-  "locktime": 0
-}
-```
-
 #### POST /tx
 Broadcast a signed transaction.
 
@@ -213,47 +183,36 @@ Broadcast a signed transaction.
 }
 ```
 
-**Response (success):**
-```json
-{
-  "txid": "abc123...",
-  "accepted": true
-}
-```
-
-**Response (error):**
-```json
-{
-  "accepted": false,
-  "reason": "Insufficient fee"
-}
-```
-
 ---
 
 ### Wallet
 
-#### GET /wallet/balance/:address
-Get balance for an address.
+#### GET /wallet/new
+Generate a new wallet.
 
-**Parameters:**
-- `address` - FTC address (ftc1...)
+**Response:**
+```json
+{
+  "address": "ftc1qrshzzcek6xkle2885ynpv942yhrwxupkqehr4ah",
+  "private_key": "79f10d754c50777422b56bf87cd3012b629ad34e20da25f4eb5c93e136f97f6d",
+  "public_key": "02836c62822fd31f3d57d1817cf7e70ddc833d16e54220957234c9a1babc7bec92"
+}
+```
+
+#### GET /balance/:address
+Get balance for an address.
 
 **Response:**
 ```json
 {
   "address": "ftc1q...",
   "balance": 5000000000,
-  "balance_ftc": "50.00000000",
   "unconfirmed": 0
 }
 ```
 
-#### GET /wallet/utxos/:address
-Get unspent transaction outputs for an address.
-
-**Parameters:**
-- `address` - FTC address (ftc1...)
+#### GET /utxo/:address
+Get unspent transaction outputs.
 
 **Response:**
 ```json
@@ -272,27 +231,24 @@ Get unspent transaction outputs for an address.
 }
 ```
 
-#### GET /wallet/history/:address
-Get transaction history for an address.
+#### POST /wallet/send
+Send FTC from wallet.
 
-**Parameters:**
-- `address` - FTC address (ftc1...)
-- `limit` (optional) - Max transactions (default: 100)
-- `offset` (optional) - Skip transactions (default: 0)
+**Request Body:**
+```json
+{
+  "private_key": "your_private_key_hex",
+  "to_address": "ftc1q...",
+  "amount": 1000000000,
+  "fee": 1000
+}
+```
 
 **Response:**
 ```json
 {
-  "address": "ftc1q...",
-  "transactions": [
-    {
-      "txid": "abc123...",
-      "height": 100,
-      "timestamp": 1737331200,
-      "amount": 5000000000,
-      "type": "receive"
-    }
-  ]
+  "txid": "abc123...",
+  "accepted": true
 }
 ```
 
@@ -308,104 +264,16 @@ Get current mining information.
 {
   "height": 1234,
   "difficulty": 1.0,
-  "difficulty_bits": 486604799,
-  "hashrate": 1500000000,
+  "target": "00000000ffff0000...",
   "block_reward": 5000000000
 }
 ```
 
-#### GET /mining/template
+#### GET /mining/template?address=ftc1q...
 Get block template for mining.
-
-**Query Parameters:**
-- `address` - Payout address (required)
-
-**Response:**
-```json
-{
-  "height": 1235,
-  "prev_hash": "00000000abc123...",
-  "merkle_root": "def456...",
-  "timestamp": 1737331260,
-  "bits": 486604799,
-  "coinbase": "01000000010000...",
-  "transactions": ["tx_hex_1", "tx_hex_2"]
-}
-```
 
 #### POST /mining/submit
 Submit a mined block.
-
-**Request Body:**
-```json
-{
-  "hex": "0100000000000000..."
-}
-```
-
-**Response:**
-```json
-{
-  "accepted": true,
-  "hash": "00000000abc123..."
-}
-```
-
----
-
-### P2Pool
-
-#### GET /p2pool/status
-Get P2Pool status.
-
-**Response:**
-```json
-{
-  "enabled": true,
-  "running": true,
-  "sharechain_height": 500,
-  "sharechain_tip": "abc123...",
-  "pool_hashrate": 5000000000,
-  "active_miners": 10,
-  "total_shares": 1000,
-  "total_blocks": 5,
-  "shares_per_minute": 2.5,
-  "peer_count": 8
-}
-```
-
-#### GET /p2pool/miners
-Get list of active miners.
-
-**Response:**
-```json
-{
-  "miners": [
-    {
-      "address": "ftc1q...",
-      "hashrate": 500000000,
-      "shares": 100,
-      "last_share": 1737331200
-    }
-  ]
-}
-```
-
-#### GET /p2pool/payouts
-Get pending payouts.
-
-**Response:**
-```json
-{
-  "payouts": [
-    {
-      "address": "ftc1q...",
-      "amount": 250000000,
-      "shares": 100
-    }
-  ]
-}
-```
 
 ---
 
@@ -417,26 +285,20 @@ Get connected peers.
 **Response:**
 ```json
 {
+  "count": 2,
   "peers": [
     {
-      "address": "192.168.1.100:17318",
-      "version": "1.0.0",
+      "id": 1,
+      "address": "[2001:db8::1]:17318",
+      "version": 70015,
+      "user_agent": "/FTC:1.0.0/",
       "height": 1234,
-      "latency_ms": 50,
-      "connected_since": 1737331200,
-      "inbound": false
+      "inbound": false,
+      "ping_ms": 50,
+      "bytes_sent": 1024,
+      "bytes_recv": 2048
     }
   ]
-}
-```
-
-#### POST /peers/add
-Add a peer manually.
-
-**Request Body:**
-```json
-{
-  "address": "192.168.1.100:17318"
 }
 ```
 
@@ -447,21 +309,8 @@ Add a peer manually.
 #### GET /mempool
 Get mempool contents.
 
-**Response:**
-```json
-{
-  "size": 5,
-  "bytes": 1250,
-  "transactions": [
-    {
-      "txid": "abc123...",
-      "size": 250,
-      "fee": 1000,
-      "time": 1737331200
-    }
-  ]
-}
-```
+#### GET /mempool/txids
+Get list of transaction IDs in mempool.
 
 ---
 
@@ -478,24 +327,48 @@ Get mempool contents.
 
 ---
 
+## Data Directory
+
+| OS | Path |
+|----|------|
+| Windows | `%APPDATA%\FTC\` |
+| Linux/macOS | `~/.ftc/` |
+
+**Files:**
+- `peers.dat` - Known peer addresses
+- `blocks/` - Block data
+- `chainstate/` - UTXO database
+
+---
+
 ## Building from Source
 
-### Windows
+### Windows (MinGW)
 ```batch
-scripts\build-all.bat
+cd ftc-node
+cmake -B build -G "MinGW Makefiles"
+cmake --build build
+
+cd ../ftc-miner-v2
+cmake -B build -G "Visual Studio 17 2022"
+cmake --build build --config Release
 ```
 
 ### Linux
 ```bash
 # Install dependencies
-sudo apt-get install build-essential cmake libssl-dev libleveldb-dev libuv1-dev ocl-icd-opencl-dev
+sudo apt-get install build-essential cmake
 
-# Build
-chmod +x scripts/build-all.sh
-./scripts/build-all.sh
+# Build node
+cd ftc-node
+cmake -B build
+cmake --build build
+
+# Build miner
+cd ../ftc-miner-v2
+cmake -B build
+cmake --build build
 ```
-
-Binaries will be in the `release/` directory.
 
 ---
 
@@ -508,7 +381,7 @@ MIT License
 ## Genesis Block Verification
 
 ```bash
-curl -s http://127.0.0.1:17319/genesis | jq
+curl -s http://[::1]:17319/genesis
 ```
 
 ```json
