@@ -1,0 +1,23 @@
+# Build
+build/
+*.exe
+*.obj
+*.o
+*.lib
+*.a
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Data
+*.dat
+*.db
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+nul

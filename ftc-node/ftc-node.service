@@ -1,0 +1,36 @@
+[Unit]
+Description=FTC Node - Kristian Pilatovich First Real P2P
+Documentation=https://github.com/user/ftc
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ftc
+Group=ftc
+WorkingDirectory=/var/lib/ftc
+ExecStart=/usr/local/bin/ftc-node --datadir=/var/lib/ftc
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+# Restart on failure
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ftc /var/log/ftc
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=2G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ftc-node
+
+[Install]
+WantedBy=multi-user.target
