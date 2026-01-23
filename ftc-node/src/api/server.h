@@ -198,6 +198,7 @@ public:
     void setUTXOSet(chain::UTXOSet* utxo_set) { utxo_set_ = utxo_set; }
     void setPeerManager(p2p::PeerManager* peer_mgr) { peer_manager_ = peer_mgr; }
     void setP2Pool(p2pool::P2Pool* p2pool) { p2pool_ = p2pool; }
+    p2pool::P2Pool* getP2Pool() const { return p2pool_; }
 
     // Lifecycle
     bool start();

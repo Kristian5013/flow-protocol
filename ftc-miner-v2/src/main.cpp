@@ -15,7 +15,6 @@
 #include "mining/gpu_monitor.h"
 #include "mining/work.h"
 #include "net/api_client.h"
-#include "net/stratum_client.h"
 #include "net/peer_manager.h"
 #include "config/config.h"
 #include "autotune/tuner.h"
@@ -66,22 +65,9 @@ int main(int argc, char** argv) {
             cfg.benchmark_mode = true;
             selected_node = "[::1]:17319";
             std::cout << "\n[Benchmark Mode] Running without real node connection\n";
-        }
-        // Check if Stratum mode was selected
-        else if (selected_node.find("STRATUM:") == 0) {
-            cfg.use_stratum = true;
-            selected_node = selected_node.substr(8);  // Remove "STRATUM:" prefix
-            auto [host, port] = net::StartupDialog::parseAddress(selected_node);
-            if (host.find(':') != std::string::npos) {
-                cfg.pool_url = "[" + host + "]:" + std::to_string(port);
-            } else {
-                cfg.pool_url = host + ":" + std::to_string(port);
-            }
-            std::cout << "\n[Stratum Mode] Will connect via Stratum protocol\n";
         } else {
             // Parse selected node - API mode
             auto [host, port] = net::StartupDialog::parseAddress(selected_node);
-            // Preserve bracket notation for IPv6
             if (host.find(':') != std::string::npos) {
                 cfg.pool_url = "[" + host + "]:" + std::to_string(port);
             } else {
@@ -175,7 +161,7 @@ int main(int argc, char** argv) {
 
     // Parse pool URL (IPv6 format: [addr]:port)
     std::string host = "::1";
-    uint16_t port = cfg.use_stratum ? 3333 : 17319;
+    uint16_t port = 17319;
 
     std::string url = cfg.pool_url;
     if (url.find("://") != std::string::npos) {
@@ -196,18 +182,11 @@ int main(int argc, char** argv) {
         host = url;
     }
 
-    // Create clients based on mode
-    std::unique_ptr<net::APIClient> api_client;
-    std::unique_ptr<net::StratumClient> stratum_client;
+    // Create API client
+    auto api_client = std::make_unique<net::APIClient>(host, port);
 
-    if (cfg.use_stratum) {
-        stratum_client = std::make_unique<net::StratumClient>();
-    } else {
-        api_client = std::make_unique<net::APIClient>(host, port);
-    }
-
-    // Start peer monitoring for auto-failover (if not benchmark and not stratum)
-    if (!cfg.benchmark_mode && !cfg.use_stratum && peer_manager.getPeerCount() > 0) {
+    // Start peer monitoring for auto-failover (if not benchmark)
+    if (!cfg.benchmark_mode && peer_manager.getPeerCount() > 0) {
         peer_manager.startMonitoring(30000);  // Check every 30s
     }
 
@@ -273,99 +252,50 @@ int main(int argc, char** argv) {
         ui.addLogMessage("Connecting to node...", tui::Color::Cyan);
     }
 
-    if (cfg.use_stratum) {
-        // Stratum mode - set up callbacks and connect
-        stratum_client->setWorkCallback([&work_manager, &ui, &cfg](const mining::Work& work) {
-            work_manager.setWork(work);
-            if (cfg.tui_enabled) {
-                ui.addLogMessage("Stratum: New work received", tui::Color::Cyan);
-            }
-        });
-
-        stratum_client->setShareCallback([&ui, &stats, &cfg](bool accepted) {
-            if (accepted) {
-                stats.shares_accepted++;
-                if (cfg.tui_enabled) {
-                    ui.addLogMessage("Share accepted!", tui::Color::Green);
-                }
-            } else {
-                stats.shares_rejected++;
-                if (cfg.tui_enabled) {
-                    ui.addLogMessage("Share rejected", tui::Color::Red);
-                }
-            }
-        });
-
-        // Build stratum URL
-        std::string stratum_url;
-        if (host.find(':') != std::string::npos) {
-            stratum_url = "[" + host + "]:" + std::to_string(port);
-        } else {
-            stratum_url = host + ":" + std::to_string(port);
-        }
-
-        if (!stratum_client->connect(stratum_url, cfg.wallet_address, "x")) {
-            std::string err = "Failed to connect: " + stratum_client->getLastError();
-            if (cfg.tui_enabled) {
-                ui.addLogMessage(err, tui::Color::Red);
-            } else {
-                std::cerr << "Error: " << err << "\n";
-            }
-            if (cfg.tui_enabled) ui.cleanup();
-            return 1;
-        }
-
-        stats.connected = true;
+    if (!api_client->connect()) {
+        std::string err = "Failed to connect: " + api_client->getLastError();
         if (cfg.tui_enabled) {
-            ui.addLogMessage("Connected via Stratum!", tui::Color::Green);
+            ui.addLogMessage(err, tui::Color::Red);
+        } else {
+            std::cerr << "Error: " << err << "\n";
+        }
+        if (cfg.tui_enabled) ui.cleanup();
+        return 1;
+    }
+
+    stats.connected = true;
+    stats.block_height = static_cast<int32_t>(api_client->getBlockHeight());
+    stats.difficulty = api_client->getDifficulty();
+
+    // Get initial network stats
+    auto initial_net_stats = api_client->getNetworkStats();
+    stats.peer_count = initial_net_stats.peer_count;
+    stats.active_miners = initial_net_stats.active_miners;
+
+    if (cfg.tui_enabled) {
+        ui.addLogMessage("Connected! Height: " + std::to_string(stats.block_height) +
+                        " | Peers: " + std::to_string(stats.peer_count) +
+                        " | Miners: " + std::to_string(stats.active_miners), tui::Color::Green);
+    }
+
+    // Get initial work
+    auto work_opt = api_client->getMiningTemplate(cfg.wallet_address);
+    if (work_opt) {
+        work_manager.setWork(*work_opt);
+        if (cfg.tui_enabled) {
+            ui.addLogMessage("Received work for height " + std::to_string(work_opt->height), tui::Color::Green);
+            // Debug: show target
+            std::string target_hex;
+            for (int i = 0; i < 8; i++) {
+                char buf[3];
+                snprintf(buf, 3, "%02x", work_opt->target[i]);
+                target_hex += buf;
+            }
+            ui.addLogMessage("Target: " + target_hex + "...", tui::Color::Yellow);
         }
     } else {
-        // API mode
-        if (!api_client->connect()) {
-            std::string err = "Failed to connect: " + api_client->getLastError();
-            if (cfg.tui_enabled) {
-                ui.addLogMessage(err, tui::Color::Red);
-            } else {
-                std::cerr << "Error: " << err << "\n";
-            }
-            if (cfg.tui_enabled) ui.cleanup();
-            return 1;
-        }
-
-        stats.connected = true;
-        stats.block_height = static_cast<int32_t>(api_client->getBlockHeight());
-        stats.difficulty = api_client->getDifficulty();
-
-        // Get initial network stats
-        auto initial_net_stats = api_client->getNetworkStats();
-        stats.peer_count = initial_net_stats.peer_count;
-        stats.active_miners = initial_net_stats.active_miners;
-
         if (cfg.tui_enabled) {
-            ui.addLogMessage("Connected! Height: " + std::to_string(stats.block_height) +
-                            " | Peers: " + std::to_string(stats.peer_count) +
-                            " | Miners: " + std::to_string(stats.active_miners), tui::Color::Green);
-        }
-
-        // Get initial work
-        auto work_opt = api_client->getMiningTemplate(cfg.wallet_address);
-        if (work_opt) {
-            work_manager.setWork(*work_opt);
-            if (cfg.tui_enabled) {
-                ui.addLogMessage("Received work for height " + std::to_string(work_opt->height), tui::Color::Green);
-                // Debug: show target
-                std::string target_hex;
-                for (int i = 0; i < 8; i++) {
-                    char buf[3];
-                    snprintf(buf, 3, "%02x", work_opt->target[i]);
-                    target_hex += buf;
-                }
-                ui.addLogMessage("Target: " + target_hex + "...", tui::Color::Yellow);
-            }
-        } else {
-            if (cfg.tui_enabled) {
-                ui.addLogMessage("ERROR: Failed to get work!", tui::Color::Red);
-            }
+            ui.addLogMessage("ERROR: Failed to get work!", tui::Color::Red);
         }
     }
 
@@ -464,98 +394,74 @@ int main(int argc, char** argv) {
     while (!g_shutdown) {
         auto now = std::chrono::steady_clock::now();
 
-        if (cfg.use_stratum) {
-            // Stratum mode - work comes via callbacks, just handle solutions
+        // Poll for new work
+        auto work_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_work_poll).count();
+
+        if (work_elapsed >= WORK_POLL_MS) {
+            last_work_poll = now;
+
+            auto new_work = api_client->getMiningTemplate(cfg.wallet_address);
+            auto current = work_manager.getWork();
+
+            // Check if we need to force a work refresh
+            auto refresh_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - last_work_refresh).count();
+            bool force_refresh = (refresh_elapsed >= WORK_REFRESH_MS);
+
+            if (new_work && (new_work->height != current.height || force_refresh)) {
+                work_manager.setWork(*new_work);
+                stats.block_height = new_work->height;
+                last_work_refresh = now;
+
+                if (cfg.tui_enabled) {
+                    ui.addLogMessage("New work: height " + std::to_string(new_work->height), tui::Color::Cyan);
+                }
+            }
+
+            // Submit any pending solutions
             auto solutions = work_manager.getPendingSolutions();
+            mining::Work current_work = work_manager.getWork();
             for (const auto& sol : solutions) {
                 if (cfg.benchmark_mode) {
+                    // In benchmark mode, all valid solutions are accepted locally
                     stats.blocks_found++;
                     stats.shares_accepted++;
                 } else {
-                    // Submit via Stratum
-                    if (stratum_client->submitShare(sol)) {
-                        stats.blocks_found++;
-                        // Acceptance tracked via callback
-                    }
-                }
-            }
-
-            // Update stats from Stratum client
-            auto work = work_manager.getWork();
-            if (work.height > 0) {
-                stats.block_height = work.height;
-            }
-            stats.difficulty = stratum_client->getDifficulty();
-        } else {
-            // API mode - poll for new work
-            auto work_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - last_work_poll).count();
-
-            if (work_elapsed >= WORK_POLL_MS) {
-                last_work_poll = now;
-
-                auto new_work = api_client->getMiningTemplate(cfg.wallet_address);
-                auto current = work_manager.getWork();
-
-                // Check if we need to force a work refresh
-                auto refresh_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - last_work_refresh).count();
-                bool force_refresh = (refresh_elapsed >= WORK_REFRESH_MS);
-
-                if (new_work && (new_work->height != current.height || force_refresh)) {
-                    work_manager.setWork(*new_work);
-                    stats.block_height = new_work->height;
-                    last_work_refresh = now;
-
-                    if (cfg.tui_enabled) {
-                        ui.addLogMessage("New work: height " + std::to_string(new_work->height), tui::Color::Cyan);
-                    }
-                }
-
-                // Submit any pending solutions
-                auto solutions = work_manager.getPendingSolutions();
-                mining::Work current_work = work_manager.getWork();
-                for (const auto& sol : solutions) {
-                    if (cfg.benchmark_mode) {
-                        // In benchmark mode, all valid solutions are accepted locally
+                    bool accepted = api_client->submitBlock(sol, current_work);
+                    if (accepted) {
                         stats.blocks_found++;
                         stats.shares_accepted++;
-                    } else {
-                        bool accepted = api_client->submitBlock(sol, current_work);
-                        if (accepted) {
-                            stats.blocks_found++;
-                            stats.shares_accepted++;
 
-                            // IMMEDIATELY get new work after successful block submission
-                            // to avoid mining stale blocks
-                            auto fresh_work = api_client->getMiningTemplate(cfg.wallet_address);
-                            if (fresh_work) {
-                                work_manager.setWork(*fresh_work);
-                                current_work = *fresh_work;  // Update for next iteration
-                                stats.block_height = fresh_work->height;
-                                last_work_refresh = now;  // Reset refresh timer
-                                if (cfg.tui_enabled) {
-                                    ui.addLogMessage("New work: height " + std::to_string(fresh_work->height), tui::Color::Cyan);
-                                }
+                        // IMMEDIATELY get new work after successful block submission
+                        // to avoid mining stale blocks
+                        auto fresh_work = api_client->getMiningTemplate(cfg.wallet_address);
+                        if (fresh_work) {
+                            work_manager.setWork(*fresh_work);
+                            current_work = *fresh_work;  // Update for next iteration
+                            stats.block_height = fresh_work->height;
+                            last_work_refresh = now;  // Reset refresh timer
+                            if (cfg.tui_enabled) {
+                                ui.addLogMessage("New work: height " + std::to_string(fresh_work->height), tui::Color::Cyan);
                             }
-                        } else {
-                            stats.shares_rejected++;
                         }
+                    } else {
+                        stats.shares_rejected++;
                     }
                 }
             }
+        }
 
-            // Update network stats periodically (API mode only)
-            auto network_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - last_network_stats).count();
-            if (network_elapsed >= NETWORK_STATS_MS && !cfg.benchmark_mode) {
-                last_network_stats = now;
-                auto net_stats = api_client->getNetworkStats();
-                stats.peer_count = net_stats.peer_count;
-                stats.active_miners = net_stats.active_miners;
-                if (net_stats.height > 0) {
-                    stats.block_height = net_stats.height;
-                }
+        // Update network stats periodically
+        auto network_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_network_stats).count();
+        if (network_elapsed >= NETWORK_STATS_MS && !cfg.benchmark_mode) {
+            last_network_stats = now;
+            auto net_stats = api_client->getNetworkStats();
+            stats.peer_count = net_stats.peer_count;
+            stats.active_miners = net_stats.active_miners;
+            if (net_stats.height > 0) {
+                stats.block_height = net_stats.height;
             }
         }
 

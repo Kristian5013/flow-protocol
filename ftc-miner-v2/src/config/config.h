@@ -12,7 +12,6 @@ struct MinerConfig {
     std::string wallet_address;
     std::string worker_name = "default";
     std::string password = "x";
-    bool use_stratum = false;
 
     // Mining settings
     int threads = 0;        // 0 = auto

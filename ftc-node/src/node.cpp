@@ -648,6 +648,10 @@ bool Node::initStratum() {
     }
 
     LOG_DEBUG("Stratum server started: stratum+tcp://0.0.0.0:{}", config_.stratum_port);
+
+    // Create initial job so miners can start working immediately
+    stratum_server_->notifyNewBlock();
+
     return true;
 }
 
@@ -829,7 +833,9 @@ bool Node::start() {
     // Start Stratum and P2Pool
     if (config_.stratum_enabled) initStratum();
     initP2Pool();
-    if (p2pool_ && api_server_) api_server_->setP2Pool(p2pool_.get());
+    if (p2pool_ && api_server_) {
+        api_server_->setP2Pool(p2pool_.get());
+    }
 
     // Install signal handlers
     std::signal(SIGINT, signalHandler);

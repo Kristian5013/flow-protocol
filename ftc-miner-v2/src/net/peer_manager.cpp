@@ -442,17 +442,17 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
         if (mode_choice == "3") return "BENCHMARK";
 
         if (mode_choice.empty() || mode_choice == "1") {
-            // Use saved address
+            // Use saved address (API mode)
             auto [host, port] = parseAddress(last_addr);
-            std::cout << "Connecting to " << host << ":" << port << "...\n";
+            std::cout << "Connecting to " << host << ":" << port << " (API mode)...\n";
             if (host.find(':') != std::string::npos) {
-                return "STRATUM:[" + host + "]:" + std::to_string(port);
+                return "[" + host + "]:" + std::to_string(port);
             }
-            return "STRATUM:" + host + ":" + std::to_string(port);
+            return host + ":" + std::to_string(port);
         }
         // Fall through to manual entry for mode_choice == "2"
     } else {
-        std::cout << "  [1] Connect to node (port 3333)\n";
+        std::cout << "  [1] Connect to node (API port 17319)\n";
         std::cout << "  [2] Benchmark mode\n";
         std::cout << "  [3] Exit\n";
         std::cout << "\nChoice [1]: ";
@@ -464,10 +464,10 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
         if (mode_choice == "2") return "BENCHMARK";
     }
 
-    // Manual address entry
+    // Manual address entry (API mode)
     std::cout << "\nEnter node address (IPv6: [ipv6]:port or host:port)\n";
-    std::cout << "Default port: 3333\n";
-    std::cout << "Example: [::1]:3333\n";
+    std::cout << "Default port: 17319 (API)\n";
+    std::cout << "Example: [::1]:17319\n";
     std::cout << "\nNode address: ";
 
     std::string addr;
@@ -483,11 +483,6 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
         return "";
     }
 
-    // Default port 3333
-    if (port == 17319) {
-        port = 3333;
-    }
-
     // Save for next time
     std::string save_addr;
     if (host.find(':') != std::string::npos) {
@@ -501,12 +496,12 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
         of.close();
     }
 
-    std::cout << "Connecting to " << host << ":" << port << "...\n";
+    std::cout << "Connecting to " << host << ":" << port << " (API mode)...\n";
 
     if (host.find(':') != std::string::npos) {
-        return "STRATUM:[" + host + "]:" + std::to_string(port);
+        return "[" + host + "]:" + std::to_string(port);
     }
-    return "STRATUM:" + host + ":" + std::to_string(port);
+    return host + ":" + std::to_string(port);
 }
 
 std::pair<std::string, uint16_t> StartupDialog::parseAddress(const std::string& addr) {

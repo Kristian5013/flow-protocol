@@ -21,15 +21,15 @@ void setupMiningRoutes(RouteContext& ctx) {
     auto* chain = ctx.chain;
     auto* mempool = ctx.mempool;
     auto* peer_manager = ctx.peer_manager;
-    auto* p2pool = ctx.p2pool;
 
     // Mining template
-    server->get("/mining/template", [chain, mempool, p2pool](const HttpRequest& req, HttpResponse& res) {
+    server->get("/mining/template", [server, chain, mempool](const HttpRequest& req, HttpResponse& res) {
         if (!chain || !mempool) {
             res.error(HttpStatus::SERVICE_UNAVAILABLE, "Chain or mempool not available");
             return;
         }
 
+        auto* p2pool = server->getP2Pool();
         std::string payout_address = req.getQueryParam("address");
 
         auto tmpl = mempool->getBlockTemplate(
@@ -86,16 +86,20 @@ void setupMiningRoutes(RouteContext& ctx) {
 
         uint64_t total_reward = reward + tmpl.total_fee;
 
-        // Check if P2Pool is enabled
+        // Track miner activity for P2Pool stats
+        if (p2pool && !payout_address.empty()) {
+            auto miner_script = chain::script::createP2PKHFromAddress(payout_address);
+            if (!miner_script.empty()) {
+                p2pool->registerMinerShare(miner_script);
+            }
+        }
+
+        // Check if P2Pool payouts are enabled
         bool use_p2pool_payouts = false;
         std::map<std::vector<uint8_t>, uint64_t> payouts;
 
         if (p2pool && p2pool->isRunning() && !payout_address.empty()) {
             try {
-                auto miner_script = chain::script::createP2PKHFromAddress(payout_address);
-                if (!miner_script.empty()) {
-                    p2pool->registerMinerShare(miner_script);
-                }
                 payouts = p2pool->getPayouts();
                 if (!payouts.empty()) {
                     use_p2pool_payouts = true;

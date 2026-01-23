@@ -357,6 +357,26 @@ void StratumServer::handleAuthorize(std::shared_ptr<MinerSession> session, int i
     sendResponse(session, id, "true");
 
     std::cout << "[Stratum] Miner authorized: " << session->worker_name << "\n";
+
+    // If no payout address configured, use miner's address
+    bool need_new_job = false;
+    {
+        std::lock_guard<std::mutex> lock(job_mutex_);
+        if (payout_address_.empty() && !session->worker_name.empty()) {
+            payout_address_ = session->worker_name;
+            std::cout << "[Stratum] Using miner address for payouts: " << payout_address_ << "\n";
+            need_new_job = true;
+        }
+        // Also create job if we don't have one yet
+        if (current_job_.job_id.empty()) {
+            need_new_job = true;
+        }
+    }
+
+    // Create initial job if needed (after authorization, outside lock)
+    if (need_new_job) {
+        notifyNewBlock();
+    }
 }
 
 void StratumServer::handleSubmit(std::shared_ptr<MinerSession> session, int id,
@@ -504,6 +524,11 @@ std::string StratumServer::generateExtranonce1() {
 
 void StratumServer::notifyNewBlock() {
     if (!get_work_) return;
+
+    // Skip if no payout address yet (will be set when first miner authorizes)
+    if (payout_address_.empty()) {
+        return;
+    }
 
     Job job;
     if (!get_work_(payout_address_, job)) {

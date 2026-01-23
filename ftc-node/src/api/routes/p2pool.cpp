@@ -15,10 +15,10 @@ namespace routes {
 void setupP2PoolRoutes(RouteContext& ctx) {
     auto* server = ctx.server;
     auto* chain = ctx.chain;
-    auto* p2pool = ctx.p2pool;
 
-    // P2Pool status
-    server->get("/p2pool/status", [p2pool](const HttpRequest& req, HttpResponse& res) {
+    // P2Pool status - fetch p2pool dynamically from server
+    server->get("/p2pool/status", [server](const HttpRequest& req, HttpResponse& res) {
+        auto* p2pool = server->getP2Pool();
         if (!p2pool) {
             res.error(HttpStatus::SERVICE_UNAVAILABLE, "P2Pool not available");
             return;
@@ -43,7 +43,8 @@ void setupP2PoolRoutes(RouteContext& ctx) {
     });
 
     // Get P2Pool share template for mining
-    server->get("/p2pool/template", [chain, p2pool](const HttpRequest& req, HttpResponse& res) {
+    server->get("/p2pool/template", [server, chain](const HttpRequest& req, HttpResponse& res) {
+        auto* p2pool = server->getP2Pool();
         if (!p2pool || !chain) {
             res.error(HttpStatus::SERVICE_UNAVAILABLE, "P2Pool or chain not available");
             return;
@@ -87,7 +88,8 @@ void setupP2PoolRoutes(RouteContext& ctx) {
     });
 
     // Submit share to P2Pool
-    server->post("/p2pool/submit", [p2pool](const HttpRequest& req, HttpResponse& res) {
+    server->post("/p2pool/submit", [server](const HttpRequest& req, HttpResponse& res) {
+        auto* p2pool = server->getP2Pool();
         if (!p2pool) {
             res.error(HttpStatus::SERVICE_UNAVAILABLE, "P2Pool not available");
             return;
@@ -126,7 +128,8 @@ void setupP2PoolRoutes(RouteContext& ctx) {
     });
 
     // Get P2Pool payouts estimate
-    server->get("/p2pool/payouts", [p2pool](const HttpRequest& req, HttpResponse& res) {
+    server->get("/p2pool/payouts", [server](const HttpRequest& req, HttpResponse& res) {
+        auto* p2pool = server->getP2Pool();
         if (!p2pool) {
             res.error(HttpStatus::SERVICE_UNAVAILABLE, "P2Pool not available");
             return;
