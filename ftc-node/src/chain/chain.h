@@ -122,7 +122,7 @@ public:
 
     // Consensus parameters (legacy - use Consensus class instead)
     struct Params {
-        uint32_t block_time = 60;                   // Target block time in seconds
+        uint32_t block_time = 600;                  // Target block time in seconds (10 min)
         uint32_t difficulty_adjustment_interval = 2016;
         uint64_t initial_reward = 50 * 100000000ULL; // 50 FTC in satoshis
         uint32_t halving_interval = 210000;

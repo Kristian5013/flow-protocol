@@ -20,10 +20,10 @@ namespace chain {
 // Block size limit (1 MB)
 constexpr size_t MAX_BLOCK_SIZE = 1000000;
 
-// Target block time (60 seconds)
-constexpr uint32_t TARGET_BLOCK_TIME = 60;
+// Target block time (600 seconds = 10 minutes)
+constexpr uint32_t TARGET_BLOCK_TIME = 600;
 
-// Difficulty adjustment interval (2016 blocks ~ 2 weeks at 60s/block)
+// Difficulty adjustment interval (2016 blocks = 2 weeks at 600s/block)
 constexpr uint32_t DIFFICULTY_ADJUSTMENT_INTERVAL = 2016;
 
 // Initial block reward (50 FTC)

@@ -423,11 +423,12 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
     // Mode selection
     std::cout << "Select mode:\n";
     if (has_peers) {
-        std::cout << "  [1] Use peers from peers.dat (recommended)\n";
-        std::cout << "  [2] Enter node address manually\n";
+        std::cout << "  [1] Use peers from peers.dat - API mode (recommended)\n";
+        std::cout << "  [2] Enter node address manually - API mode\n";
     } else {
-        std::cout << "  [1] Enter node address\n";
+        std::cout << "  [1] Enter node address - API mode\n";
     }
+    std::cout << "  [S] Stratum mode (connect to port 3333)\n";
     std::cout << "  [3] Benchmark mode (test without node)\n";
     std::cout << "  [4] Exit\n";
     std::cout << "\nChoice [1]: ";
@@ -443,8 +444,43 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
         return "BENCHMARK";
     }
 
+    // Stratum mode
+    if (mode_choice == "s" || mode_choice == "S") {
+        std::cout << "\nStratum Mode - Connect to node's Stratum server (port 3333)\n";
+        std::cout << "Enter node address (IPv6 format: [ipv6]:port or host:port)\n";
+        std::cout << "Default port is 3333 for Stratum\n";
+        std::cout << "Examples: [2001:db8::1]:3333, [::1]:3333\n";
+        std::cout << "\nStratum address: ";
+
+        std::string addr;
+        std::getline(std::cin, addr);
+
+        if (addr.empty()) {
+            return "";
+        }
+
+        auto [host, port] = parseAddress(addr);
+        if (host.empty()) {
+            std::cout << "Invalid address format\n";
+            return "";
+        }
+
+        // Use port 3333 as default for Stratum if not specified
+        if (port == 17319) {
+            port = 3333;
+        }
+
+        std::cout << "Will connect via Stratum to " << host << ":" << port << "\n";
+
+        // Return special STRATUM prefix so main.cpp knows to use Stratum client
+        if (host.find(':') != std::string::npos) {
+            return "STRATUM:[" + host + "]:" + std::to_string(port);
+        }
+        return "STRATUM:" + host + ":" + std::to_string(port);
+    }
+
     if (mode_choice == "2" || (!has_peers && (mode_choice.empty() || mode_choice == "1"))) {
-        // Manual entry
+        // Manual entry - API mode
         std::cout << "\nEnter node address (IPv6 format: [ipv6]:port or host:port)\n";
         std::cout << "Examples: [2001:db8::1]:17319, node.ftc.io:17319\n";
         std::cout << "\nNode address: ";
@@ -481,7 +517,7 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
         return host + ":" + std::to_string(port);
     }
 
-    // Mode 1 (default): Use peers.dat
+    // Mode 1 (default): Use peers.dat - API mode
     if (has_peers) {
         pm.testAllPeers();
 

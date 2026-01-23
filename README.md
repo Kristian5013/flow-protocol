@@ -330,7 +330,7 @@ Get list of transaction IDs in mempool.
 
 | Parameter | Value |
 |-----------|-------|
-| Block time | 60 seconds |
+| Block time | 600 seconds (10 minutes) |
 | Block reward | 50 FTC (halving every 210,000 blocks) |
 | Max supply | 21,000,000 FTC |
 | Difficulty adjustment | Every 2016 blocks |
