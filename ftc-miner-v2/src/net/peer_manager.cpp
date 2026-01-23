@@ -417,142 +417,54 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
     std::string peers_file = config::MinerConfig::getPeersFile();
     std::cout << "[Data] Using: " << config::MinerConfig::getDataDir() << "\n\n";
 
-    // Try loading peers.dat first
-    bool has_peers = pm.loadPeersFile(peers_file);
-
     // Mode selection
     std::cout << "Select mode:\n";
-    if (has_peers) {
-        std::cout << "  [1] Use peers from peers.dat - API mode (recommended)\n";
-        std::cout << "  [2] Enter node address manually - API mode\n";
-    } else {
-        std::cout << "  [1] Enter node address - API mode\n";
-    }
-    std::cout << "  [S] Stratum mode (connect to port 3333)\n";
-    std::cout << "  [3] Benchmark mode (test without node)\n";
-    std::cout << "  [4] Exit\n";
+    std::cout << "  [1] Connect to node (port 3333)\n";
+    std::cout << "  [2] Benchmark mode (test without node)\n";
+    std::cout << "  [3] Exit\n";
     std::cout << "\nChoice [1]: ";
 
     std::string mode_choice;
     std::getline(std::cin, mode_choice);
 
-    if (mode_choice == "4") {
+    if (mode_choice == "3") {
         return "";
     }
 
-    if (mode_choice == "3") {
+    if (mode_choice == "2") {
         return "BENCHMARK";
     }
 
-    // Stratum mode
-    if (mode_choice == "s" || mode_choice == "S") {
-        std::cout << "\nStratum Mode - Connect to node's Stratum server (port 3333)\n";
-        std::cout << "Enter node address (IPv6 format: [ipv6]:port or host:port)\n";
-        std::cout << "Default port is 3333 for Stratum\n";
-        std::cout << "Examples: [2001:db8::1]:3333, [::1]:3333\n";
-        std::cout << "\nStratum address: ";
+    // Stratum mode (default)
+    std::cout << "\nEnter node address (IPv6: [ipv6]:port or host:port)\n";
+    std::cout << "Default port: 3333\n";
+    std::cout << "Example: [::1]:3333\n";
+    std::cout << "\nNode address: ";
 
-        std::string addr;
-        std::getline(std::cin, addr);
-
-        if (addr.empty()) {
-            return "";
-        }
-
-        auto [host, port] = parseAddress(addr);
-        if (host.empty()) {
-            std::cout << "Invalid address format\n";
-            return "";
-        }
-
-        // Use port 3333 as default for Stratum if not specified
-        if (port == 17319) {
-            port = 3333;
-        }
-
-        std::cout << "Will connect via Stratum to " << host << ":" << port << "\n";
-
-        // Return special STRATUM prefix so main.cpp knows to use Stratum client
-        if (host.find(':') != std::string::npos) {
-            return "STRATUM:[" + host + "]:" + std::to_string(port);
-        }
-        return "STRATUM:" + host + ":" + std::to_string(port);
-    }
-
-    if (mode_choice == "2" || (!has_peers && (mode_choice.empty() || mode_choice == "1"))) {
-        // Manual entry - API mode
-        std::cout << "\nEnter node address (IPv6 format: [ipv6]:port or host:port)\n";
-        std::cout << "Examples: [2001:db8::1]:17319, node.ftc.io:17319\n";
-        std::cout << "\nNode address: ";
-
-        std::string addr;
-        std::getline(std::cin, addr);
-
-        if (addr.empty()) {
-            return "";
-        }
-
-        auto [host, port] = parseAddress(addr);
-        if (host.empty()) {
-            std::cout << "Invalid address format\n";
-            return "";
-        }
-
-        pm.addPeer(host, port);
-        std::cout << "Testing connection to " << host << ":" << port << "...\n";
-
-        auto& peers = pm.getPeers();
-        if (!peers.empty()) {
-            if (pm.testPeer(peers.back())) {
-                std::cout << "Connected! Ping: " << peers.back().ping_ms << "ms\n";
-                pm.savePeersFile(peers_file);
-            } else {
-                std::cout << "Warning: Could not connect - will keep trying...\n";
-            }
-        }
-        // Return IPv6 in bracket notation: [ipv6]:port
-        if (host.find(':') != std::string::npos) {
-            return "[" + host + "]:" + std::to_string(port);
-        }
-        return host + ":" + std::to_string(port);
-    }
-
-    // Mode 1 (default): Use peers.dat - API mode
-    if (has_peers) {
-        pm.testAllPeers();
-
-        // Save updated peer info (ping times, online status)
-        pm.savePeersFile(peers_file);
-
-        if (pm.hasOnlinePeers()) {
-            auto* best = pm.getBestPeer();
-            if (best) {
-                std::cout << "[Node] " << best->host << ":" << best->port << "\n";
-                // Return IPv6 in bracket notation: [ipv6]:port
-                if (best->host.find(':') != std::string::npos) {
-                    return "[" + best->host + "]:" + std::to_string(best->port);
-                }
-                return best->host + ":" + std::to_string(best->port);
-            }
-        }
-
-        std::cout << "\n[Peers] No online nodes found in peers.dat\n";
-    }
-
-    // Fallback to manual
-    std::cout << "\nEnter node address: ";
     std::string addr;
     std::getline(std::cin, addr);
-    if (addr.empty()) return "";
+
+    if (addr.empty()) {
+        return "";
+    }
 
     auto [host, port] = parseAddress(addr);
-    pm.addPeer(host, port);
-    pm.savePeersFile(peers_file);
-    // Return IPv6 in bracket notation: [ipv6]:port
-    if (host.find(':') != std::string::npos) {
-        return "[" + host + "]:" + std::to_string(port);
+    if (host.empty()) {
+        std::cout << "Invalid address format\n";
+        return "";
     }
-    return host + ":" + std::to_string(port);
+
+    // Default port 3333
+    if (port == 17319) {
+        port = 3333;
+    }
+
+    std::cout << "Connecting to " << host << ":" << port << "...\n";
+
+    if (host.find(':') != std::string::npos) {
+        return "STRATUM:[" + host + "]:" + std::to_string(port);
+    }
+    return "STRATUM:" + host + ":" + std::to_string(port);
 }
 
 std::pair<std::string, uint16_t> StartupDialog::parseAddress(const std::string& addr) {
