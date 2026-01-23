@@ -414,28 +414,57 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
     std::cout << "+==========================================+\n\n";
 
     // Use shared data directory (same as node)
-    std::string peers_file = config::MinerConfig::getPeersFile();
-    std::cout << "[Data] Using: " << config::MinerConfig::getDataDir() << "\n\n";
+    std::string data_dir = config::MinerConfig::getDataDir();
+    std::string last_node_file = data_dir + "/last_node.txt";
+    std::cout << "[Data] Using: " << data_dir << "\n\n";
+
+    // Load last used node address
+    std::string last_addr;
+    std::ifstream lf(last_node_file);
+    if (lf.is_open()) {
+        std::getline(lf, last_addr);
+        lf.close();
+    }
 
     // Mode selection
     std::cout << "Select mode:\n";
-    std::cout << "  [1] Connect to node (port 3333)\n";
-    std::cout << "  [2] Benchmark mode (test without node)\n";
-    std::cout << "  [3] Exit\n";
-    std::cout << "\nChoice [1]: ";
+    if (!last_addr.empty()) {
+        std::cout << "  [1] Connect to " << last_addr << "\n";
+        std::cout << "  [2] Enter different address\n";
+        std::cout << "  [3] Benchmark mode\n";
+        std::cout << "  [4] Exit\n";
+        std::cout << "\nChoice [1]: ";
 
-    std::string mode_choice;
-    std::getline(std::cin, mode_choice);
+        std::string mode_choice;
+        std::getline(std::cin, mode_choice);
 
-    if (mode_choice == "3") {
-        return "";
+        if (mode_choice == "4") return "";
+        if (mode_choice == "3") return "BENCHMARK";
+
+        if (mode_choice.empty() || mode_choice == "1") {
+            // Use saved address
+            auto [host, port] = parseAddress(last_addr);
+            std::cout << "Connecting to " << host << ":" << port << "...\n";
+            if (host.find(':') != std::string::npos) {
+                return "STRATUM:[" + host + "]:" + std::to_string(port);
+            }
+            return "STRATUM:" + host + ":" + std::to_string(port);
+        }
+        // Fall through to manual entry for mode_choice == "2"
+    } else {
+        std::cout << "  [1] Connect to node (port 3333)\n";
+        std::cout << "  [2] Benchmark mode\n";
+        std::cout << "  [3] Exit\n";
+        std::cout << "\nChoice [1]: ";
+
+        std::string mode_choice;
+        std::getline(std::cin, mode_choice);
+
+        if (mode_choice == "3") return "";
+        if (mode_choice == "2") return "BENCHMARK";
     }
 
-    if (mode_choice == "2") {
-        return "BENCHMARK";
-    }
-
-    // Stratum mode (default)
+    // Manual address entry
     std::cout << "\nEnter node address (IPv6: [ipv6]:port or host:port)\n";
     std::cout << "Default port: 3333\n";
     std::cout << "Example: [::1]:3333\n";
@@ -457,6 +486,19 @@ std::string StartupDialog::showDialog(PeerManager& pm) {
     // Default port 3333
     if (port == 17319) {
         port = 3333;
+    }
+
+    // Save for next time
+    std::string save_addr;
+    if (host.find(':') != std::string::npos) {
+        save_addr = "[" + host + "]:" + std::to_string(port);
+    } else {
+        save_addr = host + ":" + std::to_string(port);
+    }
+    std::ofstream of(last_node_file);
+    if (of.is_open()) {
+        of << save_addr;
+        of.close();
     }
 
     std::cout << "Connecting to " << host << ":" << port << "...\n";
