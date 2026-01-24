@@ -1,0 +1,5 @@
+# FTC Peers - IPv6 only network
+# Place this file next to ftc-node binary
+# Format: [IPv6]:PORT
+
+[2406:5900:2:d47::1234]:17318
