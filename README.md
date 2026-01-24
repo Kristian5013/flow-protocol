@@ -76,8 +76,8 @@ ftc-miner -a ftc1qYOUR_ADDRESS
 # With AI auto-tune
 ftc-miner -a ftc1q... --autotune
 
-# Connect to specific node
-ftc-miner -o 127.0.0.1:17319 -a ftc1q...
+# Connect to specific node (IPv6)
+ftc-miner -o [::1]:17319 -a ftc1q...
 
 # Benchmark mode (no node required)
 ftc-miner --benchmark
@@ -109,7 +109,7 @@ ftc-wallet new
 
 Or via API:
 ```bash
-curl http://127.0.0.1:17319/wallet/new
+curl http://[::1]:17319/wallet/new
 ```
 
 ### Check Balance
@@ -149,7 +149,9 @@ peers.dat format (one per line):
 
 ## REST API Reference
 
-Base URL: `http://127.0.0.1:17319`
+Base URL: `http://[::1]:17319` (IPv6 localhost)
+
+> **Note:** API uses IPv6 only. Use `[::1]` instead of `127.0.0.1`
 
 ### Node Status
 
@@ -253,7 +255,7 @@ make -j$(nproc)
 ## Genesis Block
 
 ```bash
-curl http://127.0.0.1:17319/genesis
+curl http://[::1]:17319/genesis
 ```
 
 ```json
