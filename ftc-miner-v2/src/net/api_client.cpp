@@ -322,19 +322,16 @@ APIClient::NetworkStats APIClient::getNetworkStats() {
     // Get peer count and height from /status endpoint
     std::string status_response = httpGet("/status");
     if (!status_response.empty()) {
-        // Look for "height":N in chain object
-        size_t height_pos = status_response.find("\"height\":");
+        // Look for "chain_height":N
+        size_t height_pos = status_response.find("\"chain_height\":");
         if (height_pos != std::string::npos) {
-            stats.height = std::stoi(status_response.substr(height_pos + 9));
+            stats.height = std::stoi(status_response.substr(height_pos + 15));
         }
 
-        // Look for "peers":{"nodes":N}
-        size_t peers_pos = status_response.find("\"peers\":");
+        // Look for "peer_count":N
+        size_t peers_pos = status_response.find("\"peer_count\":");
         if (peers_pos != std::string::npos) {
-            size_t nodes_pos = status_response.find("\"nodes\":", peers_pos);
-            if (nodes_pos != std::string::npos) {
-                stats.peer_count = std::stoul(status_response.substr(nodes_pos + 8));
-            }
+            stats.peer_count = std::stoul(status_response.substr(peers_pos + 13));
         }
     }
 

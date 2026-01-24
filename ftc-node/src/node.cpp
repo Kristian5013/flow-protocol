@@ -596,10 +596,8 @@ bool Node::start() {
         peer_manager_->connectTo(a);
     }
 
-    // Start sync if peers available (background)
-    if (peer_manager_->getPeerCount() > 0) {
-        message_handler_->startSync();
-    }
+    // NOTE: Don't call startSync() here - peers haven't completed VERSION handshake yet.
+    // Sync will be triggered by onPeerConnect() when a peer with higher height is established.
 
     // Start API server
     if (!initAPI()) return false;
