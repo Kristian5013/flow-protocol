@@ -92,11 +92,6 @@ Config Config::parse(int argc, char** argv) {
         else if (arg == "--reindex") {
             config.reindex = true;
         }
-        else if (arg == "--addnode") {
-            if (i + 1 < argc) {
-                config.addnodes.push_back(argv[++i]);
-            }
-        }
     }
 
     return config;
@@ -118,20 +113,18 @@ void Config::printHelp() {
     std::cout << "  --log FILE              Log to file\n";
     std::cout << "  --mine [ADDRESS]        Enable mining to address\n";
     std::cout << "  --reindex               Rebuild UTXO set from blocks\n";
-    std::cout << "  --addnode [ip]:port     Add a node to connect to\n";
     std::cout << "\n";
     std::cout << "By default node runs quietly. Use --verbose for terminal output.\n";
     std::cout << "Statistics available via API: curl http://[::1]:17319/status\n";
     std::cout << "\n";
     std::cout << "Peer Discovery:\n";
-    std::cout << "  1. Peers from peers.dat (auto-managed)\n";
-    std::cout << "  2. Manual --addnode connections\n";
-    std::cout << "  3. P2P addr exchange between connected nodes\n";
+    std::cout << "  1. DNS seeds (seed.flowprotocol.net)\n";
+    std::cout << "  2. P2P addr exchange between connected nodes\n";
     std::cout << "\n";
     std::cout << "Examples:\n";
-    std::cout << "  ftc-node                              Start daemon (quiet)\n";
-    std::cout << "  ftc-node --verbose                    Start with output\n";
-    std::cout << "  ftc-node --addnode [2001:db8::1]:17318  Connect to specific node\n";
+    std::cout << "  ftc-node                    Start daemon (quiet)\n";
+    std::cout << "  ftc-node --verbose          Start with output\n";
+    std::cout << "  ftc-node --debug            Enable debug logging\n";
     std::cout << "\n";
 }
 

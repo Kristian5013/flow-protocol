@@ -38,9 +38,6 @@ struct Config {
     int max_outbound = 8;                // Max outbound connections
     int target_outbound = 8;             // Target outbound connections
 
-    // Manual peer additions (--addnode)
-    std::vector<std::string> addnodes;
-
     // API
     bool api_cors = true;                // Enable CORS for remote miners
     std::string api_bind = "::";         // Bind address (:: = all IPv6 interfaces)

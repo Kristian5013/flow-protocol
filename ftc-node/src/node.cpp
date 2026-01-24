@@ -364,49 +364,28 @@ bool Node::addPeerAddress(const std::string& addr_str, const std::string& source
 }
 
 bool Node::initSeedDiscovery() {
-    // Initialize seed client for peer discovery via api.flowprotocol.net
-    seed_client_ = std::make_unique<seed::SeedClient>("mainnet");
+    // Initialize DNS seed client
+    seed_client_ = std::make_unique<seed::SeedClient>(config_.p2p_port);
 
-    LOG_INFO("[Seed] Discovering peers from api.flowprotocol.net...");
+    // Add DNS seeds
+    seed_client_->addSeed("seed.flowprotocol.net");
 
-    // Discover peers from seed API
-    auto peers = seed_client_->discoverPeers(50);
+    LOG_INFO("[Seed] Resolving DNS seeds...");
+
+    // Discover peers via DNS resolution
+    auto peers = seed_client_->discoverPeers();
 
     if (!peers.empty()) {
-        LOG_INFO("[Seed] Discovered {} peer(s) from seed network", peers.size());
+        LOG_INFO("[Seed] Discovered {} peer(s) from DNS seeds", peers.size());
 
         for (const auto& peer : peers) {
             std::string addr = peer.ip + ":" + std::to_string(peer.port);
-            if (addPeerAddress(addr, "seed")) {
-                LOG_DEBUG("[Seed] Added peer: {} (height={}, country={})",
-                         addr, peer.height, peer.country);
+            if (addPeerAddress(addr, "dns-seed")) {
+                LOG_DEBUG("[Seed] Added peer: {}", addr);
             }
         }
     } else {
-        LOG_WARN("[Seed] No peers discovered from seed network");
-    }
-
-    // Also add any --addnode peers (fallback/override)
-    for (const auto& node_addr : config_.addnodes) {
-        if (addPeerAddress(node_addr, "addnode")) {
-            LOG_INFO("[Peers] Added --addnode peer: {}", node_addr);
-        } else {
-            LOG_WARN("[Peers] Failed to add --addnode peer: {}", node_addr);
-        }
-    }
-
-    // Register this node with seed network and start heartbeat
-    uint32_t current_height = chain_->getHeight();
-    if (seed_client_->registerNode(config_.p2p_port, "1.0.0", current_height)) {
-        LOG_INFO("[Seed] Registered with seed network (port={}, height={})",
-                config_.p2p_port, current_height);
-
-        // Start background heartbeat (updates height every 5 min)
-        // Need to get a reference to chain height that updates
-        // For now, pass the current height - heartbeat will update it
-        seed_client_->startHeartbeat(config_.p2p_port, current_height);
-    } else {
-        LOG_WARN("[Seed] Failed to register with seed network (will retry)");
+        LOG_WARN("[Seed] No peers discovered from DNS seeds");
     }
 
     return true;
@@ -621,7 +600,6 @@ void Node::stop() {
     running_ = false;
 
     // Stop all components
-    if (seed_client_) seed_client_->stopHeartbeat();
     if (p2pool_) p2pool_->stop();
     if (api_server_) api_server_->stop();
     if (message_handler_) message_handler_->stop();
