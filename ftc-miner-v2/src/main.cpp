@@ -386,8 +386,8 @@ int main(int argc, char** argv) {
     auto last_work_refresh = std::chrono::steady_clock::now();  // Force refresh periodically
     auto last_stats_print = std::chrono::steady_clock::now();
     auto last_network_stats = std::chrono::steady_clock::now();
-    constexpr int WORK_POLL_MS = 1000;
-    constexpr int WORK_REFRESH_MS = 5000;  // Force new work every 5s to get fresh timestamp (nonce space exhausts in ~2.5s at 1.8GH/s)
+    constexpr int WORK_POLL_MS = 500;       // Poll every 500ms for faster response
+    constexpr int WORK_REFRESH_MS = 2000;   // Force new work every 2s (nonce space exhausts in ~2.3s at 1.9GH/s)
     constexpr int NETWORK_STATS_MS = 5000;  // Update network stats every 5s
 
     // Main loop
@@ -423,6 +423,11 @@ int main(int argc, char** argv) {
             auto solutions = work_manager.getPendingSolutions();
             mining::Work current_work = work_manager.getWork();
             for (const auto& sol : solutions) {
+                // Skip stale solutions (wrong height)
+                if (sol.height != current_work.height) {
+                    continue;  // Don't count as rejected - just stale
+                }
+
                 if (cfg.benchmark_mode) {
                     // In benchmark mode, all valid solutions are accepted locally
                     stats.blocks_found++;
@@ -442,9 +447,11 @@ int main(int argc, char** argv) {
                             stats.block_height = fresh_work->height;
                             last_work_refresh = now;  // Reset refresh timer
                             if (cfg.tui_enabled) {
-                                ui.addLogMessage("New work: height " + std::to_string(fresh_work->height), tui::Color::Cyan);
+                                ui.addLogMessage("Block found! New height: " + std::to_string(fresh_work->height), tui::Color::Green);
                             }
                         }
+                        // Break - remaining solutions are stale (for old height)
+                        break;
                     } else {
                         stats.shares_rejected++;
                     }
