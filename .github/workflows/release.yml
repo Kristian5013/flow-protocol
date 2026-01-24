@@ -1,0 +1,172 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup CUDA
+        uses: Jimver/cuda-toolkit@v0.2.11
+        with:
+          cuda: '12.4.0'
+
+      - name: Build ftc-node
+        run: |
+          cd ftc-node
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake --build . --config Release
+
+      - name: Build ftc-wallet
+        run: |
+          cd ftc-wallet
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake --build . --config Release
+
+      - name: Build ftc-miner
+        run: |
+          cd ftc-miner-v2
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake --build . --config Release
+
+      - name: Build ftc-full
+        run: |
+          cd ftc-full
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake --build . --config Release
+
+      - name: Collect binaries
+        run: |
+          mkdir dist-windows
+          copy ftc-node\build\Release\ftc-node.exe dist-windows\
+          copy ftc-wallet\build\Release\ftc-wallet.exe dist-windows\
+          copy ftc-miner-v2\build\Release\ftc-miner.exe dist-windows\
+          copy ftc-full\build\Release\ftc-full.exe dist-windows\
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ftc-windows-x64
+          path: dist-windows/
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ocl-icd-opencl-dev
+
+      - name: Build ftc-node
+        run: |
+          cd ftc-node
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+
+      - name: Build ftc-wallet
+        run: |
+          cd ftc-wallet
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+
+      - name: Build ftc-miner
+        run: |
+          cd ftc-miner-v2
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) || echo "Miner build failed (OpenCL may not be available)"
+
+      - name: Build ftc-full
+        run: |
+          cd ftc-full
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+
+      - name: Collect binaries
+        run: |
+          mkdir dist-linux
+          cp ftc-node/build/ftc-node dist-linux/ || true
+          cp ftc-wallet/build/ftc-wallet dist-linux/ || true
+          cp ftc-miner-v2/build/ftc-miner dist-linux/ || true
+          cp ftc-full/build/ftc-full dist-linux/ || true
+          chmod +x dist-linux/*
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ftc-linux-x64
+          path: dist-linux/
+
+  release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ftc-windows-x64
+          path: windows
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ftc-linux-x64
+          path: linux
+
+      - name: Create archives
+        run: |
+          cd windows && zip -r ../ftc-windows-x64.zip . && cd ..
+          cd linux && tar -czvf ../ftc-linux-x64.tar.gz . && cd ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ftc-windows-x64.zip
+            ftc-linux-x64.tar.gz
+          body: |
+            ## FTC Release ${{ github.ref_name }}
+
+            Kristian Pilatovich 20091227 - First Real P2P
+
+            ### Downloads
+            - **Windows**: `ftc-windows-x64.zip`
+            - **Linux**: `ftc-linux-x64.tar.gz`
+
+            ### Quick Start
+            ```bash
+            # Windows
+            ftc-full.exe -a ftc1q...
+
+            # Linux
+            chmod +x ftc-full
+            ./ftc-full -a ftc1q...
+            ```
+
+            ### Components
+            - `ftc-full` - Node + Miner combined (recommended)
+            - `ftc-node` - Full node only
+            - `ftc-miner` - GPU miner only
+            - `ftc-wallet` - CLI wallet
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -76,15 +76,15 @@ set(API_SOURCES
     src/api/routes/p2pool.cpp
 )
 
-set(STRATUM_SOURCES
-    src/stratum/stratum_server.cpp
-)
-
 set(UTIL_SOURCES
     src/util/logging.cpp
     src/util/config.cpp
     src/util/time.cpp
     src/util/hex.cpp
+)
+
+set(SEED_SOURCES
+    src/seed/seed_client.cpp
 )
 
 # Main executable
@@ -98,8 +98,8 @@ add_executable(ftc-node
     ${P2POOL_SOURCES}
     ${STORAGE_SOURCES}
     ${API_SOURCES}
-    ${STRATUM_SOURCES}
     ${UTIL_SOURCES}
+    ${SEED_SOURCES}
 )
 
 target_include_directories(ftc-node PRIVATE
@@ -144,5 +144,5 @@ install(TARGETS ftc-node RUNTIME DESTINATION bin)
 
 message(STATUS "FTC Node ${PROJECT_VERSION} - Kristian Pilatovich 20091227 - First Real P2P")
 message(STATUS "  IPv6: ON (IPv6-only, no IPv4)")
-message(STATUS "  Peers: peers.dat file + P2P addr exchange")
+message(STATUS "  Peers: api.flowprotocol.net (seed discovery)")
 message(STATUS "  Tests: ${FTC_BUILD_TESTS}")

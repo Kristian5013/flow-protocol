@@ -8,14 +8,14 @@ namespace config {
 
 struct MinerConfig {
     // Pool/Node settings
-    std::string pool_url;  // Empty = use peers.dat
+    std::string pool_url = "https://api.flowprotocol.net";  // Auto-discovery by default
     std::string wallet_address;
     std::string worker_name = "default";
     std::string password = "x";
 
     // Mining settings
     int threads = 0;        // 0 = auto
-    int intensity = 15;
+    int intensity = 0;      // 0 = auto
     int worksize = 256;
 
     // GPU settings
@@ -37,7 +37,6 @@ struct MinerConfig {
 
     // Mode
     bool benchmark_mode = false;  // Local testing without real node
-    bool interactive_startup = true;  // Show node selection dialog
 
     // Parse command line
     static MinerConfig parse(int argc, char** argv);
@@ -48,13 +47,10 @@ struct MinerConfig {
     // Save to file
     void saveToFile(const std::string& path) const;
 
-    // Get shared data directory (same as node)
+    // Get shared data directory
     // Windows: %APPDATA%\FTC
     // Linux: ~/.ftc
     static std::string getDataDir();
-
-    // Get full path to peers.dat
-    static std::string getPeersFile();
 
     static void printHelp();
 };

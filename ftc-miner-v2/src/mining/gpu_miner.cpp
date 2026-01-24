@@ -378,8 +378,8 @@ bool GPUMiner::initDevice(int device_id) {
         return false;
     }
 
-    // Create buffers
-    ctx.header_buf = clCreateBuffer(ctx.context, CL_MEM_READ_ONLY, 80, nullptr, &err);
+    // Create buffers for mine_batch kernel
+    ctx.header_buf = clCreateBuffer(ctx.context, CL_MEM_READ_ONLY, 76, nullptr, &err);
     ctx.target_buf = clCreateBuffer(ctx.context, CL_MEM_READ_ONLY, 32, nullptr, &err);
     ctx.result_buf = clCreateBuffer(ctx.context, CL_MEM_WRITE_ONLY, 16 * sizeof(uint64_t), nullptr, &err);
     ctx.count_buf = clCreateBuffer(ctx.context, CL_MEM_READ_WRITE, sizeof(uint32_t), nullptr, &err);

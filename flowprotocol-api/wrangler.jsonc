@@ -1,0 +1,24 @@
+{
+  "name": "flowprotocol-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-24",
+
+  "kv_namespaces": [
+    {
+      "binding": "NODES",
+      "id": "c482c3bd9e114a458e4354c67c9802a0"
+    }
+  ],
+
+  "vars": {
+    "NODE_TTL": "900",
+    "MAX_NODES": "100"
+  },
+
+  "routes": [
+    {
+      "pattern": "api.flowprotocol.net/*",
+      "zone_name": "flowprotocol.net"
+    }
+  ]
+}

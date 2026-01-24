@@ -27,7 +27,6 @@ MinerConfig MinerConfig::parse(int argc, char** argv) {
             exit(0);
         } else if ((arg == "-o" || arg == "--pool") && i + 1 < argc) {
             config.pool_url = argv[++i];
-            config.interactive_startup = false;  // Direct connection mode
         } else if ((arg == "-u" || arg == "--user" || arg == "-a" || arg == "--address") && i + 1 < argc) {
             config.wallet_address = argv[++i];
         } else if ((arg == "-p" || arg == "--pass") && i + 1 < argc) {
@@ -54,9 +53,6 @@ MinerConfig MinerConfig::parse(int argc, char** argv) {
             config.log_level = 0;
         } else if (arg == "--benchmark") {
             config.benchmark_mode = true;
-            config.interactive_startup = false;
-        } else if (arg == "--no-interactive") {
-            config.interactive_startup = false;
         }
     }
 
@@ -131,19 +127,18 @@ void MinerConfig::printHelp() {
     std::cout << R"(
 FTC Miner v2.0.0 - GPU-only Keccak-256 OpenCL Miner
 
-Usage: ftc-miner [options]
+Usage: ftc-miner -a <address> [options]
 
-Connection:
-  -o, --pool URL       Node address (IPv6: [addr]:port or host:port)
-                       If not specified, uses peers.dat file
-  -u, --user ADDR      Wallet address for payouts
-  -a, --address ADDR   Same as --user
-  -p, --pass PASS      Pool password (default: x)
+Required:
+  -a, --address ADDR   Mining wallet address (ftc1q...)
+
+Optional:
+  -o, --pool URL       Node URL (default: auto via api.flowprotocol.net)
 
 GPU Mining:
-  -I, --intensity N    GPU intensity 8-31 (default: 20)
+  -I, --intensity N    GPU intensity 8-31 (default: auto)
   -w, --worksize N     GPU worksize (default: 256)
-  --autotune           Enable AI auto-tune on startup
+  --autotune           Enable AI auto-tune
 
 Display:
   --no-tui             Disable TUI, use simple output
@@ -155,22 +150,16 @@ Limits:
 
 Mode:
   --benchmark          Benchmark mode (no node required)
-  --no-interactive     Skip node selection dialog
 
 Other:
   -c, --config FILE    Load config from file
   -h, --help           Show this help
 
-Peer Discovery:
-  Miner uses peers.dat file for node discovery.
-  Add your FTC node addresses to peers.dat (one per line):
-    [2001:db8::1]:17319
-    node.example.com:17319
-
 Examples:
   ftc-miner -a ftc1qwfk0r2r9f6352ad9m4nph5mh9xhrf9yukv6pap
-  ftc-miner -a ftc1q... -I 22 --autotune
-  ftc-miner -o [2001:db8::1]:17319 -a ftc1q...
+  ftc-miner -a ftc1q... --autotune
+  ftc-miner -o 127.0.0.1:17319 -a ftc1q...
+  ftc-miner --benchmark
 
 )" << std::endl;
 }
@@ -198,14 +187,6 @@ std::string MinerConfig::getDataDir() {
         return data_dir;
     }
     return "/tmp/.ftc";
-#endif
-}
-
-std::string MinerConfig::getPeersFile() {
-#ifdef _WIN32
-    return getDataDir() + "\\peers.dat";
-#else
-    return getDataDir() + "/peers.dat";
 #endif
 }
 

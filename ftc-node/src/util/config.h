@@ -18,8 +18,6 @@ struct Config {
     // Network
     uint16_t p2p_port = FTC_PORT_P2P;
     uint16_t api_port = FTC_PORT_API;
-    uint16_t stratum_port = FTC_PORT_STRATUM;
-    bool stratum_enabled = true;  // Enable stratum for GPU miners
 
     // Logging (quiet by default - stats via API)
     log::Level log_level = log::Level::WARN;

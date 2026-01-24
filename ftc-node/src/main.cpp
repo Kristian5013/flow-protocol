@@ -8,6 +8,9 @@
  *
  * Author: Kristian Pilatovich
  * Genesis: "Kristian Pilatovich 20091227 - First Real P2P"
+ *
+ * Linux only. Run as: ./ftc-node &
+ * Or use systemd service.
  */
 
 #include "node.h"
@@ -30,7 +33,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Wait for shutdown signal
+    // Wait for shutdown signal (SIGINT/SIGTERM)
     node.waitForShutdown();
 
     return 0;

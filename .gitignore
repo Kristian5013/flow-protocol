@@ -1,10 +1,15 @@
 # Build
 build/
+dist/
 *.exe
 *.obj
 *.o
 *.lib
 *.a
+
+# Node.js
+node_modules/
+package-lock.json
 
 # IDE
 .vs/

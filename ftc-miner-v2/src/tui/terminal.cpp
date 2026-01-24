@@ -128,47 +128,47 @@ int Terminal::getch() {
 #endif
 
 void Terminal::clear() {
-    std::cout << "\033[2J\033[H" << std::flush;
+    std::cout << "\033[2J\033[H";
 }
 
 void Terminal::clearLine() {
-    std::cout << "\033[2K" << std::flush;
+    std::cout << "\033[2K";
 }
 
 void Terminal::moveTo(int x, int y) {
-    std::cout << "\033[" << y << ";" << x << "H" << std::flush;
+    std::cout << "\033[" << y << ";" << x << "H";
 }
 
 void Terminal::moveUp(int n) {
-    std::cout << "\033[" << n << "A" << std::flush;
+    std::cout << "\033[" << n << "A";
 }
 
 void Terminal::moveDown(int n) {
-    std::cout << "\033[" << n << "B" << std::flush;
+    std::cout << "\033[" << n << "B";
 }
 
 void Terminal::moveRight(int n) {
-    std::cout << "\033[" << n << "C" << std::flush;
+    std::cout << "\033[" << n << "C";
 }
 
 void Terminal::moveLeft(int n) {
-    std::cout << "\033[" << n << "D" << std::flush;
+    std::cout << "\033[" << n << "D";
 }
 
 void Terminal::saveCursor() {
-    std::cout << "\033[s" << std::flush;
+    std::cout << "\033[s";
 }
 
 void Terminal::restoreCursor() {
-    std::cout << "\033[u" << std::flush;
+    std::cout << "\033[u";
 }
 
 void Terminal::hideCursor() {
-    std::cout << "\033[?25l" << std::flush;
+    std::cout << "\033[?25l";
 }
 
 void Terminal::showCursor() {
-    std::cout << "\033[?25h" << std::flush;
+    std::cout << "\033[?25h";
 }
 
 std::string Terminal::fg(Color color) {

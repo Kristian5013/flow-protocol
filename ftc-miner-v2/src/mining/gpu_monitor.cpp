@@ -5,7 +5,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #define LOAD_LIB(name) LoadLibraryA(name)
-#define GET_PROC(lib, name) GetProcAddress((HMODULE)lib, name)
+#define GET_PROC(lib, name) ((void*)GetProcAddress((HMODULE)lib, name))
 #define FREE_LIB(lib) FreeLibrary((HMODULE)lib)
 #else
 #include <dlfcn.h>

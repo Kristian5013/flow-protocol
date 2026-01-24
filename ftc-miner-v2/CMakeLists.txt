@@ -78,7 +78,7 @@ set(AUTOTUNE_SOURCES
 set(NET_SOURCES
     src/net/api_client.cpp
     src/net/stratum_client.cpp
-    src/net/peer_manager.cpp
+    src/net/https_client.cpp
 )
 
 set(CONFIG_SOURCES
@@ -107,8 +107,8 @@ target_link_libraries(ftc-miner PRIVATE
 
 # Platform-specific libraries
 if(WIN32)
-    target_link_libraries(ftc-miner PRIVATE ws2_32)
+    target_link_libraries(ftc-miner PRIVATE ws2_32 winhttp)
 endif()
 
-message(STATUS "FTC Miner ${PROJECT_VERSION} (GPU-only, IPv6) - Kristian Pilatovich - First Real P2P")
-message(STATUS "  Peer discovery: peers.dat file")
+message(STATUS "FTC Miner ${PROJECT_VERSION} (GPU-only) - Kristian Pilatovich - First Real P2P")
+message(STATUS "  Usage: ftc-miner -o <node:port> -a <ftc1q...>")

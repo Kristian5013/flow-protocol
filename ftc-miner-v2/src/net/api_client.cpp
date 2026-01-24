@@ -32,10 +32,10 @@ static void initWinsock() {
 }
 #endif
 
-// Helper: connect to host:port (IPv6 only)
+// Helper: connect to host:port (IPv4 and IPv6)
 static SOCKET connectToHost(const std::string& host, uint16_t port, std::string& error) {
     struct addrinfo hints{}, *res, *p;
-    hints.ai_family = AF_INET6;  // IPv6 only
+    hints.ai_family = AF_UNSPEC;  // IPv4 and IPv6
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 

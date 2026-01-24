@@ -5,6 +5,7 @@
 
 #include "routes.h"
 #include "chain/genesis.h"
+#include <chrono>
 
 namespace ftc {
 namespace api {
@@ -40,7 +41,8 @@ void setupStatusRoutes(RouteContext& ctx) {
         res.success(json.build());
     });
 
-    // Status endpoint - node status
+    // Status endpoint - node status (flat format for web UI)
+    static auto start_time = std::chrono::steady_clock::now();
     server->get("/status", [chain, mempool, peer_manager](const HttpRequest& req, HttpResponse& res) {
         JsonBuilder json;
         json.beginObject()
@@ -49,31 +51,44 @@ void setupStatusRoutes(RouteContext& ctx) {
             .key("network").value("mainnet")
             .key("running").value(true);
 
-        if (chain) {
-            json.key("chain").beginObject()
-                .key("height").value(static_cast<int64_t>(chain->getHeight()))
-                .key("best_hash").value(hashToHex(chain->getBestHash()))
-                .endObject();
-        }
+        // Uptime
+        auto now = std::chrono::steady_clock::now();
+        auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        json.key("uptime").value(static_cast<int64_t>(uptime));
 
+        // Chain info (flat)
+        int64_t height = chain ? static_cast<int64_t>(chain->getHeight()) : 0;
+        json.key("chain_height").value(height);
+        if (chain) {
+            json.key("best_hash").value(hashToHex(chain->getBestHash()));
+        }
+        json.key("sync_progress").value(1.0);  // Always synced for now
+
+        // Mempool info (flat)
         if (mempool) {
             auto stats = mempool->getStats();
-            json.key("mempool").beginObject()
-                .key("size").value(static_cast<uint64_t>(stats.tx_count))
-                .key("bytes").value(stats.total_size)
-                .key("fees").value(stats.total_fee)
-                .endObject();
+            json.key("mempool_size").value(static_cast<uint64_t>(stats.tx_count));
+            json.key("mempool_bytes").value(stats.total_size);
+        } else {
+            json.key("mempool_size").value(static_cast<uint64_t>(0));
+            json.key("mempool_bytes").value(static_cast<uint64_t>(0));
         }
 
+        // Peer info (flat)
         if (peer_manager) {
-            json.key("peers").beginObject()
-                .key("nodes").value(static_cast<uint64_t>(peer_manager->getPeerCount()))
-                .key("connections").value(static_cast<uint64_t>(peer_manager->getConnectionCount()))
-                .key("inbound").value(static_cast<uint64_t>(peer_manager->getInboundCount()))
-                .key("outbound").value(static_cast<uint64_t>(peer_manager->getOutboundCount()))
-                .key("known_addresses").value(static_cast<uint64_t>(peer_manager->getAddressCount()))
-                .endObject();
+            json.key("peer_count").value(static_cast<uint64_t>(peer_manager->getPeerCount()));
+            json.key("connections").value(static_cast<uint64_t>(peer_manager->getConnectionCount()));
+            json.key("inbound").value(static_cast<uint64_t>(peer_manager->getInboundCount()));
+            json.key("outbound").value(static_cast<uint64_t>(peer_manager->getOutboundCount()));
+            json.key("known_addresses").value(static_cast<uint64_t>(peer_manager->getAddressCount()));
+        } else {
+            json.key("peer_count").value(static_cast<uint64_t>(0));
+            json.key("connections").value(static_cast<uint64_t>(0));
+            json.key("known_addresses").value(static_cast<uint64_t>(0));
         }
+
+        // Network hashrate (estimate from difficulty)
+        json.key("network_hashrate").value(static_cast<uint64_t>(0));  // TODO: Calculate from difficulty
 
         json.endObject();
         res.success(json.build());

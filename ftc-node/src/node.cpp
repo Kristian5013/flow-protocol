@@ -363,67 +363,56 @@ bool Node::addPeerAddress(const std::string& addr_str, const std::string& source
     return false;
 }
 
-bool Node::loadSeedPeers() {
-    int loaded = 0;
+bool Node::initSeedDiscovery() {
+    // Initialize seed client for peer discovery via api.flowprotocol.net
+    seed_client_ = std::make_unique<seed::SeedClient>("mainnet");
 
-    // 1. Load peers from peers.dat file
-    std::string peers_file = config_.data_dir + "/peers.dat";
-    std::ifstream file(peers_file);
+    LOG_INFO("[Seed] Discovering peers from api.flowprotocol.net...");
 
-    if (file.is_open()) {
-        int file_loaded = 0;
-        std::string line;
-        while (std::getline(file, line)) {
-            // Skip empty lines and comments
-            if (line.empty() || line[0] == '#') continue;
-            if (addPeerAddress(line, "peers.dat")) {
-                file_loaded++;
+    // Discover peers from seed API
+    auto peers = seed_client_->discoverPeers(50);
+
+    if (!peers.empty()) {
+        LOG_INFO("[Seed] Discovered {} peer(s) from seed network", peers.size());
+
+        for (const auto& peer : peers) {
+            std::string addr = peer.ip + ":" + std::to_string(peer.port);
+            if (addPeerAddress(addr, "seed")) {
+                LOG_DEBUG("[Seed] Added peer: {} (height={}, country={})",
+                         addr, peer.height, peer.country);
             }
         }
-        if (file_loaded > 0) {
-            LOG_INFO("[Peers] Loaded {} peer(s) from peers.dat", file_loaded);
-        }
-        loaded += file_loaded;
+    } else {
+        LOG_WARN("[Seed] No peers discovered from seed network");
     }
 
-    // 2. Add --addnode peers
+    // Also add any --addnode peers (fallback/override)
     for (const auto& node_addr : config_.addnodes) {
         if (addPeerAddress(node_addr, "addnode")) {
             LOG_INFO("[Peers] Added --addnode peer: {}", node_addr);
-            loaded++;
         } else {
             LOG_WARN("[Peers] Failed to add --addnode peer: {}", node_addr);
         }
     }
 
+    // Register this node with seed network and start heartbeat
+    uint32_t current_height = chain_->getHeight();
+    if (seed_client_->registerNode(config_.p2p_port, "1.0.0", current_height)) {
+        LOG_INFO("[Seed] Registered with seed network (port={}, height={})",
+                config_.p2p_port, current_height);
+
+        // Start background heartbeat (updates height every 5 min)
+        // Need to get a reference to chain height that updates
+        // For now, pass the current height - heartbeat will update it
+        seed_client_->startHeartbeat(config_.p2p_port, current_height);
+    } else {
+        LOG_WARN("[Seed] Failed to register with seed network (will retry)");
+    }
+
     return true;
 }
 
-bool Node::savePeers() {
-    // Save known peers to peers.dat
-    std::string peers_file = config_.data_dir + "/peers.dat";
-    std::ofstream file(peers_file);
-
-    if (!file.is_open()) {
-        LOG_ERROR("Failed to save peers.dat");
-        return false;
-    }
-
-    file << "# FTC Node Peers File (IPv6)\n";
-    file << "# Format: [ipv6]:port (one per line)\n";
-    file << "# Generated: " << std::time(nullptr) << "\n\n";
-
-    auto addrs = peer_manager_->getAddresses(1000);
-    for (const auto& a : addrs) {
-        char ip_str[INET6_ADDRSTRLEN];
-        if (inet_ntop(AF_INET6, a.ip, ip_str, sizeof(ip_str))) {
-            file << "[" << ip_str << "]:" << a.port << "\n";
-        }
-    }
-
-    LOG_DEBUG("[Peers] Saved {} peer(s) to peers.dat", addrs.size());
-    return true;
-}
+// savePeers() removed - using seed network instead of peers.dat
 
 bool Node::initAPI() {
     api::Server::Config api_config;
@@ -445,270 +434,6 @@ bool Node::initAPI() {
     }
 
     LOG_DEBUG("API server started: http://[::]:{} (IPv4+IPv6)", config_.api_port);
-    return true;
-}
-
-bool Node::initStratum() {
-    stratum_server_ = std::make_unique<stratum::StratumServer>(config_.stratum_port);
-
-    // Set payout address for solo mining
-    if (!config_.mining_address.empty()) {
-        stratum_server_->setPayoutAddress(config_.mining_address);
-    }
-
-    // Set callback for getting mining work
-    stratum_server_->setGetWorkCallback([this](const std::string& payout_address, stratum::Job& job) -> bool {
-        auto tip = chain_->getTip();
-        if (!tip) return false;
-
-        // Get bits (difficulty target)
-        auto getHeader = [this](uint64_t height) -> chain::BlockHeader {
-            auto blk = chain_->getBlock(static_cast<int32_t>(height));
-            if (!blk) return chain::BlockHeader{};
-            return blk->header;
-        };
-        auto tipBlock = chain_->getBlock(tip->hash);
-        if (!tipBlock) return false;
-        uint32_t bits = consensus_->getNextWorkRequired(tip->height, tipBlock->header, getHeader);
-
-        // New block height
-        uint32_t height = tip->height + 1;
-
-        // Create timestamp
-        uint32_t timestamp = static_cast<uint32_t>(std::time(nullptr));
-
-        // Build block template with coinbase
-        chain::Block block_template;
-        block_template.header.version = 1;
-        block_template.header.prev_hash = tip->hash;
-        block_template.header.timestamp = timestamp;
-        block_template.header.bits = bits;
-        block_template.header.nonce = 0;
-
-        // Create coinbase transaction
-        chain::Transaction coinbase_tx;
-        coinbase_tx.version = 1;
-        coinbase_tx.locktime = 0;
-
-        // Coinbase input (no previous output)
-        chain::TxInput coinbase_input;
-        std::memset(coinbase_input.prevout.txid.data(), 0, 32);
-        coinbase_input.prevout.index = 0xFFFFFFFF;
-        coinbase_input.sequence = 0xFFFFFFFF;
-
-        // Coinbase script: height (BIP34) + arbitrary data
-        std::vector<uint8_t> coinbase_script;
-        // Encode height as minimal push
-        if (height < 17) {
-            coinbase_script.push_back(static_cast<uint8_t>(0x50 + height));  // OP_1 to OP_16
-        } else if (height <= 0x7F) {
-            coinbase_script.push_back(1);
-            coinbase_script.push_back(static_cast<uint8_t>(height));
-        } else if (height <= 0x7FFF) {
-            coinbase_script.push_back(2);
-            coinbase_script.push_back(static_cast<uint8_t>(height & 0xFF));
-            coinbase_script.push_back(static_cast<uint8_t>((height >> 8) & 0xFF));
-        } else {
-            coinbase_script.push_back(3);
-            coinbase_script.push_back(static_cast<uint8_t>(height & 0xFF));
-            coinbase_script.push_back(static_cast<uint8_t>((height >> 8) & 0xFF));
-            coinbase_script.push_back(static_cast<uint8_t>((height >> 16) & 0xFF));
-        }
-        // Add miner identifier
-        const char* miner_tag = "/FTC/Stratum/";
-        coinbase_script.insert(coinbase_script.end(), miner_tag, miner_tag + std::strlen(miner_tag));
-        coinbase_input.script_sig = coinbase_script;
-
-        coinbase_tx.inputs.push_back(coinbase_input);
-
-        // Coinbase output with block reward + fees
-        uint64_t block_reward = consensus_->params().getBlockReward(height);
-        uint64_t fees = 0;  // TODO: Calculate fees from mempool transactions
-        uint64_t total_reward = block_reward + fees;
-
-        // Check if P2Pool is enabled and has shares - use PPLNS payouts
-        bool use_p2pool_payouts = false;
-        std::map<std::vector<uint8_t>, uint64_t> payouts;
-
-        if (p2pool_ && p2pool_->isRunning()) {
-            // Register this miner's share for PPLNS
-            auto miner_script = chain::script::createP2PKHFromAddress(payout_address);
-            if (!miner_script.empty()) {
-                p2pool_->registerMinerShare(miner_script);
-            }
-
-            // Get PPLNS payouts
-            payouts = p2pool_->getPayouts();
-            if (!payouts.empty()) {
-                use_p2pool_payouts = true;
-            }
-        }
-
-        if (use_p2pool_payouts) {
-            // Create multiple outputs for P2Pool PPLNS participants
-            for (const auto& [script, amount] : payouts) {
-                if (amount > 0) {
-                    chain::TxOutput output;
-                    output.value = amount;
-                    output.script_pubkey = script;
-                    coinbase_tx.outputs.push_back(output);
-                }
-            }
-        } else {
-            // Solo mining fallback - single output to miner
-            chain::TxOutput coinbase_output;
-            coinbase_output.value = total_reward;
-
-            // Create output script from payout address
-            if (!payout_address.empty()) {
-                coinbase_output.script_pubkey = chain::script::createP2PKHFromAddress(payout_address);
-            } else if (!config_.mining_address.empty()) {
-                coinbase_output.script_pubkey = chain::script::createP2PKHFromAddress(config_.mining_address);
-            } else {
-                // No payout address configured - this shouldn't happen
-                LOG_ERROR("[Stratum] No payout address configured for mining");
-                return false;
-            }
-
-            coinbase_tx.outputs.push_back(coinbase_output);
-        }
-        block_template.transactions.push_back(coinbase_tx);
-
-        // Add mempool transactions (simplified - just coinbase for now)
-        // TODO: Add fee-prioritized mempool transactions
-
-        // Calculate merkle root
-        block_template.updateMerkleRoot();
-
-        // Store block template for later submission
-        {
-            std::lock_guard<std::mutex> lock(mining_work_mutex_);
-            current_mining_work_.block_template = block_template;
-            current_mining_work_.prev_hash = tip->hash;
-            current_mining_work_.height = height;
-            current_mining_work_.bits = bits;
-            current_mining_work_.valid = true;
-        }
-
-        // Build job data for Stratum protocol
-        job.height = height;
-
-        // Version in little-endian hex
-        std::stringstream ver_ss;
-        uint32_t ver_le = block_template.header.version;
-        ver_ss << std::hex << std::setfill('0') << std::setw(8) << ver_le;
-        job.version = ver_ss.str();
-
-        // prev_hash in internal byte order
-        std::stringstream prev_ss;
-        prev_ss << std::hex << std::setfill('0');
-        for (int i = 0; i < 32; ++i) {
-            prev_ss << std::setw(2) << static_cast<int>(tip->hash[i]);
-        }
-        job.prev_hash = prev_ss.str();
-
-        // ntime
-        std::stringstream ntime_ss;
-        ntime_ss << std::hex << std::setfill('0') << std::setw(8) << timestamp;
-        job.ntime = ntime_ss.str();
-
-        // nbits
-        std::stringstream nbits_ss;
-        nbits_ss << std::hex << std::setfill('0') << std::setw(8) << bits;
-        job.nbits = nbits_ss.str();
-
-        // Serialize coinbase for the miner
-        auto coinbase_data = coinbase_tx.serialize();
-        std::stringstream cb1_ss, cb2_ss;
-        cb1_ss << std::hex << std::setfill('0');
-        for (auto b : coinbase_data) {
-            cb1_ss << std::setw(2) << static_cast<int>(b);
-        }
-        job.coinbase1 = cb1_ss.str();
-        job.coinbase2 = "";  // Extranonce goes after coinbase1 in our simple scheme
-
-        // Merkle branch (empty for single coinbase)
-        job.merkle_branch.clear();
-
-        LOG_DEBUG("[Stratum] New work: height={} bits={:08x} prev={}...",
-                  height, bits, toHex(tip->hash).substr(0, 16));
-
-        return true;
-    });
-
-    // Set callback for block submission
-    stratum_server_->setBlockFoundCallback([this](const std::vector<uint8_t>& header_data, uint32_t nonce,
-                                                   const std::vector<uint8_t>& coinbase) -> bool {
-        MiningWork work;
-        {
-            std::lock_guard<std::mutex> lock(mining_work_mutex_);
-            if (!current_mining_work_.valid) {
-                LOG_WARN("[Stratum] Block submission rejected: no valid work template");
-                return false;
-            }
-            work = current_mining_work_;
-        }
-
-        // Update the block with the found nonce
-        chain::Block block = work.block_template;
-        block.header.nonce = nonce;
-
-        // Verify the header matches what we sent (prev_hash, bits)
-        auto tip = chain_->getTip();
-        if (!tip || tip->hash != work.prev_hash) {
-            LOG_WARN("[Stratum] Block submission rejected: chain tip changed");
-            return false;
-        }
-
-        // Check proof of work
-        crypto::Hash256 block_hash = block.header.getHash();
-        if (!consensus_->checkProofOfWork(block_hash, block.header.bits)) {
-            LOG_WARN("[Stratum] Block submission rejected: PoW check failed");
-            return false;
-        }
-
-        LOG_NOTICE("[Stratum] Valid block found! height={} hash={}",
-                   work.height, toHex(block_hash).substr(0, 16) + "...");
-
-        // Submit to chain
-        auto result = chain_->processBlock(block);
-        if (result != chain::ValidationResult::VALID) {
-            LOG_ERROR("[Stratum] Block rejected by chain: result={}", static_cast<int>(result));
-            return false;
-        }
-
-        LOG_NOTICE("[Stratum] Block accepted into main chain! height={}", work.height);
-
-        // Broadcast to peers
-        if (peer_manager_) {
-            peer_manager_->broadcastBlock(block_hash, block);
-            LOG_INFO("[Stratum] Block broadcast to {} peers", peer_manager_->getPeerCount());
-        }
-
-        // Invalidate current work (new work needed)
-        {
-            std::lock_guard<std::mutex> lock(mining_work_mutex_);
-            current_mining_work_.valid = false;
-        }
-
-        // Notify stratum server to send new work to miners
-        if (stratum_server_) {
-            stratum_server_->notifyNewBlock();
-        }
-
-        return true;
-    });
-
-    if (!stratum_server_->start()) {
-        LOG_ERROR("Failed to start Stratum server");
-        return false;
-    }
-
-    LOG_DEBUG("Stratum server started: stratum+tcp://0.0.0.0:{}", config_.stratum_port);
-
-    // Create initial job so miners can start working immediately
-    stratum_server_->notifyNewBlock();
-
     return true;
 }
 
@@ -749,14 +474,6 @@ bool Node::initP2Pool() {
         } else {
             LOG_ERROR("P2Pool block rejected (validation result: {})", static_cast<int>(result));
         }
-    });
-
-    // Set callback for getting connected miner count from Stratum server
-    p2pool_->setGetConnectedMinersCallback([this]() -> size_t {
-        if (stratum_server_) {
-            return stratum_server_->getConnectedMiners();
-        }
-        return 0;
     });
 
     // Start P2Pool
@@ -853,7 +570,6 @@ bool Node::reindexUTXO() {
 
 bool Node::start() {
     start_time_ = std::chrono::steady_clock::now();
-    last_peers_save_ = start_time_;
 
     // Initialize all components (daemon mode - no output)
     generateNodeId();
@@ -872,8 +588,8 @@ bool Node::start() {
     // Start P2P network
     if (!initP2P()) return false;
 
-    // Load peers and connect (non-blocking)
-    loadSeedPeers();
+    // Seed discovery and peer connection
+    initSeedDiscovery();
     auto addrs = peer_manager_->getAddresses(100);
     for (const auto& a : addrs) {
         if (peer_manager_->getOutboundCount() >= static_cast<size_t>(config_.target_outbound)) break;
@@ -888,8 +604,7 @@ bool Node::start() {
     // Start API server
     if (!initAPI()) return false;
 
-    // Start Stratum and P2Pool
-    if (config_.stratum_enabled) initStratum();
+    // Start P2Pool
     initP2Pool();
     if (p2pool_ && api_server_) {
         api_server_->setP2Pool(p2pool_.get());
@@ -907,10 +622,9 @@ void Node::stop() {
     if (!running_.load()) return;
     running_ = false;
 
-    // Save peers and stop all components
-    if (peer_manager_) savePeers();
+    // Stop all components
+    if (seed_client_) seed_client_->stopHeartbeat();
     if (p2pool_) p2pool_->stop();
-    if (stratum_server_) stratum_server_->stop();
     if (api_server_) api_server_->stop();
     if (message_handler_) message_handler_->stop();
     if (peer_manager_) peer_manager_->stop();
@@ -1036,13 +750,6 @@ void Node::onNewPeer(p2p::Connection::Id peer_id) {
         }
     }
 
-    // Auto-save peers.dat periodically (every 5 minutes)
-    auto now = std::chrono::steady_clock::now();
-    auto since_save = std::chrono::duration_cast<std::chrono::minutes>(now - last_peers_save_);
-    if (since_save.count() >= 5) {
-        savePeers();
-        last_peers_save_ = now;
-    }
 }
 
 void Node::onPeerDisconnect(p2p::Connection::Id peer_id, const std::string& reason) {

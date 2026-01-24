@@ -9,9 +9,9 @@
 #include "p2p/peer_manager.h"
 #include "p2p/message_handler.h"
 #include "api/server.h"
-#include "stratum/stratum_server.h"
 #include "p2pool/p2pool_net.h"
 #include "p2pool/sharechain.h"
+#include "seed/seed_client.h"
 
 #include <atomic>
 #include <memory>
@@ -92,7 +92,6 @@ private:
     util::Config config_;
     std::atomic<bool> running_{false};
     std::chrono::steady_clock::time_point start_time_;
-    std::chrono::steady_clock::time_point last_peers_save_;
 
     // Shutdown synchronization
     std::mutex shutdown_mutex_;
@@ -140,11 +139,11 @@ private:
     // 7. HTTP API Server (localhost only)
     std::unique_ptr<api::Server> api_server_;
 
-    // 8. Stratum Server (for GPU miners)
-    std::unique_ptr<stratum::StratumServer> stratum_server_;
-
-    // 9. P2Pool - Decentralized Mining Pool
+    // 8. P2Pool - Decentralized Mining Pool
     std::unique_ptr<p2pool::P2Pool> p2pool_;
+
+    // 9. Seed Discovery Client (api.flowprotocol.net)
+    std::unique_ptr<seed::SeedClient> seed_client_;
 
     // =========================================================================
     // Initialization
@@ -157,10 +156,8 @@ private:
     bool initMempool();
     bool initP2P();
     bool addPeerAddress(const std::string& addr_str, const std::string& source);  // Parse and add peer
-    bool loadSeedPeers();  // Load peers from peers.dat and --addnode
-    bool savePeers();      // Save peers to peers.dat
+    bool initSeedDiscovery();  // Initialize seed client and discover peers
     bool initAPI();
-    bool initStratum();
     bool initP2Pool();
 
     // Rebuild UTXO set from blocks (--reindex)
