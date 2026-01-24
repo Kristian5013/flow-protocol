@@ -92,6 +92,7 @@ private:
     util::Config config_;
     std::atomic<bool> running_{false};
     std::chrono::steady_clock::time_point start_time_;
+    std::chrono::steady_clock::time_point last_peers_save_;
 
     // Shutdown synchronization
     std::mutex shutdown_mutex_;
@@ -155,7 +156,8 @@ private:
     bool initChain();
     bool initMempool();
     bool initP2P();
-    bool loadSeedPeers();  // Load peers from peers.dat
+    bool addPeerAddress(const std::string& addr_str, const std::string& source);  // Parse and add peer
+    bool loadSeedPeers();  // Load peers from peers.dat and --addnode
     bool savePeers();      // Save peers to peers.dat
     bool initAPI();
     bool initStratum();

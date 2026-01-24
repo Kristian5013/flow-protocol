@@ -408,6 +408,7 @@ std::vector<uint8_t> VersionMessage::serialize() const {
     writeU64(out, start_height);
     out.insert(out.end(), best_hash.begin(), best_hash.end());
     out.push_back(relay ? 1 : 0);
+    out.insert(out.end(), node_id, node_id + 20);  // Node ID for deduplication
 
     return out;
 }
@@ -445,6 +446,12 @@ std::optional<VersionMessage> VersionMessage::deserialize(const uint8_t* data, s
 
     if (offset < len) {
         msg.relay = data[offset] != 0;
+        offset += 1;
+    }
+
+    // Read node_id if present (20 bytes)
+    if (offset + 20 <= len) {
+        std::memcpy(msg.node_id, data + offset, 20);
     }
 
     return msg;

@@ -400,6 +400,33 @@ void PeerManager::handleVersion(Peer& peer, const VersionMessage& ver) {
         return;
     }
 
+    // Check for self-connection (same node_id as us)
+    if (std::memcmp(ver.node_id, our_node_id_, 20) == 0) {
+        LOG_DEBUG("Self-connection detected from {}", peer.info.addr.toString());
+        peer.conn->disconnect("self-connection");
+        return;
+    }
+
+    // Check for duplicate connection (same node_id, different IP - IPv4/IPv6)
+    // Only check if node_id is not all zeros (old clients)
+    bool has_node_id = false;
+    for (int i = 0; i < 20; i++) {
+        if (ver.node_id[i] != 0) { has_node_id = true; break; }
+    }
+
+    if (has_node_id) {
+        std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
+        for (const auto& [id, other] : peers_) {
+            if (id == peer.info.id) continue;  // Skip self
+            if (other.version_received && std::memcmp(other.info.node_id, ver.node_id, 20) == 0) {
+                LOG_DEBUG("Duplicate connection from {} (same node as {})",
+                          peer.info.addr.toString(), other.info.addr.toString());
+                peer.conn->disconnect("duplicate node connection");
+                return;
+            }
+        }
+    }
+
     peer.version_received = true;
     peer.conn->setPeerVersion(ver);
 
@@ -409,6 +436,7 @@ void PeerManager::handleVersion(Peer& peer, const VersionMessage& ver) {
     peer.info.start_height = ver.start_height;
     peer.info.relay = ver.relay;
     peer.info.best_height = ver.start_height;
+    std::memcpy(peer.info.node_id, ver.node_id, 20);  // Store node_id
 
     LOG_DEBUG("VERSION from {}: v{} \"{}\" height={}",
               peer.info.addr.toString(), ver.version,
@@ -529,6 +557,7 @@ void PeerManager::sendVersion(Peer& peer) {
     ver.user_agent = our_user_agent_;
     ver.start_height = our_height_;
     ver.relay = true;
+    std::memcpy(ver.node_id, our_node_id_, 20);  // Include our node ID
 
     Message msg;
     msg.type = MessageType::VERSION;

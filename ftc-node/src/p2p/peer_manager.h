@@ -14,6 +14,7 @@
 #include <functional>
 #include <random>
 #include <chrono>
+#include <cstring>
 
 namespace ftc {
 namespace p2p {
@@ -88,6 +89,7 @@ struct PeerInfo {
     std::string user_agent;
     int32_t start_height = 0;
     bool relay = true;
+    uint8_t node_id[20] = {0};  // Unique node ID (for IPv4/IPv6 deduplication)
 
     // Sync state
     int32_t best_height = 0;
@@ -166,6 +168,7 @@ public:
     void setOurServices(uint64_t services) { our_services_ = services; }
     void setOurUserAgent(const std::string& ua) { our_user_agent_ = ua; }
     void setOurHeight(int32_t height) { our_height_ = height; }
+    void setOurNodeId(const uint8_t* id) { std::memcpy(our_node_id_, id, 20); }
 
     // Manual connection
     bool connectTo(const NetAddr& addr);
@@ -327,6 +330,7 @@ private:
     uint64_t our_services_ = 1;  // NODE_NETWORK
     std::string our_user_agent_ = "/FTC:1.0.0/";
     std::atomic<int32_t> our_height_{0};
+    uint8_t our_node_id_[20] = {0};  // Unique node ID for IPv4/IPv6 deduplication
 
     // Statistics
     std::atomic<uint64_t> total_connections_{0};

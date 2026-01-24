@@ -26,6 +26,7 @@
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <algorithm>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -208,6 +209,7 @@ bool Node::initP2P() {
     peer_manager_->setOurVersion(70015);  // Protocol version
     peer_manager_->setOurServices(1);      // NODE_NETWORK
     peer_manager_->setOurUserAgent("/FTC:1.0.0/");
+    peer_manager_->setOurNodeId(node_id_);  // Unique node ID for IPv4/IPv6 deduplication
 
     auto tip = chain_->getTip();
     peer_manager_->setOurHeight(tip ? tip->height : 0);
@@ -268,49 +270,55 @@ bool Node::initP2P() {
     return true;
 }
 
-bool Node::loadSeedPeers() {
-    // Load peers from peers.dat file
-    std::string peers_file = config_.data_dir + "/peers.dat";
-    std::ifstream file(peers_file);
+// Helper to parse IPv6 address string and add to peer manager
+bool Node::addPeerAddress(const std::string& addr_str, const std::string& source) {
+    std::string host;
+    uint16_t port = 17318;
 
-    if (!file.is_open()) {
-        return true;  // No peers.dat - not an error
+    std::string line = addr_str;
+
+    // Trim whitespace
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' ||
+                              line.back() == '\r' || line.back() == '\n')) {
+        line.pop_back();
+    }
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+        line.erase(0, 1);
     }
 
-    int loaded = 0;
-    std::string line;
-    while (std::getline(file, line)) {
-        // Skip empty lines and comments
-        if (line.empty() || line[0] == '#') continue;
+    if (line.empty()) return false;
 
-        // Trim whitespace
-        while (!line.empty() && (line.back() == ' ' || line.back() == '\t' ||
-                                  line.back() == '\r' || line.back() == '\n')) {
-            line.pop_back();
+    // Parse [ipv6]:port or host:port format
+    if (line.front() == '[') {
+        // IPv6 format: [addr]:port
+        size_t bracket_end = line.find(']');
+        if (bracket_end != std::string::npos) {
+            host = line.substr(1, bracket_end - 1);
+            if (bracket_end + 1 < line.size() && line[bracket_end + 1] == ':') {
+                try {
+                    port = static_cast<uint16_t>(std::stoi(line.substr(bracket_end + 2)));
+                } catch (...) {}
+            }
         }
-        while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
-            line.erase(0, 1);
-        }
-
-        if (line.empty()) continue;
-
-        // Parse [ipv6]:port or host:port format
-        std::string host;
-        uint16_t port = 17318;
-
-        if (line.front() == '[') {
-            // IPv6 format: [addr]:port
-            size_t bracket_end = line.find(']');
-            if (bracket_end != std::string::npos) {
-                host = line.substr(1, bracket_end - 1);
-                if (bracket_end + 1 < line.size() && line[bracket_end + 1] == ':') {
-                    try {
-                        port = static_cast<uint16_t>(std::stoi(line.substr(bracket_end + 2)));
-                    } catch (...) {}
+    } else {
+        // Check if it's a bare IPv6 (contains ::)
+        if (line.find("::") != std::string::npos || std::count(line.begin(), line.end(), ':') > 1) {
+            // Bare IPv6 without brackets - find last : that's followed by digits only
+            size_t last_colon = line.rfind(':');
+            if (last_colon != std::string::npos) {
+                std::string after = line.substr(last_colon + 1);
+                bool is_port = !after.empty() && std::all_of(after.begin(), after.end(), ::isdigit);
+                if (is_port && std::stoi(after) < 65536) {
+                    host = line.substr(0, last_colon);
+                    port = static_cast<uint16_t>(std::stoi(after));
+                } else {
+                    host = line;  // No port specified
                 }
+            } else {
+                host = line;
             }
         } else {
-            // host:port format
+            // IPv4 or hostname:port format
             size_t colon = line.rfind(':');
             if (colon != std::string::npos) {
                 host = line.substr(0, colon);
@@ -321,21 +329,70 @@ bool Node::loadSeedPeers() {
                 host = line;
             }
         }
+    }
 
-        if (host.empty()) continue;
+    if (host.empty()) return false;
 
-        // Convert to NetAddr (IPv6 only)
-        p2p::NetAddr addr;
-        addr.port = port;
-        addr.services = 1;
+    // Convert to NetAddr (supports both IPv4 and IPv6)
+    p2p::NetAddr addr;
+    addr.port = port;
+    addr.services = 1;
 
-        struct in6_addr ipv6;
-        if (inet_pton(AF_INET6, host.c_str(), &ipv6) == 1) {
-            std::memcpy(addr.ip, &ipv6, 16);
-            peer_manager_->addAddress(addr, "peers.dat");
+    // Try IPv6 first
+    struct in6_addr ipv6;
+    if (inet_pton(AF_INET6, host.c_str(), &ipv6) == 1) {
+        std::memcpy(addr.ip, &ipv6, 16);
+        peer_manager_->addAddress(addr, source);
+        return true;
+    }
+
+    // Try IPv4 (convert to IPv4-mapped IPv6: ::ffff:x.x.x.x)
+    struct in_addr ipv4;
+    if (inet_pton(AF_INET, host.c_str(), &ipv4) == 1) {
+        // Create IPv4-mapped IPv6 address
+        std::memset(addr.ip, 0, 10);           // First 10 bytes = 0
+        addr.ip[10] = 0xff;                     // Bytes 10-11 = 0xffff
+        addr.ip[11] = 0xff;
+        std::memcpy(addr.ip + 12, &ipv4, 4);   // Last 4 bytes = IPv4
+        peer_manager_->addAddress(addr, source);
+        LOG_DEBUG("[Peers] Added IPv4 peer: {} (as ::ffff:{})", host, host);
+        return true;
+    }
+
+    LOG_DEBUG("[Peers] Invalid address format: {}", host);
+    return false;
+}
+
+bool Node::loadSeedPeers() {
+    int loaded = 0;
+
+    // 1. Load peers from peers.dat file
+    std::string peers_file = config_.data_dir + "/peers.dat";
+    std::ifstream file(peers_file);
+
+    if (file.is_open()) {
+        int file_loaded = 0;
+        std::string line;
+        while (std::getline(file, line)) {
+            // Skip empty lines and comments
+            if (line.empty() || line[0] == '#') continue;
+            if (addPeerAddress(line, "peers.dat")) {
+                file_loaded++;
+            }
+        }
+        if (file_loaded > 0) {
+            LOG_INFO("[Peers] Loaded {} peer(s) from peers.dat", file_loaded);
+        }
+        loaded += file_loaded;
+    }
+
+    // 2. Add --addnode peers
+    for (const auto& node_addr : config_.addnodes) {
+        if (addPeerAddress(node_addr, "addnode")) {
+            LOG_INFO("[Peers] Added --addnode peer: {}", node_addr);
             loaded++;
         } else {
-            LOG_DEBUG("[Peers] Skipping non-IPv6 address: {}", host);
+            LOG_WARN("[Peers] Failed to add --addnode peer: {}", node_addr);
         }
     }
 
@@ -796,6 +853,7 @@ bool Node::reindexUTXO() {
 
 bool Node::start() {
     start_time_ = std::chrono::steady_clock::now();
+    last_peers_save_ = start_time_;
 
     // Initialize all components (daemon mode - no output)
     generateNodeId();
@@ -976,6 +1034,14 @@ void Node::onNewPeer(p2p::Connection::Id peer_id) {
                      peer_height, tip->height);
             message_handler_->startSync();
         }
+    }
+
+    // Auto-save peers.dat periodically (every 5 minutes)
+    auto now = std::chrono::steady_clock::now();
+    auto since_save = std::chrono::duration_cast<std::chrono::minutes>(now - last_peers_save_);
+    if (since_save.count() >= 5) {
+        savePeers();
+        last_peers_save_ = now;
     }
 }
 

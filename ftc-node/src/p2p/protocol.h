@@ -184,6 +184,7 @@ struct VersionMessage {
     uint64_t start_height = 0;
     crypto::Hash256 best_hash = crypto::ZERO_HASH;
     bool relay = true;
+    uint8_t node_id[20] = {0};  // Unique node identifier (for IPv4/IPv6 deduplication)
 
     std::vector<uint8_t> serialize() const;
     static std::optional<VersionMessage> deserialize(const uint8_t* data, size_t len);
