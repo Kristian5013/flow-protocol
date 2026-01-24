@@ -1,11 +1,14 @@
 /**
- * Status Routes - /, /status, /health, /genesis
+ * Status Routes - /, /status, /health, /genesis, /snapshot
  * Kristian Pilatovich 20091227 - First Real P2P
  */
 
 #include "routes.h"
 #include "chain/genesis.h"
+#include "chain/snapshot.h"
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 
 namespace ftc {
 namespace api {
@@ -36,6 +39,7 @@ void setupStatusRoutes(RouteContext& ctx) {
                 .value("/wallet/send")
                 .value("/mining/template")
                 .value("/p2pool/status")
+                .value("/snapshot")
             .endArray()
         .endObject();
         res.success(json.build());
@@ -143,6 +147,169 @@ void setupStatusRoutes(RouteContext& ctx) {
             .endObject();
 
         res.success(json.build());
+    });
+
+    // Sync status - detailed sync statistics
+    auto* message_handler = ctx.message_handler;
+    server->get("/sync", [message_handler, chain](const HttpRequest& req, HttpResponse& res) {
+        JsonBuilder json;
+        json.beginObject();
+
+        if (message_handler) {
+            auto stats = message_handler->getSyncStats();
+
+            // State as string
+            const char* state_str = "unknown";
+            switch (stats.state) {
+                case p2p::SyncState::IDLE: state_str = "idle"; break;
+                case p2p::SyncState::HEADERS: state_str = "headers"; break;
+                case p2p::SyncState::BLOCKS: state_str = "blocks"; break;
+                case p2p::SyncState::COMPLETE: state_str = "complete"; break;
+            }
+
+            json.key("state").value(state_str)
+                .key("current_height").value(static_cast<int64_t>(stats.current_height))
+                .key("target_height").value(static_cast<int64_t>(stats.target_height))
+                .key("progress").value(stats.progress)
+                .key("blocks_per_second").value(stats.blocks_per_second)
+                .key("blocks_in_flight").value(static_cast<int64_t>(stats.blocks_in_flight))
+                .key("blocks_in_queue").value(static_cast<int64_t>(stats.blocks_in_queue))
+                .key("active_peers").value(static_cast<int64_t>(stats.active_peers))
+                .key("total_downloaded").value(static_cast<int64_t>(stats.total_downloaded))
+                .key("eta_seconds").value(static_cast<int64_t>(stats.eta.count()));
+        } else {
+            json.key("state").value("unavailable")
+                .key("current_height").value(chain ? static_cast<int64_t>(chain->getHeight()) : 0)
+                .key("progress").value(1.0);
+        }
+
+        json.endObject();
+        res.success(json.build());
+    });
+
+    // ==========================================================================
+    // Snapshot endpoints - UTXO state snapshots for fast sync
+    // ==========================================================================
+
+    auto* utxo_set = ctx.utxo_set;
+
+    // GET /snapshot - Get snapshot info (existing file or current state)
+    server->get("/snapshot", [chain, utxo_set](const HttpRequest& req, HttpResponse& res) {
+        JsonBuilder json;
+        json.beginObject();
+
+        // Check for existing snapshot file
+        std::string snapshot_path = "snapshot.dat";
+        if (!std::filesystem::exists(snapshot_path)) {
+            snapshot_path = "./data/snapshot.dat";
+        }
+
+        if (std::filesystem::exists(snapshot_path)) {
+            auto info = chain::Snapshot::getInfo(snapshot_path);
+            if (info.valid) {
+                json.key("exists").value(true)
+                    .key("file").value(snapshot_path)
+                    .key("size").value(static_cast<uint64_t>(info.file_size))
+                    .key("height").value(static_cast<int64_t>(info.header.height))
+                    .key("block_hash").value(hashToHex(info.header.block_hash))
+                    .key("utxo_count").value(info.header.utxo_count)
+                    .key("total_value").value(info.header.total_value);
+            } else {
+                json.key("exists").value(false)
+                    .key("error").value(info.error);
+            }
+        } else {
+            json.key("exists").value(false);
+        }
+
+        // Current chain state for comparison
+        if (chain && utxo_set) {
+            json.key("current_height").value(static_cast<int64_t>(chain->getHeight()))
+                .key("current_utxos").value(static_cast<uint64_t>(utxo_set->size()));
+        }
+
+        json.endObject();
+        res.success(json.build());
+    });
+
+    // POST /snapshot - Create/export a new snapshot
+    server->post("/snapshot", [chain, utxo_set](const HttpRequest& req, HttpResponse& res) {
+        if (!chain || !utxo_set) {
+            res.error(HttpStatus::SERVICE_UNAVAILABLE, "Chain or UTXO set not available");
+            return;
+        }
+
+        auto tip = chain->getTip();
+        if (!tip) {
+            res.error(HttpStatus::SERVICE_UNAVAILABLE, "No chain tip available");
+            return;
+        }
+
+        std::string snapshot_path = "./data/snapshot.dat";
+
+        // Create data directory if needed
+        std::filesystem::create_directories("./data");
+
+        auto start = std::chrono::steady_clock::now();
+
+        if (!chain::Snapshot::exportToFile(*utxo_set, tip->height, tip->hash, snapshot_path, nullptr)) {
+            res.error(HttpStatus::INTERNAL_ERROR, "Failed to export snapshot");
+            return;
+        }
+
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+
+        // Get file size
+        auto file_size = std::filesystem::file_size(snapshot_path);
+
+        JsonBuilder json;
+        json.beginObject()
+            .key("success").value(true)
+            .key("file").value(snapshot_path)
+            .key("height").value(static_cast<int64_t>(tip->height))
+            .key("block_hash").value(hashToHex(tip->hash))
+            .key("utxo_count").value(static_cast<uint64_t>(utxo_set->size()))
+            .key("size").value(static_cast<uint64_t>(file_size))
+            .key("time_ms").value(static_cast<int64_t>(elapsed))
+            .endObject();
+
+        res.success(json.build());
+    });
+
+    // GET /snapshot/download - Download snapshot file (binary)
+    server->get("/snapshot/download", [](const HttpRequest& req, HttpResponse& res) {
+        std::string snapshot_path = "snapshot.dat";
+        if (!std::filesystem::exists(snapshot_path)) {
+            snapshot_path = "./data/snapshot.dat";
+        }
+
+        if (!std::filesystem::exists(snapshot_path)) {
+            res.error(HttpStatus::NOT_FOUND, "No snapshot file available");
+            return;
+        }
+
+        // Read file
+        std::ifstream file(snapshot_path, std::ios::binary);
+        if (!file) {
+            res.error(HttpStatus::INTERNAL_ERROR, "Failed to open snapshot file");
+            return;
+        }
+
+        // Read entire file into buffer
+        file.seekg(0, std::ios::end);
+        size_t size = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        std::string data(size, '\0');
+        file.read(&data[0], size);
+
+        // Set response headers for binary download
+        res.headers["Content-Type"] = "application/octet-stream";
+        res.headers["Content-Disposition"] = "attachment; filename=\"snapshot.dat\"";
+        res.headers["Content-Length"] = std::to_string(size);
+        res.body = std::move(data);
+        res.status = HttpStatus::OK;
     });
 }
 

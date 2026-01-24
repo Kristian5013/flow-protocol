@@ -54,7 +54,7 @@ class MessageHandler {
 public:
     // Configuration
     struct Config {
-        size_t max_blocks_in_flight = 16;           // Max concurrent block downloads
+        size_t max_blocks_in_flight = 128;          // Max concurrent block downloads
         size_t max_headers_in_flight = 2000;        // Max headers per request
         size_t max_inv_per_message = 50000;         // Max INV items per message
         std::chrono::seconds block_request_timeout{60};
@@ -124,6 +124,23 @@ public:
     };
 
     Stats getStats() const;
+
+    // Sync statistics (for API)
+    struct SyncStats {
+        SyncState state = SyncState::IDLE;
+        uint64_t current_height = 0;
+        uint64_t target_height = 0;
+        double progress = 0.0;              // 0.0 - 1.0
+        double blocks_per_second = 0.0;
+        double bytes_per_second = 0.0;
+        size_t blocks_in_flight = 0;
+        size_t blocks_in_queue = 0;
+        size_t active_peers = 0;
+        uint64_t total_downloaded = 0;
+        std::chrono::seconds eta{0};        // Estimated time remaining
+    };
+
+    SyncStats getSyncStats() const;
 
 private:
     // Message handlers

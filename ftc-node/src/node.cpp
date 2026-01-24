@@ -229,7 +229,7 @@ bool Node::initP2P() {
 
     // Initialize message handler
     p2p::MessageHandler::Config mh_config;
-    mh_config.max_blocks_in_flight = 16;
+    mh_config.max_blocks_in_flight = 128;  // Higher for faster initial sync
     mh_config.relay_txs = true;
     mh_config.relay_blocks = true;
 
@@ -385,12 +385,50 @@ void Node::savePeers() {
         return;
     }
 
-    auto addrs = peer_manager_->getAddresses(1000);
-    for (const auto& addr : addrs) {
-        file << addr.toString() << "\n";
+    // Get our current chain height
+    int32_t our_height = 0;
+    if (chain_) {
+        auto tip = chain_->getTip();
+        if (tip) our_height = tip->height;
     }
 
-    LOG_INFO("[Peers] Saved {} peer(s) to peers.dat", addrs.size());
+    // Only save peers that are fully synced (their height >= our height)
+    auto peer_infos = peer_manager_->getPeerInfo();
+    int synced_count = 0;
+
+    for (const auto& peer : peer_infos) {
+        // Only save peers that:
+        // 1. Are at least at our height (synced)
+        // 2. Are in active state (established connection)
+        if (peer.best_height >= our_height && peer.state == p2p::PeerState::ESTABLISHED) {
+            file << peer.addr.toString() << "\n";
+            synced_count++;
+        }
+    }
+
+    // Also save known addresses from peers that were synced
+    // This helps maintain a pool of good peers
+    auto addrs = peer_manager_->getAddresses(1000);
+    int known_count = 0;
+    for (const auto& addr : addrs) {
+        // Skip addresses already written from active peers
+        bool already_saved = false;
+        for (const auto& peer : peer_infos) {
+            if (peer.addr.toString() == addr.toString() &&
+                peer.best_height >= our_height &&
+                peer.state == p2p::PeerState::ESTABLISHED) {
+                already_saved = true;
+                break;
+            }
+        }
+        if (!already_saved) {
+            file << addr.toString() << "\n";
+            known_count++;
+        }
+    }
+
+    LOG_INFO("[Peers] Saved {} synced + {} known peer(s) to peers.dat",
+             synced_count, known_count);
 }
 
 bool Node::initAPI() {
@@ -406,6 +444,7 @@ bool Node::initAPI() {
     api_server_->setMempool(mempool_.get());
     api_server_->setUTXOSet(utxo_set_.get());
     api_server_->setPeerManager(peer_manager_.get());
+    api_server_->setMessageHandler(message_handler_.get());
 
     if (!api_server_->start()) {
         LOG_ERROR("Failed to start API server");
@@ -547,6 +586,98 @@ bool Node::reindexUTXO() {
     return true;
 }
 
+std::string Node::getSnapshotPath() const {
+    // Check current directory first
+    if (std::filesystem::exists("snapshot.dat")) {
+        return "snapshot.dat";
+    }
+    // Fall back to data directory
+    return config_.data_dir + "/snapshot.dat";
+}
+
+bool Node::loadSnapshot() {
+    std::string snapshot_path = getSnapshotPath();
+
+    if (!std::filesystem::exists(snapshot_path)) {
+        LOG_DEBUG("No snapshot file found at {}", snapshot_path);
+        return false;
+    }
+
+    // Get snapshot info
+    auto info = chain::Snapshot::getInfo(snapshot_path);
+    if (!info.valid) {
+        LOG_WARN("Invalid snapshot file: {}", info.error);
+        return false;
+    }
+
+    LOG_NOTICE("Found UTXO snapshot: height={}, utxos={}, size={}",
+               info.header.height, info.header.utxo_count, info.file_size);
+
+    // Verify snapshot before loading
+    if (!chain::Snapshot::verify(snapshot_path)) {
+        LOG_ERROR("Snapshot checksum verification failed");
+        return false;
+    }
+
+    // Import snapshot
+    auto start_time = std::chrono::steady_clock::now();
+
+    if (!chain::Snapshot::importFromFile(*utxo_set_, snapshot_path,
+        [](uint64_t processed, uint64_t total) {
+            if (processed % 100000 == 0) {
+                LOG_INFO("Snapshot import: {}/{} UTXOs", processed, total);
+            }
+        })) {
+        LOG_ERROR("Failed to import snapshot");
+        return false;
+    }
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start_time).count();
+
+    LOG_NOTICE("Snapshot loaded in {}ms: {} UTXOs at height {}",
+               elapsed, utxo_set_->size(), info.header.height);
+
+    return true;
+}
+
+bool Node::exportSnapshot() {
+    if (!chain_ || !utxo_set_) {
+        LOG_ERROR("Cannot export snapshot: node not initialized");
+        return false;
+    }
+
+    auto tip = chain_->getTip();
+    if (!tip) {
+        LOG_ERROR("Cannot export snapshot: no chain tip");
+        return false;
+    }
+
+    std::string snapshot_path = config_.data_dir + "/snapshot.dat";
+
+    LOG_NOTICE("Exporting UTXO snapshot at height {}", tip->height);
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    if (!chain::Snapshot::exportToFile(*utxo_set_, tip->height, tip->hash, snapshot_path,
+        [](uint64_t processed, uint64_t total) {
+            if (processed % 100000 == 0) {
+                LOG_INFO("Snapshot export: {}/{} UTXOs", processed, total);
+            }
+        })) {
+        LOG_ERROR("Failed to export snapshot");
+        return false;
+    }
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start_time).count();
+
+    LOG_NOTICE("Snapshot exported in {}ms: {} UTXOs, file={}",
+               elapsed, utxo_set_->size(), snapshot_path);
+
+    return true;
+}
+
 bool Node::start() {
     start_time_ = std::chrono::steady_clock::now();
 
@@ -555,6 +686,14 @@ bool Node::start() {
     if (!initDataDir()) return false;
     if (!initConsensus()) return false;
     if (!initUTXOSet()) return false;
+
+    // Try to load snapshot if UTXO set is empty (fresh install)
+    if (utxo_set_->size() == 0 && !config_.reindex) {
+        if (loadSnapshot()) {
+            LOG_NOTICE("Using UTXO snapshot for fast sync");
+        }
+    }
+
     if (!initChain()) return false;
     if (!initMempool()) return false;
 
@@ -592,12 +731,21 @@ bool Node::start() {
     std::signal(SIGTERM, signalHandler);
 
     running_ = true;
+
+    // Start heartbeat thread for periodic status logging
+    heartbeat_thread_ = std::thread(&Node::heartbeatLoop, this);
+
     return true;
 }
 
 void Node::stop() {
     if (!running_.load()) return;
     running_ = false;
+
+    // Wait for heartbeat thread to finish
+    if (heartbeat_thread_.joinable()) {
+        heartbeat_thread_.join();
+    }
 
     // Save peers before stopping
     savePeers();
@@ -626,7 +774,7 @@ void Node::requestShutdown() {
 }
 
 Node::Stats Node::getStats() const {
-    Stats stats;
+    Stats stats{};
 
     auto now = std::chrono::steady_clock::now();
     stats.uptime_seconds = std::chrono::duration_cast<std::chrono::seconds>(
@@ -654,7 +802,111 @@ Node::Stats Node::getStats() const {
         stats.txs_received = mh_stats.txs_received;
     }
 
+    // Sync progress from message handler
+    if (message_handler_) {
+        auto sync_stats = message_handler_->getSyncStats();
+        stats.sync_progress = sync_stats.progress;
+    } else {
+        stats.sync_progress = 1.0;  // Assume synced if no handler
+    }
+
+    // Bandwidth (calculated in heartbeat loop)
+    stats.bandwidth_in = 0.0;
+    stats.bandwidth_out = 0.0;
+
     return stats;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Heartbeat - Periodic status logging (Tor-style)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void Node::heartbeatLoop() {
+    constexpr int HEARTBEAT_INTERVAL_SEC = 60;  // Log heartbeat every 60 seconds
+    constexpr int FIRST_HEARTBEAT_SEC = 10;     // First heartbeat after 10 seconds
+
+    last_bandwidth_check_ = std::chrono::steady_clock::now();
+    last_bytes_in_ = bytes_in_.load();
+    last_bytes_out_ = bytes_out_.load();
+
+    bool first_heartbeat = true;
+
+    while (running_.load()) {
+        // First heartbeat comes faster, then regular interval
+        int wait_sec = first_heartbeat ? FIRST_HEARTBEAT_SEC : HEARTBEAT_INTERVAL_SEC;
+
+        // Sleep in small increments to allow quick shutdown
+        for (int i = 0; i < wait_sec * 10 && running_.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        if (!running_.load()) break;
+        first_heartbeat = false;
+
+        // Calculate bandwidth since last check
+        auto now = std::chrono::steady_clock::now();
+        double elapsed_sec = std::chrono::duration<double>(now - last_bandwidth_check_).count();
+
+        uint64_t current_in = bytes_in_.load();
+        uint64_t current_out = bytes_out_.load();
+
+        double bw_in = (current_in - last_bytes_in_) / elapsed_sec;
+        double bw_out = (current_out - last_bytes_out_) / elapsed_sec;
+
+        last_bytes_in_ = current_in;
+        last_bytes_out_ = current_out;
+        last_bandwidth_check_ = now;
+
+        // Get current stats
+        auto tip = chain_ ? chain_->getTip() : nullptr;
+        int32_t height = tip ? tip->height : 0;
+        uint64_t peers = peer_manager_ ? peer_manager_->getPeerCount() : 0;
+        uint64_t known_addrs = peer_manager_ ? peer_manager_->getAddressCount() : 0;
+
+        uint64_t mempool_txs = 0;
+        uint64_t mempool_bytes = 0;
+        if (mempool_) {
+            auto mp_stats = mempool_->getStats();
+            mempool_txs = mp_stats.tx_count;
+            mempool_bytes = mp_stats.total_size;
+        }
+
+        double sync_progress = 1.0;
+        uint64_t blocks_received = 0;
+        uint64_t txs_received = 0;
+        if (message_handler_) {
+            auto sync_stats = message_handler_->getSyncStats();
+            sync_progress = sync_stats.progress;
+
+            auto mh_stats = message_handler_->getStats();
+            blocks_received = mh_stats.blocks_received;
+            txs_received = mh_stats.txs_received;
+        }
+
+        auto uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(
+            now - start_time_).count();
+
+        // Log heartbeat (full or simple based on sync state)
+        if (sync_progress < 1.0) {
+            // Still syncing - use simple format
+            log::heartbeat_simple(height, peers, sync_progress);
+        } else {
+            // Fully synced - use detailed format
+            log::heartbeat(
+                uptime_sec,
+                height,
+                peers,
+                known_addrs,
+                mempool_txs,
+                mempool_bytes,
+                sync_progress,
+                blocks_received,
+                txs_received,
+                bw_in,
+                bw_out
+            );
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

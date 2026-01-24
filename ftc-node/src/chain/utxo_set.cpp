@@ -388,6 +388,28 @@ size_t UTXOSet::getMemoryUsage() const {
     return usage;
 }
 
+void UTXOSet::forEachUTXO(UTXOCallback callback) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    for (const auto& [outpoint, entry] : utxos_) {
+        callback(outpoint, entry);
+    }
+}
+
+void UTXOSet::importUTXO(const Outpoint& outpoint, const UTXOEntry& entry) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    addUTXOInternal(outpoint, entry);
+    dirty_ = true;
+}
+
+void UTXOSet::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    utxos_.clear();
+    address_index_.clear();
+    dirty_ = true;
+    LOG_INFO("UTXO set cleared");
+}
+
 void UTXOSet::addUTXOInternal(const Outpoint& outpoint, const UTXOEntry& entry) {
     utxos_[outpoint] = entry;
 

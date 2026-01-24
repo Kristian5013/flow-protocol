@@ -121,6 +121,8 @@ void MessageHandler::processMessage(Connection::Id peer_id, const Message& msg) 
         case MessageType::BLOCK:
             if (auto* block = std::get_if<BlockMessage>(&msg.payload)) {
                 handleBlock(peer_id, *block);
+            } else {
+                LOG_WARN("Failed to parse BLOCK message from peer {}", peer_id);
             }
             break;
 
@@ -469,14 +471,18 @@ void MessageHandler::processBlock(const Block& block, Connection::Id from_peer) 
     Hash256 hash = block.getHash();
     Hash256 prev_hash = block.header.prev_hash;
 
-    // Check if we already have this block
-    if (chain_->hasBlock(hash)) {
+    // Check if we already have this block's data (not just header)
+    if (chain_->hasBlockData(hash)) {
+        LOG_DEBUG("processBlock: already have block data {:02x}{:02x}...", hash[0], hash[1]);
         return;
     }
+
+    LOG_DEBUG("processBlock: processing block {:02x}{:02x}...", hash[0], hash[1]);
 
     // Validate the block
     std::string error;
     if (!validateBlock(block, error)) {
+        LOG_WARN("Block validation failed: {}", error);
         {
             std::lock_guard<std::mutex> lock(stats_mutex_);
             stats_.blocks_rejected++;
@@ -495,6 +501,8 @@ void MessageHandler::processBlock(const Block& block, Connection::Id from_peer) 
     // Check if parent exists
     if (!chain_->hasBlock(prev_hash)) {
         // Store as orphan
+        LOG_DEBUG("Block orphaned - parent {:02x}{:02x}... not found, orphan count: {}",
+                  prev_hash[0], prev_hash[1], orphan_blocks_.size());
         std::lock_guard<std::mutex> lock(orphans_mutex_);
 
         if (orphan_blocks_.size() < config_.max_orphan_blocks) {
@@ -801,22 +809,46 @@ void MessageHandler::relayTx(const Hash256& txid, const Transaction& tx, Connect
 //-----------------------------------------------------------------------------
 
 void MessageHandler::processHeaders(const std::vector<BlockHeader>& headers, Connection::Id from_peer) {
-    for (const auto& header : headers) {
-        std::string error;
-        if (!validateHeader(header, error)) {
-            // Invalid header, disconnect peer
-            peer_manager_->disconnect(from_peer, "Invalid header: " + error);
-            return;
-        }
+    LOG_INFO("processHeaders: received {} headers", headers.size());
 
+    int new_count = 0;
+    int duplicate_count = 0;
+    // Process each header individually - some may be orphans
+    for (const auto& header : headers) {
         Hash256 hash = header.getHash();
 
-        // Store in headers chain for later block download
-        if (!chain_->hasBlock(hash)) {
-            headers_chain_.push_back(hash);
+        // Skip if we already have this header in our index
+        if (chain_->hasBlock(hash)) {
+            duplicate_count++;
+            // Still update last_header_hash_ for locator purposes
             last_header_hash_ = hash;
+            continue;
+        }
+
+        auto result = chain_->processHeader(header);
+
+        if (result == ValidationResult::VALID) {
+            // Header was added to index, queue for block download
+            if (!chain_->hasBlockData(hash)) {
+                headers_chain_.push_back(hash);
+            }
+            last_header_hash_ = hash;
+            new_count++;
+        } else if (result == ValidationResult::ORPHAN) {
+            // Previous header not in index - stop here, need to sync earlier headers first
+            Hash256 prev = header.prev_hash;
+            LOG_WARN("Orphan header - prev {:02x}{:02x}{:02x}{:02x}... not in index, processed {} new headers",
+                     prev[0], prev[1], prev[2], prev[3], new_count);
+            break;
+        } else {
+            // Invalid header
+            LOG_WARN("Header validation failed: {} after {} headers", static_cast<int>(result), new_count);
+            peer_manager_->disconnect(from_peer, "Invalid header");
+            return;
         }
     }
+    LOG_INFO("processHeaders: {} new, {} duplicate, queue size: {}",
+             new_count, duplicate_count, headers_chain_.size());
 }
 
 bool MessageHandler::validateHeader(const BlockHeader& header, std::string& error) {
@@ -952,7 +984,7 @@ void MessageHandler::requestMoreBlocks() {
         Hash256 hash = headers_chain_.front();
         headers_chain_.erase(headers_chain_.begin());
 
-        if (!chain_->hasBlock(hash) && !blocks_requested_.count(hash)) {
+        if (!chain_->hasBlockData(hash) && !blocks_requested_.count(hash)) {
             download_queue_.push(hash);
             LOG_DEBUG("requestMoreBlocks: queued block {:02x}{:02x}...",
                       hash[0], hash[1]);
@@ -969,7 +1001,7 @@ void MessageHandler::requestMoreBlocks() {
         Hash256 hash = download_queue_.front();
         download_queue_.pop();
 
-        if (chain_->hasBlock(hash) || blocks_requested_.count(hash)) {
+        if (chain_->hasBlockData(hash) || blocks_requested_.count(hash)) {
             LOG_DEBUG("requestMoreBlocks: skipping block (already have or requested)");
             continue;
         }
@@ -1163,6 +1195,14 @@ void MessageHandler::sendNotFound(Connection::Id peer_id, const std::vector<InvI
 std::vector<Hash256> MessageHandler::buildLocator() const {
     std::vector<Hash256> locator;
 
+    // During headers sync, use last received header hash as the primary locator
+    // This is critical because chain_->getHeight() returns 0 until blocks are downloaded,
+    // but we need to tell the peer where we left off in headers sync
+    if (sync_state_ == SyncState::HEADERS && last_header_hash_ != ZERO_HASH) {
+        locator.push_back(last_header_hash_);
+        LOG_DEBUG("buildLocator: using last_header_hash as primary locator");
+    }
+
     uint64_t height = chain_->getHeight();
     int step = 1;
 
@@ -1188,6 +1228,7 @@ std::vector<Hash256> MessageHandler::buildLocator() const {
         locator.push_back(*genesis);
     }
 
+    LOG_DEBUG("buildLocator: returning {} hashes", locator.size());
     return locator;
 }
 
@@ -1261,6 +1302,81 @@ void MessageHandler::announceTx(const Transaction& tx) {
 MessageHandler::Stats MessageHandler::getStats() const {
     std::lock_guard<std::mutex> lock(stats_mutex_);
     return stats_;
+}
+
+MessageHandler::SyncStats MessageHandler::getSyncStats() const {
+    SyncStats s;
+    s.state = sync_state_.load();
+    s.current_height = chain_->getHeight();
+
+    // Get target height from best peer
+    uint64_t best_height = 0;
+    auto peer_infos = peer_manager_->getPeerInfo();
+    for (const auto& info : peer_infos) {
+        if (info.best_height > best_height) {
+            best_height = info.best_height;
+        }
+    }
+    s.target_height = best_height;
+
+    // Calculate progress
+    if (s.target_height > 0) {
+        s.progress = static_cast<double>(s.current_height) / s.target_height;
+        s.progress = std::min(s.progress, 1.0);
+    } else {
+        s.progress = 1.0;
+    }
+
+    // Blocks in queue
+    s.blocks_in_queue = headers_chain_.size();
+
+    // Blocks in flight
+    {
+        std::lock_guard<std::mutex> lock(blocks_mutex_);
+        s.blocks_in_flight = blocks_in_flight_.size();
+    }
+
+    // Active peers
+    s.active_peers = peer_infos.size();
+
+    // Total downloaded
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex_);
+        s.total_downloaded = stats_.blocks_validated;
+    }
+
+    // Calculate throughput from sync progress
+    static std::chrono::steady_clock::time_point sync_start;
+    static uint64_t start_height = 0;
+    static bool initialized = false;
+
+    if (!initialized && s.state == SyncState::BLOCKS) {
+        sync_start = std::chrono::steady_clock::now();
+        start_height = s.current_height;
+        initialized = true;
+    }
+
+    if (initialized && s.current_height > start_height) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - sync_start
+        );
+        if (elapsed.count() > 0) {
+            s.blocks_per_second = static_cast<double>(s.current_height - start_height) / elapsed.count();
+        }
+    }
+
+    // Reset when sync completes
+    if (s.state == SyncState::COMPLETE || s.state == SyncState::IDLE) {
+        initialized = false;
+    }
+
+    // ETA
+    if (s.blocks_per_second > 0 && s.target_height > s.current_height) {
+        uint64_t remaining = s.target_height - s.current_height;
+        s.eta = std::chrono::seconds(static_cast<int64_t>(remaining / s.blocks_per_second));
+    }
+
+    return s;
 }
 
 //-----------------------------------------------------------------------------

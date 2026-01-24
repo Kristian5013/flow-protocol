@@ -47,6 +47,25 @@ void log(Level level, const std::string& msg);
 // Bootstrap progress (Tor-style)
 void bootstrap(int percent, const std::string& tag, const std::string& summary);
 
+// Heartbeat statistics (periodic status line)
+// Scalable: uses pre-aggregated values, no expensive calculations
+void heartbeat(
+    uint64_t uptime_sec,
+    int32_t height,
+    uint64_t peers,
+    uint64_t known_addrs,
+    uint64_t mempool_txs,
+    uint64_t mempool_bytes,
+    double sync_progress,
+    uint64_t blocks_received,
+    uint64_t txs_received,
+    double bandwidth_in,   // bytes/sec
+    double bandwidth_out   // bytes/sec
+);
+
+// Simplified heartbeat (for frequent calls)
+void heartbeat_simple(int32_t height, uint64_t peers, double sync_progress);
+
 // Generic toString - fallback for char arrays and other types
 template<typename T>
 inline std::string toString(const T& val) {

@@ -1280,10 +1280,11 @@ void Server::setupRoutes() {
     ctx.mempool = mempool_;
     ctx.utxo_set = utxo_set_;
     ctx.peer_manager = peer_manager_;
+    ctx.message_handler = message_handler_;
     ctx.p2pool = p2pool_;
 
     // Register all route modules
-    routes::setupStatusRoutes(ctx);   // /, /status, /health, /genesis
+    routes::setupStatusRoutes(ctx);   // /, /status, /health, /genesis, /sync
     routes::setupChainRoutes(ctx);    // /block, /tx, /mempool
     routes::setupAddressRoutes(ctx);  // /balance, /utxo, /address/history, /peers
     routes::setupWalletRoutes(ctx);   // /wallet/new, /wallet/send

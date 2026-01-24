@@ -39,6 +39,7 @@ set(P2P_SOURCES
     src/p2p/connection.cpp
     src/p2p/peer_manager.cpp
     src/p2p/message_handler.cpp
+    src/p2p/sync_manager.cpp
 )
 
 set(CHAIN_SOURCES
@@ -48,6 +49,7 @@ set(CHAIN_SOURCES
     src/chain/utxo_set.cpp
     src/chain/mempool.cpp
     src/chain/consensus.cpp
+    src/chain/snapshot.cpp
 )
 
 set(SCRIPT_SOURCES

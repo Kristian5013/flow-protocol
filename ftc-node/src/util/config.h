@@ -19,10 +19,10 @@ struct Config {
     uint16_t p2p_port = FTC_PORT_P2P;
     uint16_t api_port = FTC_PORT_API;
 
-    // Logging (quiet by default - stats via API)
-    log::Level log_level = log::Level::WARN;
+    // Logging
+    log::Level log_level = log::Level::NOTICE;
     std::string log_file;
-    bool quiet = true;  // No terminal output by default
+    bool quiet = false;  // Show terminal output
 
     // Mining (if enabled)
     bool mining_enabled = false;

@@ -6,6 +6,7 @@
 #include "chain/mempool.h"
 #include "chain/utxo_set.h"
 #include "chain/consensus.h"
+#include "chain/snapshot.h"
 #include "p2p/peer_manager.h"
 #include "p2p/message_handler.h"
 #include "api/server.h"
@@ -16,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <thread>
 
 namespace ftc {
 
@@ -84,8 +86,15 @@ public:
         uint64_t known_addresses;
         uint64_t blocks_received;
         uint64_t txs_received;
+        double bandwidth_in;   // bytes/sec average
+        double bandwidth_out;  // bytes/sec average
+        double sync_progress;
     };
     Stats getStats() const;
+
+    // Record bandwidth (called by P2P layer)
+    void recordBytesIn(uint64_t bytes) { bytes_in_.fetch_add(bytes, std::memory_order_relaxed); }
+    void recordBytesOut(uint64_t bytes) { bytes_out_.fetch_add(bytes, std::memory_order_relaxed); }
 
 private:
     util::Config config_;
@@ -96,6 +105,17 @@ private:
     std::mutex shutdown_mutex_;
     std::condition_variable shutdown_cv_;
     bool shutdown_requested_ = false;
+
+    // Bandwidth tracking (atomic for lock-free updates from P2P threads)
+    std::atomic<uint64_t> bytes_in_{0};
+    std::atomic<uint64_t> bytes_out_{0};
+    uint64_t last_bytes_in_ = 0;
+    uint64_t last_bytes_out_ = 0;
+    std::chrono::steady_clock::time_point last_bandwidth_check_;
+
+    // Heartbeat thread
+    std::thread heartbeat_thread_;
+    void heartbeatLoop();
 
     // Node identity (20 bytes, derived from random + hash)
     uint8_t node_id_[20];
@@ -159,6 +179,11 @@ private:
 
     // Rebuild UTXO set from blocks (--reindex)
     bool reindexUTXO();
+
+    // Snapshot support
+    bool loadSnapshot();    // Load UTXO snapshot at startup
+    bool exportSnapshot();  // Export UTXO snapshot to file
+    std::string getSnapshotPath() const;
 
     // =========================================================================
     // Event Handlers

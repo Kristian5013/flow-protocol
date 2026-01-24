@@ -14,6 +14,7 @@
 #include "mining/gpu_monitor.h"
 #include "mining/work.h"
 #include "net/api_client.h"
+#include "net/node_manager.h"
 #include "net/https_client.h"
 #include "config/config.h"
 #include "autotune/tuner.h"
@@ -37,11 +38,16 @@ void printUsage() {
     std::cout << R"(
 FTC Miner v2.0.0 - GPU-only Keccak-256 OpenCL Miner
 
-Usage: ftc-miner -o <node> -a <address> [options]
+Usage: ftc-miner -a <address> [options]
 
 Required:
-  -o, --pool URL       Node address (e.g., 127.0.0.1:17319 or [::1]:17319)
   -a, --address ADDR   Mining wallet address (ftc1q...)
+
+Node Connection:
+  -o, --pool URL       Node address (optional - uses peers.dat by default)
+                       e.g., 127.0.0.1:17319 or [::1]:17319
+  Nodes are loaded from peers.dat (shared with ftc-node)
+  Automatic failover to next available node on connection failure
 
 GPU Mining:
   -I, --intensity N    GPU intensity 8-31 (default: auto)
@@ -64,8 +70,9 @@ Other:
   -h, --help           Show this help
 
 Examples:
-  ftc-miner -o 127.0.0.1:17319 -a ftc1qwfk0r2r9f6352ad9m4nph5mh9xhrf9yukv6pap
-  ftc-miner -o [::1]:17319 -a ftc1q... -I 22 --autotune
+  ftc-miner -a ftc1qwfk0r2r9f6352ad9m4nph5mh9xhrf9yukv6pap
+  ftc-miner -a ftc1q... -I 22 --autotune
+  ftc-miner -o 127.0.0.1:17319 -a ftc1q...
   ftc-miner --benchmark
 
 )" << std::endl;
@@ -93,7 +100,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Auto-discovery: if pool_url starts with https://, discover a node
+        // Node discovery is now handled by NodeManager
+        // Auto-discovery via HTTPS is still supported for backwards compatibility
         if (cfg.pool_url.substr(0, 8) == "https://") {
             std::cout << "Auto-discovering node via " << cfg.pool_url << "...\n";
 
@@ -105,20 +113,10 @@ int main(int argc, char** argv) {
             }
 
             std::string discovered = net::HttpsClient::discoverNode(api_endpoint);
-            if (discovered.empty()) {
-                std::cerr << "Error: Failed to discover node. Please specify -o <host:port>\n";
-                return 1;
+            if (!discovered.empty()) {
+                cfg.pool_url = discovered;
+                std::cout << "Discovered node: " << cfg.pool_url << "\n";
             }
-
-            cfg.pool_url = discovered;
-            std::cout << "Discovered node: " << cfg.pool_url << "\n";
-        }
-
-        // Validate that we have a node URL now
-        if (cfg.pool_url.empty() || cfg.pool_url == "[::1]:17319") {
-            std::cerr << "Error: Node address required (-o <host:port>)\n\n";
-            printUsage();
-            return 1;
         }
     } else {
         // Benchmark mode defaults
@@ -129,7 +127,52 @@ int main(int argc, char** argv) {
         std::cout << "\n[Benchmark Mode] Running without real node connection\n\n";
     }
 
-    std::cout << "Node:   " << cfg.pool_url << "\n";
+    // Initialize NodeManager for multi-node support with automatic failover
+    net::NodeManager node_manager;
+
+    // Load peers from peers.dat (shared with ftc-node)
+    std::string data_dir = config::MinerConfig::getDataDir();
+    node_manager.loadPeers(data_dir);
+
+    // Add manually specified node (if any) as priority
+    if (!cfg.pool_url.empty() && cfg.pool_url != "http://localhost:17319") {
+        std::string host = "::1";
+        uint16_t port = 17319;
+
+        std::string url = cfg.pool_url;
+        if (url.find("://") != std::string::npos) {
+            url = url.substr(url.find("://") + 3);
+        }
+
+        // Parse IPv6 or IPv4 address
+        if (!url.empty() && url[0] == '[') {
+            size_t bracket_end = url.find(']');
+            if (bracket_end != std::string::npos) {
+                host = url.substr(1, bracket_end - 1);
+                if (bracket_end + 1 < url.size() && url[bracket_end + 1] == ':') {
+                    port = static_cast<uint16_t>(std::stoi(url.substr(bracket_end + 2)));
+                }
+            }
+        } else if (!url.empty()) {
+            size_t colon = url.rfind(':');
+            if (colon != std::string::npos) {
+                host = url.substr(0, colon);
+                port = static_cast<uint16_t>(std::stoi(url.substr(colon + 1)));
+            } else {
+                host = url;
+            }
+        }
+
+        node_manager.addNode(host, port);
+    }
+
+    // Add localhost as fallback if no nodes loaded
+    if (node_manager.getNodeCount() == 0) {
+        node_manager.addNode("::1", 17319);
+        node_manager.addNode("127.0.0.1", 17319);
+    }
+
+    std::cout << "Nodes:  " << node_manager.getNodeCount() << " loaded from peers.dat\n";
     std::cout << "Wallet: " << cfg.wallet_address << "\n\n";
 
     // Initialize TUI
@@ -164,41 +207,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Parse pool URL (IPv6 format: [addr]:port)
-    std::string host = "::1";
-    uint16_t port = 17319;
-
-    std::string url = cfg.pool_url;
-    if (url.find("://") != std::string::npos) {
-        url = url.substr(url.find("://") + 3);
-    }
-
-    // IPv6 format: [addr]:port
-    if (!url.empty() && url[0] == '[') {
-        size_t bracket_end = url.find(']');
-        if (bracket_end != std::string::npos) {
-            host = url.substr(1, bracket_end - 1);
-            if (bracket_end + 1 < url.size() && url[bracket_end + 1] == ':') {
-                port = static_cast<uint16_t>(std::stoi(url.substr(bracket_end + 2)));
-            }
+    // Setup NodeManager callbacks for TUI logging
+    node_manager.setLogCallback([&ui, &cfg](const std::string& msg, bool is_error) {
+        if (cfg.tui_enabled) {
+            ui.addLogMessage("[Node] " + msg, is_error ? tui::Color::Red : tui::Color::Cyan);
+        } else if (!cfg.benchmark_mode) {
+            std::cout << "[Node] " << msg << "\n";
         }
-    } else if (!url.empty()) {
-        // IPv4 format: host:port
-        size_t colon = url.rfind(':');
-        if (colon != std::string::npos) {
-            host = url.substr(0, colon);
-            port = static_cast<uint16_t>(std::stoi(url.substr(colon + 1)));
+    });
+
+    node_manager.setOnNodeChanged([&ui, &cfg](const std::string& host, uint16_t port) {
+        if (cfg.tui_enabled) {
+            ui.addLogMessage("Switched to node: " + host + ":" + std::to_string(port), tui::Color::Yellow);
         } else {
-            host = url;
+            std::cout << "[Node] Switched to: " << host << ":" << port << "\n";
         }
-    }
-
-    // Create API client
-    auto api_client = std::make_unique<net::APIClient>(host, port);
+    });
 
     // Initialize stats (before callback setup)
     tui::MiningStats stats;
-    stats.pool_url = cfg.pool_url;
+    stats.pool_url = "Multi-node (" + std::to_string(node_manager.getNodeCount()) + " nodes)";
     stats.start_time = std::chrono::steady_clock::now();
 
     // Configure miner
@@ -252,27 +280,30 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Connect to node
+    // Connect to best available node
     if (cfg.tui_enabled) {
-        ui.addLogMessage("Connecting to node...", tui::Color::Cyan);
+        ui.addLogMessage("Connecting to nodes (" + std::to_string(node_manager.getNodeCount()) + " available)...", tui::Color::Cyan);
     }
-
-    if (!cfg.benchmark_mode && !api_client->connect()) {
-        std::string err = "Failed to connect: " + api_client->getLastError();
-        if (cfg.tui_enabled) {
-            ui.addLogMessage(err, tui::Color::Red);
-            ui.render();
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-            ui.cleanup();
-        } else {
-            std::cerr << "Error: " << err << "\n";
-        }
-        return 1;
-    }
-
-    stats.connected = true;
 
     if (!cfg.benchmark_mode) {
+        // Refresh all nodes to find best one
+        node_manager.refreshNodes();
+
+        auto* api_client = node_manager.getClient();
+        if (!api_client) {
+            std::string err = "Failed to connect to any node!";
+            if (cfg.tui_enabled) {
+                ui.addLogMessage(err, tui::Color::Red);
+                ui.render();
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                ui.cleanup();
+            } else {
+                std::cerr << "Error: " << err << "\n";
+            }
+            return 1;
+        }
+
+        stats.connected = true;
         stats.block_height = static_cast<int32_t>(api_client->getBlockHeight());
         stats.difficulty = api_client->getDifficulty();
 
@@ -281,15 +312,26 @@ int main(int argc, char** argv) {
         stats.peer_count = initial_net_stats.peer_count;
         stats.active_miners = initial_net_stats.active_miners;
 
+        // Update pool URL to show current node
+        auto* current_node = node_manager.getCurrentNode();
+        if (current_node) {
+            stats.pool_url = current_node->host + ":" + std::to_string(current_node->port);
+        }
+
         if (cfg.tui_enabled) {
             ui.addLogMessage("Connected! Height: " + std::to_string(stats.block_height) +
                             " | Peers: " + std::to_string(stats.peer_count) +
-                            " | Miners: " + std::to_string(stats.active_miners), tui::Color::Green);
+                            " | Nodes: " + std::to_string(node_manager.getAvailableCount()) + "/" +
+                            std::to_string(node_manager.getNodeCount()), tui::Color::Green);
         }
+    } else {
+        stats.connected = true;
     }
 
     // Get initial work
-    auto work_opt = cfg.benchmark_mode ? std::nullopt : api_client->getMiningTemplate(cfg.wallet_address);
+    net::APIClient* api_client = node_manager.getClient();
+    auto work_opt = cfg.benchmark_mode ? std::nullopt :
+                    (api_client ? api_client->getMiningTemplate(cfg.wallet_address) : std::nullopt);
     if (work_opt) {
         work_manager.setWork(*work_opt);
         if (cfg.tui_enabled) {
@@ -398,8 +440,11 @@ int main(int argc, char** argv) {
     std::thread network_thread([&]() {
         auto last_work_poll = std::chrono::steady_clock::now();
         auto last_network_stats = std::chrono::steady_clock::now();
+        auto last_node_health = std::chrono::steady_clock::now();
         constexpr int WORK_POLL_MS = 500;
         constexpr int NETWORK_STATS_MS = 5000;
+        constexpr int NODE_HEALTH_MS = 10000;  // Check node health every 10s
+        int consecutive_failures = 0;
 
         while (network_running && !g_shutdown) {
             auto now = std::chrono::steady_clock::now();
@@ -410,19 +455,58 @@ int main(int argc, char** argv) {
 
             if (work_elapsed >= WORK_POLL_MS && !cfg.benchmark_mode) {
                 last_work_poll = now;
+                auto req_start = std::chrono::steady_clock::now();
 
-                auto new_work = api_client->getMiningTemplate(cfg.wallet_address);
+                auto* client = node_manager.getClient();
+                if (!client) {
+                    // No available node - try to find one
+                    consecutive_failures++;
+                    if (consecutive_failures >= 3) {
+                        node_manager.refreshNodes();
+                        consecutive_failures = 0;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    continue;
+                }
+
+                auto new_work = client->getMiningTemplate(cfg.wallet_address);
                 auto current = work_manager.getWork();
 
-                // Only update work when height changes (not force refresh!)
-                // Force refresh breaks solutions: nonce was computed for old merkle_root
-                if (new_work && new_work->height != current.height) {
-                    work_manager.setWork(*new_work);
-                    network_height = new_work->height;
+                if (new_work) {
+                    // Success - record latency
+                    auto req_end = std::chrono::steady_clock::now();
+                    double latency = std::chrono::duration<double, std::milli>(req_end - req_start).count();
+                    node_manager.recordSuccess(latency);
+                    consecutive_failures = 0;
 
-                    if (cfg.tui_enabled) {
-                        ui.addLogMessage("New work: height " + std::to_string(new_work->height), tui::Color::Cyan);
+                    // Only update work when height changes
+                    if (new_work->height != current.height) {
+                        work_manager.setWork(*new_work);
+                        network_height = new_work->height;
+
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("New work: height " + std::to_string(new_work->height), tui::Color::Cyan);
+                        }
                     }
+                } else {
+                    // Failed - record failure and possibly switch node
+                    node_manager.recordFailure();
+                    consecutive_failures++;
+
+                    if (consecutive_failures >= 3) {
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("Node not responding, switching...", tui::Color::Yellow);
+                        }
+                        if (node_manager.switchToNextNode()) {
+                            consecutive_failures = 0;
+                            // Update displayed pool URL
+                            auto* current_node = node_manager.getCurrentNode();
+                            if (current_node) {
+                                stats.pool_url = current_node->host + ":" + std::to_string(current_node->port);
+                            }
+                        }
+                    }
+                    continue;
                 }
 
                 // Submit any pending solutions
@@ -433,12 +517,16 @@ int main(int argc, char** argv) {
                         continue;
                     }
 
-                    bool accepted = api_client->submitBlock(sol, current_work);
+                    client = node_manager.getClient();
+                    if (!client) continue;
+
+                    bool accepted = client->submitBlock(sol, current_work);
                     if (accepted) {
                         stats.blocks_found++;
                         stats.shares_accepted++;
+                        node_manager.recordSuccess(0);
 
-                        auto fresh_work = api_client->getMiningTemplate(cfg.wallet_address);
+                        auto fresh_work = client->getMiningTemplate(cfg.wallet_address);
                         if (fresh_work) {
                             work_manager.setWork(*fresh_work);
                             current_work = *fresh_work;
@@ -450,6 +538,7 @@ int main(int argc, char** argv) {
                         break;
                     } else {
                         stats.shares_rejected++;
+                        node_manager.recordFailure();
                     }
                 }
             }
@@ -459,11 +548,30 @@ int main(int argc, char** argv) {
                 now - last_network_stats).count();
             if (network_elapsed >= NETWORK_STATS_MS && !cfg.benchmark_mode) {
                 last_network_stats = now;
-                auto net_stats = api_client->getNetworkStats();
-                network_peers = net_stats.peer_count;
-                network_miners = net_stats.active_miners;
-                if (net_stats.height > 0) {
-                    network_height = net_stats.height;
+                auto* client = node_manager.getClient();
+                if (client) {
+                    auto net_stats = client->getNetworkStats();
+                    network_peers = net_stats.peer_count;
+                    network_miners = net_stats.active_miners;
+                    if (net_stats.height > 0) {
+                        network_height = net_stats.height;
+                    }
+                }
+            }
+
+            // Periodic node health check - refresh all nodes
+            auto health_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - last_node_health).count();
+            if (health_elapsed >= NODE_HEALTH_MS && !cfg.benchmark_mode) {
+                last_node_health = now;
+                // Check if there's a better node available
+                size_t available_before = node_manager.getAvailableCount();
+                node_manager.refreshNodes();
+                size_t available_after = node_manager.getAvailableCount();
+
+                if (available_after > available_before && cfg.tui_enabled) {
+                    ui.addLogMessage("Node health: " + std::to_string(available_after) + "/" +
+                                    std::to_string(node_manager.getNodeCount()) + " available", tui::Color::Cyan);
                 }
             }
 

@@ -77,6 +77,7 @@ set(AUTOTUNE_SOURCES
 
 set(NET_SOURCES
     src/net/api_client.cpp
+    src/net/node_manager.cpp
     src/net/stratum_client.cpp
     src/net/https_client.cpp
 )

@@ -14,6 +14,7 @@
 #include "chain/mempool.h"
 #include "chain/utxo_set.h"
 #include "p2p/peer_manager.h"
+#include "p2p/message_handler.h"
 #include "p2pool/p2pool_net.h"
 #include "crypto/keccak256.h"
 #include "crypto/secp256k1.h"
@@ -79,6 +80,7 @@ struct RouteContext {
     chain::Mempool* mempool;
     chain::UTXOSet* utxo_set;
     p2p::PeerManager* peer_manager;
+    p2p::MessageHandler* message_handler;
     p2pool::P2Pool* p2pool;
 };
 

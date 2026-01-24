@@ -36,6 +36,7 @@ class UTXOSet;
 }
 namespace p2p {
 class PeerManager;
+class MessageHandler;
 }
 namespace p2pool {
 class P2Pool;
@@ -197,6 +198,7 @@ public:
     void setMempool(chain::Mempool* mempool) { mempool_ = mempool; }
     void setUTXOSet(chain::UTXOSet* utxo_set) { utxo_set_ = utxo_set; }
     void setPeerManager(p2p::PeerManager* peer_mgr) { peer_manager_ = peer_mgr; }
+    void setMessageHandler(p2p::MessageHandler* mh) { message_handler_ = mh; }
     void setP2Pool(p2pool::P2Pool* p2pool) { p2pool_ = p2pool; }
     p2pool::P2Pool* getP2Pool() const { return p2pool_; }
 
@@ -268,6 +270,7 @@ private:
     chain::Mempool* mempool_ = nullptr;
     chain::UTXOSet* utxo_set_ = nullptr;
     p2p::PeerManager* peer_manager_ = nullptr;
+    p2p::MessageHandler* message_handler_ = nullptr;
     p2pool::P2Pool* p2pool_ = nullptr;
 
     // Statistics

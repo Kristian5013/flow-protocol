@@ -130,6 +130,14 @@ public:
     uint64_t getTotalValue() const;
     size_t getMemoryUsage() const;
 
+    // Snapshot support
+    using UTXOCallback = std::function<void(const Outpoint&, const UTXOEntry&)>;
+    void forEachUTXO(UTXOCallback callback) const;
+    void importUTXO(const Outpoint& outpoint, const UTXOEntry& entry);
+    void clear();
+    void setSnapshotHeight(int32_t height) { snapshot_height_ = height; }
+    int32_t getSnapshotHeight() const { return snapshot_height_; }
+
 private:
     // Configuration
     Config config_;
@@ -144,6 +152,7 @@ private:
     // Persistence
     std::string path_;
     bool dirty_ = false;
+    int32_t snapshot_height_ = -1;  // Height from imported snapshot, -1 if none
 
     // Coinbase maturity (100 blocks like Bitcoin)
     static constexpr int COINBASE_MATURITY = 100;
