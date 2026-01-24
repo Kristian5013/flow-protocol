@@ -83,10 +83,6 @@ set(UTIL_SOURCES
     src/util/hex.cpp
 )
 
-set(SEED_SOURCES
-    src/seed/seed_client.cpp
-)
-
 # Main executable
 add_executable(ftc-node
     src/main.cpp
@@ -99,7 +95,6 @@ add_executable(ftc-node
     ${STORAGE_SOURCES}
     ${API_SOURCES}
     ${UTIL_SOURCES}
-    ${SEED_SOURCES}
 )
 
 target_include_directories(ftc-node PRIVATE
@@ -144,5 +139,5 @@ install(TARGETS ftc-node RUNTIME DESTINATION bin)
 
 message(STATUS "FTC Node ${PROJECT_VERSION} - Kristian Pilatovich 20091227 - First Real P2P")
 message(STATUS "  IPv6: ON (IPv6-only, no IPv4)")
-message(STATUS "  Peers: api.flowprotocol.net (seed discovery)")
+message(STATUS "  Peers: peers.dat + P2P addr exchange")
 message(STATUS "  Tests: ${FTC_BUILD_TESTS}")

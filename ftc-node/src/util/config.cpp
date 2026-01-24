@@ -114,17 +114,15 @@ void Config::printHelp() {
     std::cout << "  --mine [ADDRESS]        Enable mining to address\n";
     std::cout << "  --reindex               Rebuild UTXO set from blocks\n";
     std::cout << "\n";
-    std::cout << "By default node runs quietly. Use --verbose for terminal output.\n";
-    std::cout << "Statistics available via API: curl http://[::1]:17319/status\n";
-    std::cout << "\n";
     std::cout << "Peer Discovery:\n";
-    std::cout << "  1. DNS seeds (seed.flowprotocol.net)\n";
-    std::cout << "  2. P2P addr exchange between connected nodes\n";
+    std::cout << "  peers.dat - one [IPv6]:PORT per line\n";
+    std::cout << "  Searches: ./peers.dat then " << getDefaultDataDir() << "/peers/peers.dat\n";
     std::cout << "\n";
-    std::cout << "Examples:\n";
-    std::cout << "  ftc-node                    Start daemon (quiet)\n";
-    std::cout << "  ftc-node --verbose          Start with output\n";
-    std::cout << "  ftc-node --debug            Enable debug logging\n";
+    std::cout << "First run:\n";
+    std::cout << "  1. Place peers.dat next to ftc-node binary\n";
+    std::cout << "  2. Run: ftc-node\n";
+    std::cout << "\n";
+    std::cout << "API: curl http://[::1]:17319/status\n";
     std::cout << "\n";
 }
 

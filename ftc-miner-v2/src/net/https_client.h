@@ -24,9 +24,9 @@ public:
     static Response post(const std::string& url, const std::string& body,
                         const std::string& content_type = "application/json");
 
-    // Parse node info from API response
+    // Parse node info from API response (deprecated - use local node)
     // Returns host:port string or empty on error
-    static std::string discoverNode(const std::string& api_url = "https://api.flowprotocol.net/api/node");
+    static std::string discoverNode(const std::string& api_url = "http://localhost:17319");
 };
 
 } // namespace net

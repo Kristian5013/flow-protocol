@@ -172,54 +172,19 @@ std::optional<InvItem> InvItem::deserialize(const uint8_t* data, size_t len, siz
 // NetAddr
 // ============================================================================
 
-NetAddr::NetAddr(uint32_t ipv4, uint16_t port_, uint64_t services_)
-    : services(services_), port(port_), timestamp(0) {
-    std::memset(ip, 0, 16);
-    // IPv4-mapped IPv6: ::ffff:x.x.x.x
-    ip[10] = 0xFF;
-    ip[11] = 0xFF;
-    ip[12] = (ipv4 >> 24) & 0xFF;
-    ip[13] = (ipv4 >> 16) & 0xFF;
-    ip[14] = (ipv4 >> 8) & 0xFF;
-    ip[15] = ipv4 & 0xFF;
-}
-
 NetAddr::NetAddr(const uint8_t* ipv6, uint16_t port_, uint64_t services_)
     : services(services_), port(port_), timestamp(0) {
     std::memcpy(ip, ipv6, 16);
 }
 
-bool NetAddr::isIPv4() const {
-    // Check for IPv4-mapped: ::ffff:x.x.x.x
-    for (int i = 0; i < 10; i++) {
-        if (ip[i] != 0) return false;
-    }
-    return ip[10] == 0xFF && ip[11] == 0xFF;
-}
-
-uint32_t NetAddr::getIPv4() const {
-    if (!isIPv4()) return 0;
-    return (static_cast<uint32_t>(ip[12]) << 24) |
-           (static_cast<uint32_t>(ip[13]) << 16) |
-           (static_cast<uint32_t>(ip[14]) << 8) |
-           static_cast<uint32_t>(ip[15]);
-}
-
 std::string NetAddr::toString() const {
     std::ostringstream oss;
-    if (isIPv4()) {
-        oss << static_cast<int>(ip[12]) << "."
-            << static_cast<int>(ip[13]) << "."
-            << static_cast<int>(ip[14]) << "."
-            << static_cast<int>(ip[15]) << ":" << port;
-    } else {
-        oss << "[";
-        for (int i = 0; i < 16; i += 2) {
-            if (i > 0) oss << ":";
-            oss << std::hex << ((ip[i] << 8) | ip[i + 1]);
-        }
-        oss << std::dec << "]:" << port;
+    oss << "[";
+    for (int i = 0; i < 16; i += 2) {
+        if (i > 0) oss << ":";
+        oss << std::hex << ((ip[i] << 8) | ip[i + 1]);
     }
+    oss << std::dec << "]:" << port;
     return oss.str();
 }
 
@@ -253,77 +218,33 @@ std::optional<NetAddr> NetAddr::deserialize(const uint8_t* data, size_t len, siz
     return addr;
 }
 
-bool NetAddr::isIPv6() const {
-    return !isIPv4();
-}
-
 bool NetAddr::isLocal() const {
-    // IPv4 localhost: 127.0.0.0/8
-    if (isIPv4()) {
-        return ip[12] == 127;
-    }
     // IPv6 localhost: ::1
     static const uint8_t ipv6_localhost[16] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1};
     return std::memcmp(ip, ipv6_localhost, 16) == 0;
 }
 
-bool NetAddr::isRFC1918() const {
-    if (!isIPv4()) return false;
-    // 10.0.0.0/8
-    if (ip[12] == 10) return true;
-    // 172.16.0.0/12
-    if (ip[12] == 172 && (ip[13] >= 16 && ip[13] <= 31)) return true;
-    // 192.168.0.0/16
-    if (ip[12] == 192 && ip[13] == 168) return true;
-    return false;
-}
-
 bool NetAddr::isRFC4193() const {
     // fc00::/7 - Unique local addresses
-    return !isIPv4() && ((ip[0] & 0xfe) == 0xfc);
+    return (ip[0] & 0xfe) == 0xfc;
 }
 
 bool NetAddr::isRoutable() const {
     if (isLocal()) return false;
-    if (isRFC1918()) return false;
     if (isRFC4193()) return false;
 
-    if (isIPv4()) {
-        // 0.0.0.0/8 - Current network
-        if (ip[12] == 0) return false;
-        // 100.64.0.0/10 - Carrier-grade NAT
-        if (ip[12] == 100 && (ip[13] >= 64 && ip[13] <= 127)) return false;
-        // 169.254.0.0/16 - Link-local
-        if (ip[12] == 169 && ip[13] == 254) return false;
-        // 224.0.0.0/4 - Multicast
-        if (ip[12] >= 224) return false;
-    } else {
-        // fe80::/10 - Link-local
-        if (ip[0] == 0xfe && (ip[1] & 0xc0) == 0x80) return false;
-        // ff00::/8 - Multicast
-        if (ip[0] == 0xff) return false;
-        // :: - Unspecified
-        bool all_zero = true;
-        for (int i = 0; i < 16; i++) {
-            if (ip[i] != 0) { all_zero = false; break; }
-        }
-        if (all_zero) return false;
+    // fe80::/10 - Link-local
+    if (ip[0] == 0xfe && (ip[1] & 0xc0) == 0x80) return false;
+    // ff00::/8 - Multicast
+    if (ip[0] == 0xff) return false;
+    // :: - Unspecified
+    bool all_zero = true;
+    for (int i = 0; i < 16; i++) {
+        if (ip[i] != 0) { all_zero = false; break; }
     }
+    if (all_zero) return false;
 
     return true;
-}
-
-NetAddr NetAddr::fromIPv4(uint32_t ipv4, uint16_t port) {
-    NetAddr addr;
-    std::memset(addr.ip, 0, 10);
-    addr.ip[10] = 0xff;
-    addr.ip[11] = 0xff;
-    addr.ip[12] = (ipv4 >> 24) & 0xff;
-    addr.ip[13] = (ipv4 >> 16) & 0xff;
-    addr.ip[14] = (ipv4 >> 8) & 0xff;
-    addr.ip[15] = ipv4 & 0xff;
-    addr.port = port;
-    return addr;
 }
 
 NetAddr NetAddr::fromIPv6(const uint8_t* ipv6, uint16_t port) {
@@ -337,7 +258,7 @@ NetAddr NetAddr::fromString(const std::string& str) {
     NetAddr addr;
     std::memset(&addr, 0, sizeof(addr));
 
-    // Try IPv6 format: [xxxx::xxxx]:port
+    // IPv6 format: [xxxx::xxxx]:port
     if (!str.empty() && str.front() == '[') {
         size_t bracketEnd = str.find(']');
         if (bracketEnd != std::string::npos) {
@@ -346,31 +267,10 @@ NetAddr NetAddr::fromString(const std::string& str) {
             if (colonPos != std::string::npos) {
                 addr.port = static_cast<uint16_t>(std::stoi(str.substr(colonPos + 1)));
             }
-            // Parse IPv6
             struct in6_addr ipv6;
             if (inet_pton(AF_INET6, ip_part.c_str(), &ipv6) == 1) {
                 std::memcpy(addr.ip, &ipv6, 16);
             }
-        }
-        return addr;
-    }
-
-    // Try IPv4 format: x.x.x.x:port (stored as IPv4-mapped IPv6)
-    size_t colon = str.rfind(':');
-    if (colon != std::string::npos) {
-        std::string ip_part = str.substr(0, colon);
-        std::string port_part = str.substr(colon + 1);
-        addr.port = static_cast<uint16_t>(std::stoi(port_part));
-
-        // Parse IPv4 and store as IPv4-mapped IPv6
-        int a, b, c, d;
-        if (std::sscanf(ip_part.c_str(), "%d.%d.%d.%d", &a, &b, &c, &d) == 4) {
-            addr.ip[10] = 0xff;
-            addr.ip[11] = 0xff;
-            addr.ip[12] = static_cast<uint8_t>(a);
-            addr.ip[13] = static_cast<uint8_t>(b);
-            addr.ip[14] = static_cast<uint8_t>(c);
-            addr.ip[15] = static_cast<uint8_t>(d);
         }
     }
     return addr;

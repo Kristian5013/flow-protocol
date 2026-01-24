@@ -209,7 +209,7 @@ bool Node::initP2P() {
     peer_manager_->setOurVersion(70015);  // Protocol version
     peer_manager_->setOurServices(1);      // NODE_NETWORK
     peer_manager_->setOurUserAgent("/FTC:1.0.0/");
-    peer_manager_->setOurNodeId(node_id_);  // Unique node ID for IPv4/IPv6 deduplication
+    peer_manager_->setOurNodeId(node_id_);  // Unique node ID for peer deduplication
 
     auto tip = chain_->getTip();
     peer_manager_->setOurHeight(tip ? tip->height : 0);
@@ -318,27 +318,19 @@ bool Node::addPeerAddress(const std::string& addr_str, const std::string& source
                 host = line;
             }
         } else {
-            // IPv4 or hostname:port format
-            size_t colon = line.rfind(':');
-            if (colon != std::string::npos) {
-                host = line.substr(0, colon);
-                try {
-                    port = static_cast<uint16_t>(std::stoi(line.substr(colon + 1)));
-                } catch (...) {}
-            } else {
-                host = line;
-            }
+            // Invalid format (not [IPv6]:port)
+            host = line;
         }
     }
 
     if (host.empty()) return false;
 
-    // Convert to NetAddr (supports both IPv4 and IPv6)
+    // Convert to NetAddr (IPv6 only)
     p2p::NetAddr addr;
     addr.port = port;
     addr.services = 1;
 
-    // Try IPv6 first
+    // Parse IPv6 address (IPv6 only network)
     struct in6_addr ipv6;
     if (inet_pton(AF_INET6, host.c_str(), &ipv6) == 1) {
         std::memcpy(addr.ip, &ipv6, 16);
@@ -346,52 +338,60 @@ bool Node::addPeerAddress(const std::string& addr_str, const std::string& source
         return true;
     }
 
-    // Try IPv4 (convert to IPv4-mapped IPv6: ::ffff:x.x.x.x)
-    struct in_addr ipv4;
-    if (inet_pton(AF_INET, host.c_str(), &ipv4) == 1) {
-        // Create IPv4-mapped IPv6 address
-        std::memset(addr.ip, 0, 10);           // First 10 bytes = 0
-        addr.ip[10] = 0xff;                     // Bytes 10-11 = 0xffff
-        addr.ip[11] = 0xff;
-        std::memcpy(addr.ip + 12, &ipv4, 4);   // Last 4 bytes = IPv4
-        peer_manager_->addAddress(addr, source);
-        LOG_DEBUG("[Peers] Added IPv4 peer: {} (as ::ffff:{})", host, host);
-        return true;
-    }
-
-    LOG_DEBUG("[Peers] Invalid address format: {}", host);
+    LOG_DEBUG("[Peers] Invalid IPv6 address: {}", host);
     return false;
 }
 
-bool Node::initSeedDiscovery() {
-    // Initialize DNS seed client
-    seed_client_ = std::make_unique<seed::SeedClient>(config_.p2p_port);
+void Node::loadPeers() {
+    // Try current directory first (next to binary)
+    std::string peers_file = "peers.dat";
+    std::ifstream file(peers_file);
 
-    // Add DNS seeds
-    seed_client_->addSeed("seed.flowprotocol.net");
-
-    LOG_INFO("[Seed] Resolving DNS seeds...");
-
-    // Discover peers via DNS resolution
-    auto peers = seed_client_->discoverPeers();
-
-    if (!peers.empty()) {
-        LOG_INFO("[Seed] Discovered {} peer(s) from DNS seeds", peers.size());
-
-        for (const auto& peer : peers) {
-            std::string addr = peer.ip + ":" + std::to_string(peer.port);
-            if (addPeerAddress(addr, "dns-seed")) {
-                LOG_DEBUG("[Seed] Added peer: {}", addr);
-            }
-        }
-    } else {
-        LOG_WARN("[Seed] No peers discovered from DNS seeds");
+    // Fall back to data directory
+    if (!file) {
+        peers_file = config_.data_dir + "/peers/peers.dat";
+        file.open(peers_file);
     }
 
-    return true;
+    if (!file) {
+        LOG_INFO("[Peers] No peers.dat found - starting fresh");
+        LOG_INFO("[Peers] Place peers.dat in current directory or {}/peers/", config_.data_dir);
+        return;
+    }
+
+    std::string line;
+    int count = 0;
+    while (std::getline(file, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') continue;
+        if (addPeerAddress(line, "peers.dat")) {
+            count++;
+        }
+    }
+
+    if (count > 0) {
+        LOG_INFO("[Peers] Loaded {} peer(s) from {}", count, peers_file);
+    }
 }
 
-// savePeers() removed - using seed network instead of peers.dat
+void Node::savePeers() {
+    if (!peer_manager_) return;
+
+    std::string peers_file = config_.data_dir + "/peers/peers.dat";
+    std::ofstream file(peers_file);
+
+    if (!file) {
+        LOG_WARN("[Peers] Failed to save peers.dat");
+        return;
+    }
+
+    auto addrs = peer_manager_->getAddresses(1000);
+    for (const auto& addr : addrs) {
+        file << addr.toString() << "\n";
+    }
+
+    LOG_INFO("[Peers] Saved {} peer(s) to peers.dat", addrs.size());
+}
 
 bool Node::initAPI() {
     api::Server::Config api_config;
@@ -412,7 +412,7 @@ bool Node::initAPI() {
         return false;
     }
 
-    LOG_DEBUG("API server started: http://[::]:{} (IPv4+IPv6)", config_.api_port);
+    LOG_DEBUG("API server started: http://[::]:{}", config_.api_port);
     return true;
 }
 
@@ -567,8 +567,8 @@ bool Node::start() {
     // Start P2P network
     if (!initP2P()) return false;
 
-    // Seed discovery and peer connection
-    initSeedDiscovery();
+    // Load peers from peers.dat and connect
+    loadPeers();
     auto addrs = peer_manager_->getAddresses(100);
     for (const auto& a : addrs) {
         if (peer_manager_->getOutboundCount() >= static_cast<size_t>(config_.target_outbound)) break;
@@ -598,6 +598,9 @@ bool Node::start() {
 void Node::stop() {
     if (!running_.load()) return;
     running_ = false;
+
+    // Save peers before stopping
+    savePeers();
 
     // Stop all components
     if (p2pool_) p2pool_->stop();

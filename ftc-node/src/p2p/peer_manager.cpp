@@ -407,7 +407,7 @@ void PeerManager::handleVersion(Peer& peer, const VersionMessage& ver) {
         return;
     }
 
-    // Check for duplicate connection (same node_id, different IP - IPv4/IPv6)
+    // Check for duplicate connection (same node_id, different IP)
     // Only check if node_id is not all zeros (old clients)
     bool has_node_id = false;
     for (int i = 0; i < 20; i++) {

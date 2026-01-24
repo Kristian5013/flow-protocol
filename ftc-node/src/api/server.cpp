@@ -354,7 +354,7 @@ bool Server::start() {
         return true;
     }
 
-    // Create IPv6 socket (dual-stack: accepts IPv4-mapped addresses)
+    // Create IPv6 socket (IPv6 only)
     listen_socket_ = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
     if (listen_socket_ == INVALID_SOCKET) {
         return false;
@@ -368,8 +368,8 @@ bool Server::start() {
     setsockopt(listen_socket_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 #endif
 
-    // Disable IPV6_ONLY to enable dual-stack (accept IPv4-mapped addresses)
-    int ipv6only = 0;
+    // IPv6 only (no IPv4-mapped addresses)
+    int ipv6only = 1;
 #ifdef _WIN32
     setsockopt(listen_socket_, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&ipv6only, sizeof(ipv6only));
 #else
@@ -526,7 +526,7 @@ void Server::acceptConnections() {
         return;
     }
 
-    // IPv6 socket (handles IPv4-mapped addresses via dual-stack)
+    // IPv6 socket
     sockaddr_in6 client_addr{};
     socklen_t addr_len = sizeof(client_addr);
 
@@ -558,7 +558,7 @@ void Server::acceptConnections() {
     conn.socket = client_socket;
     conn.last_activity = std::chrono::steady_clock::now();
 
-    // Get remote IPv6 address (handles IPv4-mapped addresses)
+    // Get remote IPv6 address
     char addr_str[INET6_ADDRSTRLEN];
     inet_ntop(AF_INET6, &client_addr.sin6_addr, addr_str, sizeof(addr_str));
     conn.remote_addr = addr_str;

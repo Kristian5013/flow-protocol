@@ -132,30 +132,24 @@ struct InvItem {
 
 struct NetAddr {
     uint64_t services = SERVICE_FULL_NODE;
-    uint8_t ip[16] = {0};     // IPv6 (or IPv4-mapped: ::ffff:x.x.x.x)
+    uint8_t ip[16] = {0};     // IPv6 only
     uint16_t port = 0;
     uint32_t timestamp = 0;   // Unix timestamp when last seen
 
     NetAddr() = default;
-    NetAddr(uint32_t ipv4, uint16_t port_, uint64_t services_ = SERVICE_FULL_NODE);
     NetAddr(const uint8_t* ipv6, uint16_t port_, uint64_t services_ = SERVICE_FULL_NODE);
 
-    // Type checks
-    bool isIPv4() const;
-    bool isIPv6() const;
+    // Validation
     bool isRoutable() const;
     bool isLocal() const;
-    bool isRFC1918() const;     // Private IPv4 (10.x, 172.16-31.x, 192.168.x)
     bool isRFC4193() const;     // Private IPv6 (fc00::/7)
 
-    // Accessors
-    uint32_t getIPv4() const;
+    // String conversion
     std::string toString() const;
 
     // Factory methods
-    static NetAddr fromIPv4(uint32_t ip, uint16_t port);
     static NetAddr fromIPv6(const uint8_t* ip, uint16_t port);
-    static NetAddr fromString(const std::string& str);
+    static NetAddr fromString(const std::string& str);  // [ipv6]:port format
 
     // Serialization
     std::vector<uint8_t> serialize(bool with_timestamp = true) const;
@@ -184,7 +178,7 @@ struct VersionMessage {
     uint64_t start_height = 0;
     crypto::Hash256 best_hash = crypto::ZERO_HASH;
     bool relay = true;
-    uint8_t node_id[20] = {0};  // Unique node identifier (for IPv4/IPv6 deduplication)
+    uint8_t node_id[20] = {0};  // Unique node identifier
 
     std::vector<uint8_t> serialize() const;
     static std::optional<VersionMessage> deserialize(const uint8_t* data, size_t len);

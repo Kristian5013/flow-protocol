@@ -26,7 +26,7 @@ ftc-full.exe -a ftc1qYOUR_ADDRESS
 ./ftc-full -a ftc1qYOUR_ADDRESS
 ```
 
-This starts both node and miner together. Peers discovered automatically via `api.flowprotocol.net`.
+This starts both node and miner together. Node loads peers from `peers.dat`.
 
 ### Option 2: Separate Components
 
@@ -61,7 +61,7 @@ Get the latest release from [GitHub Releases](https://github.com/Kristian5013/fl
 - **UTXO Model** - Bitcoin-like transaction model
 - **Bech32 Addresses** - Modern address format (`ftc1...`)
 - **IPv6-Only Network** - Modern internet protocol
-- **Auto-Discovery** - Peers found via `api.flowprotocol.net`
+- **P2P Network** - Peers via peers.dat + addr exchange
 - **REST API** - Full node control via HTTP
 - **TUI Miner** - Beautiful terminal interface with GPU stats
 
@@ -90,7 +90,7 @@ Required:
   -a, --address ADDR   Mining wallet address (ftc1q...)
 
 Optional:
-  -o, --pool URL       Node URL (default: auto via api.flowprotocol.net)
+  -o, --pool URL       Node URL (default: http://localhost:17319)
   -I, --intensity N    GPU intensity 8-31 (default: auto)
   --autotune           Enable AI auto-tune
   --no-tui             Disable TUI, use simple output
@@ -128,24 +128,21 @@ ftc-wallet send <private_key> <to_address> <amount>
 
 ## Network
 
-Peer discovery is automatic via `api.flowprotocol.net`. No manual configuration needed.
+IPv6 only P2P network. Peer discovery via `peers.dat` file + P2P addr exchange.
 
 | Port | Protocol | Description |
 |------|----------|-------------|
-| 17318 | TCP | P2P network (IPv6) |
+| 17318 | TCP | P2P network (IPv6 only) |
 | 17319 | HTTP | REST API |
 
-### Seed Discovery API
+### First Run
 
-```bash
-# Get available nodes
-curl https://api.flowprotocol.net/api/nodes
+1. Place `peers.dat` next to `ftc-node` binary
+2. Run: `ftc-node`
 
-# Get best node for connection
-curl https://api.flowprotocol.net/api/node
-
-# API status
-curl https://api.flowprotocol.net/api/status
+peers.dat format (one per line):
+```
+[2001:db8::1]:17318
 ```
 
 ---

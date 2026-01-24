@@ -1,16 +1,11 @@
 /**
  * FTC Node - Flow Token Chain
  *
- * The first truly decentralized cryptocurrency with NTP-Synchronized Discovery.
- *
- * No DNS seeds. No bootstrap nodes. No hardcoded IPs.
- * Just time synchronization and deterministic algorithms.
+ * Real P2P cryptocurrency - IPv6 only network.
+ * Peer discovery via peers.dat + P2P addr exchange.
  *
  * Author: Kristian Pilatovich
  * Genesis: "Kristian Pilatovich 20091227 - First Real P2P"
- *
- * Linux only. Run as: ./ftc-node &
- * Or use systemd service.
  */
 
 #include "node.h"

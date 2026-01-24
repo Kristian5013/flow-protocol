@@ -89,7 +89,7 @@ struct PeerInfo {
     std::string user_agent;
     int32_t start_height = 0;
     bool relay = true;
-    uint8_t node_id[20] = {0};  // Unique node ID (for IPv4/IPv6 deduplication)
+    uint8_t node_id[20] = {0};  // Unique node ID
 
     // Sync state
     int32_t best_height = 0;
@@ -330,7 +330,7 @@ private:
     uint64_t our_services_ = 1;  // NODE_NETWORK
     std::string our_user_agent_ = "/FTC:1.0.0/";
     std::atomic<int32_t> our_height_{0};
-    uint8_t our_node_id_[20] = {0};  // Unique node ID for IPv4/IPv6 deduplication
+    uint8_t our_node_id_[20] = {0};  // Unique node ID
 
     // Statistics
     std::atomic<uint64_t> total_connections_{0};

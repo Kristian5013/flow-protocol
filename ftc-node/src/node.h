@@ -11,7 +11,6 @@
 #include "api/server.h"
 #include "p2pool/p2pool_net.h"
 #include "p2pool/sharechain.h"
-#include "seed/seed_client.h"
 
 #include <atomic>
 #include <memory>
@@ -31,7 +30,7 @@ namespace ftc {
  * - Localhost API (wallet/miner interface)
  *
  * Peer discovery:
- * - Load seed nodes from peers.dat file
+ * - Load peers from peers.dat file
  * - P2P addr message exchange between connected nodes
  * - IPv6 only network
  *
@@ -142,9 +141,6 @@ private:
     // 8. P2Pool - Decentralized Mining Pool
     std::unique_ptr<p2pool::P2Pool> p2pool_;
 
-    // 9. Seed Discovery Client (api.flowprotocol.net)
-    std::unique_ptr<seed::SeedClient> seed_client_;
-
     // =========================================================================
     // Initialization
     // =========================================================================
@@ -156,7 +152,8 @@ private:
     bool initMempool();
     bool initP2P();
     bool addPeerAddress(const std::string& addr_str, const std::string& source);  // Parse and add peer
-    bool initSeedDiscovery();  // Initialize seed client and discover peers
+    void loadPeers();   // Load peers from peers.dat
+    void savePeers();   // Save known peers to peers.dat
     bool initAPI();
     bool initP2Pool();
 

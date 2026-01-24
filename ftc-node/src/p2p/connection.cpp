@@ -61,7 +61,7 @@ Connection::~Connection() {
 }
 
 std::shared_ptr<Connection> Connection::connect(const NetAddr& addr, ConnectCallback on_connect) {
-    // Create IPv6 socket (handles IPv4-mapped addresses via dual-stack)
+    // Create IPv6 socket (IPv6-only network)
     socket_t sock = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 
     if (sock == INVALID_SOCK) {
@@ -70,8 +70,8 @@ std::shared_ptr<Connection> Connection::connect(const NetAddr& addr, ConnectCall
         return nullptr;
     }
 
-    // Disable IPV6_V6ONLY to allow IPv4-mapped addresses
-    int v6only = 0;
+    // IPv6 only
+    int v6only = 1;
     setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&v6only, sizeof(v6only));
 
     auto conn = std::shared_ptr<Connection>(
@@ -561,8 +561,8 @@ bool Listener::bind(uint16_t port, bool /* ipv6 parameter ignored - always IPv6 
     int flag = 1;
     setsockopt(sock_, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(flag));
 
-    // Disable IPV6_V6ONLY to accept IPv4-mapped addresses (dual-stack)
-    int v6only = 0;
+    // IPv6 only (no IPv4-mapped addresses)
+    int v6only = 1;
     setsockopt(sock_, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&v6only, sizeof(v6only));
 
     // Bind to IPv6 any address
@@ -621,7 +621,7 @@ std::shared_ptr<Connection> Listener::accept() {
         return nullptr;
     }
 
-    // Extract IPv6 address (handles IPv4-mapped addresses via dual-stack)
+    // Extract IPv6 address
     NetAddr addr = NetAddr::fromIPv6((uint8_t*)&client_addr.sin6_addr, ntohs(client_addr.sin6_port));
 
     return Connection::fromSocket(client_sock, addr);

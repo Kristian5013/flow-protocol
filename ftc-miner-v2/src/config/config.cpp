@@ -133,7 +133,7 @@ Required:
   -a, --address ADDR   Mining wallet address (ftc1q...)
 
 Optional:
-  -o, --pool URL       Node URL (default: auto via api.flowprotocol.net)
+  -o, --pool URL       Node URL (default: http://localhost:17319)
 
 GPU Mining:
   -I, --intensity N    GPU intensity 8-31 (default: auto)
