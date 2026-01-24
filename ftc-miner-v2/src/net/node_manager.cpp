@@ -3,6 +3,7 @@
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
+#include <iostream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -76,80 +77,58 @@ bool NodeManager::parsePeerLine(const std::string& line, std::string& host, uint
 bool NodeManager::loadPeers(const std::string& data_dir) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    std::vector<std::string> paths;
-
-    // 1. Check ./peers.dat (next to miner binary)
-    paths.push_back("peers.dat");
-
-    // 2. Check data_dir/peers/peers.dat
-    if (!data_dir.empty()) {
-        paths.push_back(data_dir + "/peers/peers.dat");
-#ifdef _WIN32
-        paths.push_back(data_dir + "\\peers\\peers.dat");
-#endif
-    }
-
-    // 3. Check default data dir
-    std::string default_dir;
+    // Use single peers.dat in FTC data directory
+    std::string peers_path;
 #ifdef _WIN32
     char path[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, path))) {
-        default_dir = std::string(path) + "\\FTC";
+        peers_path = std::string(path) + "\\FTC\\peers.dat";
     }
 #else
     const char* home = getenv("HOME");
     if (home) {
-        default_dir = std::string(home) + "/.ftc";
+        peers_path = std::string(home) + "/.ftc/peers.dat";
     }
 #endif
-    if (!default_dir.empty()) {
-        paths.push_back(default_dir + "/peers/peers.dat");
-#ifdef _WIN32
-        paths.push_back(default_dir + "\\peers\\peers.dat");
-#endif
+
+    if (peers_path.empty()) {
+        return false;
+    }
+
+    std::ifstream file(peers_path);
+    if (!file.is_open()) {
+        return false;
     }
 
     int loaded = 0;
-    for (const auto& path : paths) {
-        std::ifstream file(path);
-        if (!file.is_open()) continue;
+    std::string line;
+    while (std::getline(file, line)) {
+        std::string host;
+        uint16_t port;
 
-        log("Loading peers from: " + path);
+        if (parsePeerLine(line, host, port)) {
+            // Convert P2P port to API port (17318 -> 17319)
+            if (port == 17318) {
+                port = 17319;
+            }
 
-        std::string line;
-        while (std::getline(file, line)) {
-            std::string host;
-            uint16_t port;
-
-            if (parsePeerLine(line, host, port)) {
-                // Convert P2P port to API port (17318 -> 17319)
-                if (port == 17318) {
-                    port = 17319;
-                }
-
-                // Check if already exists
-                bool exists = false;
-                for (const auto& node : nodes_) {
-                    if (node.host == host && node.port == port) {
-                        exists = true;
-                        break;
-                    }
-                }
-
-                if (!exists) {
-                    NodeInfo info;
-                    info.host = host;
-                    info.port = port;
-                    info.last_check = std::chrono::steady_clock::now();
-                    nodes_.push_back(info);
-                    loaded++;
+            // Check if already exists
+            bool exists = false;
+            for (const auto& node : nodes_) {
+                if (node.host == host && node.port == port) {
+                    exists = true;
+                    break;
                 }
             }
-        }
 
-        if (loaded > 0) {
-            log("Loaded " + std::to_string(loaded) + " nodes from " + path);
-            break;  // Stop after first successful file
+            if (!exists) {
+                NodeInfo info;
+                info.host = host;
+                info.port = port;
+                info.last_check = std::chrono::steady_clock::now();
+                nodes_.push_back(info);
+                loaded++;
+            }
         }
     }
 

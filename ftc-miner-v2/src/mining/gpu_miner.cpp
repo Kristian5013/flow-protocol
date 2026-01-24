@@ -256,7 +256,6 @@ bool GPUMiner::detectDevices() {
 
             if (vendor_lower.find("intel") != std::string::npos) {
                 // Skip Intel integrated graphics
-                std::cerr << "[GPU] Skipping Intel integrated GPU: " << name << "\n";
                 device_id--;  // Adjust ID since we're skipping
                 continue;
             }

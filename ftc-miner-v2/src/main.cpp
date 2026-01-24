@@ -166,10 +166,11 @@ int main(int argc, char** argv) {
         node_manager.addNode(host, port);
     }
 
-    // Add localhost as fallback if no nodes loaded
+    // No localhost fallback - require peers.dat with external nodes
     if (node_manager.getNodeCount() == 0) {
-        node_manager.addNode("::1", 17319);
-        node_manager.addNode("127.0.0.1", 17319);
+        std::cerr << "Error: No nodes found in peers.dat\n";
+        std::cerr << "Create " << data_dir << "/peers.dat with node addresses\n";
+        return 1;
     }
 
     std::cout << "Nodes:  " << node_manager.getNodeCount() << " loaded from peers.dat\n";
@@ -264,7 +265,7 @@ int main(int argc, char** argv) {
         std::cout << "       FTC Miner v2.0.0 (GPU-only)\n";
         std::cout << "       Keccak-256 OpenCL Miner\n";
         std::cout << "============================================\n\n";
-        std::cout << "Pool:     " << cfg.pool_url << "\n";
+        std::cout << "Nodes:    " << node_manager.getNodeCount() << " from peers.dat\n";
         std::cout << "Address:  " << cfg.wallet_address << "\n";
         std::cout << "GPUs:     " << gpus.size() << " device(s)\n";
         for (const auto& gpu : gpus) {
@@ -283,6 +284,9 @@ int main(int argc, char** argv) {
     // Connect to best available node
     if (cfg.tui_enabled) {
         ui.addLogMessage("Connecting to nodes (" + std::to_string(node_manager.getNodeCount()) + " available)...", tui::Color::Cyan);
+    } else {
+        std::cout << "Connecting to nodes (" << node_manager.getNodeCount() << " available)...\n";
+        std::cout.flush();
     }
 
     if (!cfg.benchmark_mode) {
