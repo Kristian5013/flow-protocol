@@ -183,7 +183,7 @@ void setupMiningRoutes(RouteContext& ctx) {
     });
 
     // Submit mined block
-    server->post("/mining/submit", [chain, mempool](const HttpRequest& req, HttpResponse& res) {
+    server->post("/mining/submit", [chain, mempool, peer_manager](const HttpRequest& req, HttpResponse& res) {
         if (!chain) {
             res.error(HttpStatus::SERVICE_UNAVAILABLE, "Chain not available");
             return;
@@ -225,6 +225,11 @@ void setupMiningRoutes(RouteContext& ctx) {
         if (result == chain::ValidationResult::VALID) {
             if (mempool) {
                 mempool->removeForBlock(block.transactions);
+            }
+
+            // Broadcast block to peers
+            if (peer_manager) {
+                peer_manager->broadcastBlock(block.getHash(), block);
             }
 
             JsonBuilder json;

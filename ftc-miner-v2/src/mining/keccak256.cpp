@@ -157,6 +157,9 @@ Hash256 Keccak256::bitsToTarget(uint32_t bits) {
         target[31] = mantissa & 0xFF;
         target[30] = (mantissa >> 8) & 0xFF;
         target[29] = (mantissa >> 16) & 0xFF;
+    } else if (exponent >= 33) {
+        // Target overflows 256 bits - set to maximum (easiest difficulty)
+        std::memset(target.data(), 0xFF, 32);
     } else {
         int offset = 32 - exponent;  // Position from MSB
         if (offset >= 0 && offset < 32) {

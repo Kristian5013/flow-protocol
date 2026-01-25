@@ -44,9 +44,13 @@ static bool isZero256(const uint256_t& x) {
     return true;
 }
 
-// Compare two uint256_t values (little-endian byte order)
+// Compare two uint256_t values (little-endian byte order for arithmetic operations)
+// NOTE: This uses little-endian comparison (byte 31 = most significant) to match
+// the arithmetic functions (add256, mul256_64, div256_64) which also use little-endian.
+// This is DIFFERENT from Keccak256::compare which uses big-endian for hash comparison.
 // Returns: -1 if a < b, 0 if a == b, 1 if a > b
 static int compare256(const uint256_t& a, const uint256_t& b) {
+    // Compare from byte 31 (most significant in little-endian)
     for (int i = 31; i >= 0; i--) {
         if (a[i] < b[i]) return -1;
         if (a[i] > b[i]) return 1;
