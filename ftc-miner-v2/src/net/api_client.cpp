@@ -13,6 +13,8 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <netdb.h>
+#include <fcntl.h>
+#include <cerrno>
 #define closesocket close
 #define SOCKET int
 #define INVALID_SOCKET -1
@@ -32,7 +34,7 @@ static void initWinsock() {
 }
 #endif
 
-// Helper: connect to host:port (IPv4 and IPv6)
+// Helper: connect to host:port with timeout (IPv4 and IPv6)
 static SOCKET connectToHost(const std::string& host, uint16_t port, std::string& error) {
     struct addrinfo hints{}, *res, *p;
     hints.ai_family = AF_UNSPEC;  // IPv4 and IPv6
@@ -61,24 +63,80 @@ static SOCKET connectToHost(const std::string& host, uint16_t port, std::string&
         sock = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (sock == INVALID_SOCKET) continue;
 
-        // Set timeout (500ms for fast failover)
+        // Set non-blocking mode for connect timeout
 #ifdef _WIN32
-        DWORD timeout = 500;
+        u_long mode = 1;
+        ioctlsocket(sock, FIONBIO, &mode);
+#else
+        int flags = fcntl(sock, F_GETFL, 0);
+        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#endif
+
+        // Start non-blocking connect
+        int connect_result = ::connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen));
+
+        if (connect_result == 0) {
+            // Connected immediately (rare but possible)
+        } else {
+#ifdef _WIN32
+            if (WSAGetLastError() != WSAEWOULDBLOCK) {
+                closesocket(sock);
+                sock = INVALID_SOCKET;
+                continue;
+            }
+#else
+            if (errno != EINPROGRESS) {
+                closesocket(sock);
+                sock = INVALID_SOCKET;
+                continue;
+            }
+#endif
+            // Wait for connection with timeout (2 seconds)
+            fd_set writefds;
+            FD_ZERO(&writefds);
+            FD_SET(sock, &writefds);
+
+            struct timeval tv;
+            tv.tv_sec = 2;
+            tv.tv_usec = 0;
+
+            int select_result = select(static_cast<int>(sock) + 1, nullptr, &writefds, nullptr, &tv);
+
+            if (select_result <= 0) {
+                // Timeout or error
+                closesocket(sock);
+                sock = INVALID_SOCKET;
+                continue;
+            }
+
+            // Check if connection succeeded
+            int so_error = 0;
+            socklen_t len = sizeof(so_error);
+            getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&so_error, &len);
+
+            if (so_error != 0) {
+                closesocket(sock);
+                sock = INVALID_SOCKET;
+                continue;
+            }
+        }
+
+        // Set back to blocking mode and set recv/send timeout
+#ifdef _WIN32
+        mode = 0;
+        ioctlsocket(sock, FIONBIO, &mode);
+        DWORD timeout = 2000;
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
         setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
 #else
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 500000;
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        fcntl(sock, F_SETFL, flags);
+        struct timeval recv_tv;
+        recv_tv.tv_sec = 2;
+        recv_tv.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recv_tv, sizeof(recv_tv));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &recv_tv, sizeof(recv_tv));
 #endif
-
-        if (::connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen)) != SOCKET_ERROR) {
-            break;  // Success
-        }
-        closesocket(sock);
-        sock = INVALID_SOCKET;
+        break;  // Success
     }
 
     freeaddrinfo(res);
