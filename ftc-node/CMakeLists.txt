@@ -110,7 +110,7 @@ target_link_libraries(ftc-node PRIVATE
 
 # Platform-specific libraries
 if(WIN32)
-    target_link_libraries(ftc-node PRIVATE ws2_32 iphlpapi)
+    target_link_libraries(ftc-node PRIVATE ws2_32 iphlpapi winhttp)
 elseif(UNIX)
     target_link_libraries(ftc-node PRIVATE dl)
 endif()

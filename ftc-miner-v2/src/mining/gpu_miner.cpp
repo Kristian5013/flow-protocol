@@ -250,13 +250,10 @@ bool GPUMiner::detectDevices() {
 
             // Skip Intel integrated GPUs (they're slow and needed for display)
             std::string vendor_lower = vendor;
-            std::string name_lower = name;
             for (auto& c : vendor_lower) c = std::tolower(c);
-            for (auto& c : name_lower) c = std::tolower(c);
 
             if (vendor_lower.find("intel") != std::string::npos) {
-                // Skip Intel integrated graphics
-                device_id--;  // Adjust ID since we're skipping
+                device_id--;
                 continue;
             }
 

@@ -61,15 +61,15 @@ static SOCKET connectToHost(const std::string& host, uint16_t port, std::string&
         sock = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (sock == INVALID_SOCKET) continue;
 
-        // Set timeout
+        // Set timeout (500ms for fast failover)
 #ifdef _WIN32
-        DWORD timeout = 10000;
+        DWORD timeout = 500;
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
         setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
 #else
         struct timeval tv;
-        tv.tv_sec = 10;
-        tv.tv_usec = 0;
+        tv.tv_sec = 0;
+        tv.tv_usec = 500000;
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 #endif

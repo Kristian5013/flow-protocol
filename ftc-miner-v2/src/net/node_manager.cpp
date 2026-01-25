@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <thread>
+#include <vector>
+#include <atomic>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -173,7 +176,6 @@ bool NodeManager::checkNode(NodeInfo& node) {
         node.consecutive_failures = 0;
         node.last_success = end;
 
-        // Update average latency (exponential moving average)
         if (node.avg_latency_ms == 0) {
             node.avg_latency_ms = latency;
         } else {
@@ -219,13 +221,57 @@ void NodeManager::selectBestNode() {
 }
 
 void NodeManager::refreshNodes() {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    for (auto& node : nodes_) {
-        checkNode(node);
+    // Copy nodes for parallel checking
+    std::vector<NodeInfo> nodes_copy;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        nodes_copy = nodes_;
     }
 
-    selectBestNode();
+    if (nodes_copy.empty()) return;
+
+    // Early exit flag - stop once we find a working node
+    std::atomic<bool> found_working{false};
+
+    // Check all nodes in parallel
+    std::vector<std::thread> threads;
+    threads.reserve(nodes_copy.size());
+
+    for (size_t i = 0; i < nodes_copy.size(); ++i) {
+        threads.emplace_back([this, i, &nodes_copy, &found_working]() {
+            // Skip if already found a working node
+            if (found_working.load()) return;
+
+            if (checkNode(nodes_copy[i])) {
+                found_working = true;
+            }
+        });
+    }
+
+    // Wait for all threads (they exit early if found_working)
+    for (auto& t : threads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+
+    // Update original nodes with results
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (size_t i = 0; i < nodes_copy.size() && i < nodes_.size(); ++i) {
+            // Only update if this node was actually checked
+            if (nodes_copy[i].total_requests > nodes_[i].total_requests) {
+                nodes_[i].available = nodes_copy[i].available;
+                nodes_[i].avg_latency_ms = nodes_copy[i].avg_latency_ms;
+                nodes_[i].consecutive_failures = nodes_copy[i].consecutive_failures;
+                nodes_[i].total_failures = nodes_copy[i].total_failures;
+                nodes_[i].total_requests = nodes_copy[i].total_requests;
+                nodes_[i].last_check = nodes_copy[i].last_check;
+                nodes_[i].last_success = nodes_copy[i].last_success;
+            }
+        }
+        selectBestNode();
+    }
 }
 
 APIClient* NodeManager::getClient() {

@@ -27,16 +27,22 @@
 #include <iomanip>
 #include <iostream>
 #include <algorithm>
+#include <set>
 
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <winhttp.h>
+#pragma comment(lib, "winhttp.lib")
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 #else
 #include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 namespace ftc {
@@ -195,6 +201,191 @@ bool Node::initMempool() {
     return true;
 }
 
+bool Node::checkExternalAccessibility() {
+    LOG_NOTICE("Checking external accessibility...");
+
+#ifdef _WIN32
+    // Get external IP using WinHTTP
+    std::string external_ip;
+
+    HINTERNET session = WinHttpOpen(
+        L"FTC-Node/1.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0
+    );
+
+    if (!session) {
+        LOG_ERROR("Failed to create WinHTTP session");
+        return false;
+    }
+
+    HINTERNET connect = WinHttpConnect(session, L"api.ipify.org", 443, 0);
+    if (!connect) {
+        WinHttpCloseHandle(session);
+        LOG_ERROR("Failed to connect to IP lookup service");
+        return false;
+    }
+
+    HINTERNET request = WinHttpOpenRequest(
+        connect,
+        L"GET",
+        L"/",
+        NULL,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        WINHTTP_FLAG_SECURE
+    );
+
+    if (!request) {
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        LOG_ERROR("Failed to create HTTP request");
+        return false;
+    }
+
+    // Set timeout (5 seconds)
+    DWORD timeout = 5000;
+    WinHttpSetOption(request, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+    WinHttpSetOption(request, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+
+    if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request, NULL)) {
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        LOG_ERROR("Failed to get external IP from api.ipify.org");
+        return false;
+    }
+
+    char buffer[256];
+    DWORD bytes_read = 0;
+    if (WinHttpReadData(request, buffer, sizeof(buffer) - 1, &bytes_read) && bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+        external_ip = buffer;
+        // Trim whitespace
+        while (!external_ip.empty() && (external_ip.back() == '\n' || external_ip.back() == '\r' || external_ip.back() == ' ')) {
+            external_ip.pop_back();
+        }
+    }
+
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connect);
+    WinHttpCloseHandle(session);
+
+    if (external_ip.empty()) {
+        LOG_ERROR("Failed to determine external IP address");
+        return false;
+    }
+
+    LOG_NOTICE("External IP: {}", external_ip);
+
+    // Try to connect to ourselves at external IP:p2p_port
+    LOG_NOTICE("Testing accessibility at {}:{}...", external_ip, config_.p2p_port);
+
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) {
+        LOG_ERROR("Failed to create test socket");
+        return false;
+    }
+
+    // Set short timeout for connect
+    DWORD sock_timeout = 3000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&sock_timeout, sizeof(sock_timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sock_timeout, sizeof(sock_timeout));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(config_.p2p_port);
+
+    if (inet_pton(AF_INET, external_ip.c_str(), &addr.sin_addr) != 1) {
+        closesocket(sock);
+        LOG_ERROR("Invalid external IP format: {}", external_ip);
+        return false;
+    }
+
+    int result = ::connect(sock, (struct sockaddr*)&addr, sizeof(addr));
+    closesocket(sock);
+
+    if (result == 0) {
+        LOG_NOTICE("Node is externally accessible at {}:{}", external_ip, config_.p2p_port);
+        return true;
+    } else {
+        LOG_ERROR("Node is NOT accessible from external IP {}:{}", external_ip, config_.p2p_port);
+        LOG_ERROR("Please ensure:");
+        LOG_ERROR("  1. Port {} is open in your firewall", config_.p2p_port);
+        LOG_ERROR("  2. Port {} is forwarded on your router to this machine", config_.p2p_port);
+        LOG_ERROR("Node will NOT connect to P2P network to avoid polluting peers.dat");
+        return false;
+    }
+
+#else
+    // Linux/Unix implementation using curl or direct socket
+    // Get external IP
+    std::string external_ip;
+
+    FILE* fp = popen("curl -s --connect-timeout 5 https://api.ipify.org", "r");
+    if (fp) {
+        char buffer[256];
+        if (fgets(buffer, sizeof(buffer), fp)) {
+            external_ip = buffer;
+            while (!external_ip.empty() && (external_ip.back() == '\n' || external_ip.back() == '\r')) {
+                external_ip.pop_back();
+            }
+        }
+        pclose(fp);
+    }
+
+    if (external_ip.empty()) {
+        LOG_ERROR("Failed to determine external IP address");
+        return false;
+    }
+
+    LOG_NOTICE("External IP: {}", external_ip);
+    LOG_NOTICE("Testing accessibility at {}:{}...", external_ip, config_.p2p_port);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        LOG_ERROR("Failed to create test socket");
+        return false;
+    }
+
+    struct timeval tv;
+    tv.tv_sec = 3;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(config_.p2p_port);
+
+    if (inet_pton(AF_INET, external_ip.c_str(), &addr.sin_addr) != 1) {
+        close(sock);
+        LOG_ERROR("Invalid external IP format: {}", external_ip);
+        return false;
+    }
+
+    int result = ::connect(sock, (struct sockaddr*)&addr, sizeof(addr));
+    close(sock);
+
+    if (result == 0) {
+        LOG_NOTICE("Node is externally accessible at {}:{}", external_ip, config_.p2p_port);
+        return true;
+    } else {
+        LOG_ERROR("Node is NOT accessible from external IP {}:{}", external_ip, config_.p2p_port);
+        LOG_ERROR("Please ensure:");
+        LOG_ERROR("  1. Port {} is open in your firewall", config_.p2p_port);
+        LOG_ERROR("  2. Port {} is forwarded on your router to this machine", config_.p2p_port);
+        LOG_ERROR("Node will NOT connect to P2P network to avoid polluting peers.dat");
+        return false;
+    }
+#endif
+}
+
 bool Node::initP2P() {
     // Initialize peer manager
     p2p::PeerManager::Config pm_config;
@@ -347,15 +538,15 @@ void Node::loadPeers() {
     std::string peers_file = "peers.dat";
     std::ifstream file(peers_file);
 
-    // Fall back to data directory
+    // Fall back to data directory (shared with miner)
     if (!file) {
-        peers_file = config_.data_dir + "/peers/peers.dat";
+        peers_file = config_.data_dir + "/peers.dat";
         file.open(peers_file);
     }
 
     if (!file) {
         LOG_INFO("[Peers] No peers.dat found - starting fresh");
-        LOG_INFO("[Peers] Place peers.dat in current directory or {}/peers/", config_.data_dir);
+        LOG_INFO("[Peers] Place peers.dat in current directory or {}/", config_.data_dir);
         return;
     }
 
@@ -377,11 +568,12 @@ void Node::loadPeers() {
 void Node::savePeers() {
     if (!peer_manager_) return;
 
-    std::string peers_file = config_.data_dir + "/peers/peers.dat";
+    // Save to data directory (shared with miner)
+    std::string peers_file = config_.data_dir + "/peers.dat";
     std::ofstream file(peers_file);
 
     if (!file) {
-        LOG_WARN("[Peers] Failed to save peers.dat");
+        LOG_WARN("[Peers] Failed to save peers.dat to {}", peers_file);
         return;
     }
 
@@ -392,43 +584,34 @@ void Node::savePeers() {
         if (tip) our_height = tip->height;
     }
 
-    // Only save peers that are fully synced (their height >= our height)
+    // Save all connected peers first
     auto peer_infos = peer_manager_->getPeerInfo();
-    int synced_count = 0;
+    std::set<std::string> saved_addrs;
+    int peer_count = 0;
 
     for (const auto& peer : peer_infos) {
-        // Only save peers that:
-        // 1. Are at least at our height (synced)
-        // 2. Are in active state (established connection)
-        if (peer.best_height >= our_height && peer.state == p2p::PeerState::ESTABLISHED) {
-            file << peer.addr.toString() << "\n";
-            synced_count++;
+        std::string addr_str = peer.addr.toString();
+        if (saved_addrs.find(addr_str) == saved_addrs.end()) {
+            file << addr_str << "\n";
+            saved_addrs.insert(addr_str);
+            peer_count++;
         }
     }
 
-    // Also save known addresses from peers that were synced
-    // This helps maintain a pool of good peers
+    // Also save all known addresses
     auto addrs = peer_manager_->getAddresses(1000);
     int known_count = 0;
     for (const auto& addr : addrs) {
-        // Skip addresses already written from active peers
-        bool already_saved = false;
-        for (const auto& peer : peer_infos) {
-            if (peer.addr.toString() == addr.toString() &&
-                peer.best_height >= our_height &&
-                peer.state == p2p::PeerState::ESTABLISHED) {
-                already_saved = true;
-                break;
-            }
-        }
-        if (!already_saved) {
-            file << addr.toString() << "\n";
+        std::string addr_str = addr.toString();
+        if (saved_addrs.find(addr_str) == saved_addrs.end()) {
+            file << addr_str << "\n";
+            saved_addrs.insert(addr_str);
             known_count++;
         }
     }
 
-    LOG_INFO("[Peers] Saved {} synced + {} known peer(s) to peers.dat",
-             synced_count, known_count);
+    LOG_INFO("[Peers] Saved {} connected + {} known peer(s) to {}",
+             peer_count, known_count, peers_file);
 }
 
 bool Node::initAPI() {
@@ -697,14 +880,35 @@ bool Node::start() {
     if (!initChain()) return false;
     if (!initMempool()) return false;
 
-    // Reindex if requested
-    if (config_.reindex && !reindexUTXO()) {
+    // Reindex if requested OR if UTXO set is empty but blocks exist
+    bool need_reindex = config_.reindex;
+    if (!need_reindex && utxo_set_->size() == 0) {
+        auto tip = chain_->getTip();
+        if (tip && tip->height > 0) {
+            LOG_NOTICE("UTXO set is empty but {} blocks exist - auto-reindexing...", tip->height + 1);
+            need_reindex = true;
+        }
+    }
+
+    if (need_reindex && !reindexUTXO()) {
         LOG_ERROR("Reindex failed");
         return false;
     }
 
     // Start P2P network
     if (!initP2P()) return false;
+
+    // Check if node is externally accessible BEFORE connecting to peers
+    // This prevents polluting peers.dat with inaccessible addresses
+    if (!checkExternalAccessibility()) {
+        LOG_ERROR("===============================================");
+        LOG_ERROR("NODE CANNOT JOIN P2P NETWORK");
+        LOG_ERROR("Your node is not accessible from the internet.");
+        LOG_ERROR("This would pollute peers.dat with bad addresses.");
+        LOG_ERROR("Please open/forward port {} and restart.", config_.p2p_port);
+        LOG_ERROR("===============================================");
+        return false;
+    }
 
     // Load peers from peers.dat and connect
     loadPeers();
@@ -824,11 +1028,15 @@ Node::Stats Node::getStats() const {
 void Node::heartbeatLoop() {
     constexpr int HEARTBEAT_INTERVAL_SEC = 60;  // Log heartbeat every 60 seconds
     constexpr int FIRST_HEARTBEAT_SEC = 10;     // First heartbeat after 10 seconds
+    constexpr int UTXO_FLUSH_INTERVAL_SEC = 300; // Flush UTXOs every 5 minutes
+    constexpr int PEERS_SAVE_INTERVAL_SEC = 300; // Save peers every 5 minutes
 
     last_bandwidth_check_ = std::chrono::steady_clock::now();
     last_bytes_in_ = bytes_in_.load();
     last_bytes_out_ = bytes_out_.load();
 
+    auto last_utxo_flush = std::chrono::steady_clock::now();
+    auto last_peers_save = std::chrono::steady_clock::now();
     bool first_heartbeat = true;
 
     while (running_.load()) {
@@ -905,6 +1113,23 @@ void Node::heartbeatLoop() {
                 bw_in,
                 bw_out
             );
+        }
+
+        // Periodic UTXO flush to prevent data loss on crash
+        auto utxo_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - last_utxo_flush).count();
+        if (utxo_elapsed >= UTXO_FLUSH_INTERVAL_SEC && utxo_set_) {
+            utxo_set_->flush();
+            last_utxo_flush = now;
+            LOG_DEBUG("UTXO set flushed to disk ({} entries)", utxo_set_->size());
+        }
+
+        // Periodic peers save
+        auto peers_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - last_peers_save).count();
+        if (peers_elapsed >= PEERS_SAVE_INTERVAL_SEC) {
+            savePeers();
+            last_peers_save = now;
         }
     }
 }

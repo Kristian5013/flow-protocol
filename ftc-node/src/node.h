@@ -180,6 +180,9 @@ private:
     // Rebuild UTXO set from blocks (--reindex)
     bool reindexUTXO();
 
+    // Check if node is accessible from outside (before joining P2P network)
+    bool checkExternalAccessibility();
+
     // Snapshot support
     bool loadSnapshot();    // Load UTXO snapshot at startup
     bool exportSnapshot();  // Export UTXO snapshot to file

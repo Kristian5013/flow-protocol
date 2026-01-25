@@ -11,6 +11,12 @@ if(WIN32)
     add_definitions(-DNOMINMAX)
 endif()
 
+# MinGW static linking (no DLL dependencies)
+if(MINGW)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libgcc -static-libstdc++")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -lpthread")
+endif()
+
 # Find OpenCL - try standard paths first, then CUDA
 find_package(OpenCL QUIET)
 
@@ -78,7 +84,6 @@ set(AUTOTUNE_SOURCES
 set(NET_SOURCES
     src/net/api_client.cpp
     src/net/node_manager.cpp
-    src/net/stratum_client.cpp
     src/net/https_client.cpp
 )
 

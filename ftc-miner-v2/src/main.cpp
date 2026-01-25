@@ -283,14 +283,10 @@ int main(int argc, char** argv) {
 
     // Connect to best available node
     if (cfg.tui_enabled) {
-        ui.addLogMessage("Connecting to nodes (" + std::to_string(node_manager.getNodeCount()) + " available)...", tui::Color::Cyan);
-    } else {
-        std::cout << "Connecting to nodes (" << node_manager.getNodeCount() << " available)...\n";
-        std::cout.flush();
+        ui.addLogMessage("Connecting to nodes...", tui::Color::Cyan);
     }
 
     if (!cfg.benchmark_mode) {
-        // Refresh all nodes to find best one
         node_manager.refreshNodes();
 
         auto* api_client = node_manager.getClient();
@@ -518,11 +514,20 @@ int main(int argc, char** argv) {
                 mining::Work current_work = work_manager.getWork();
                 for (const auto& sol : solutions) {
                     if (sol.height != current_work.height) {
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("Stale block h=" + std::to_string(sol.height) +
+                                           " (work h=" + std::to_string(current_work.height) + ")", tui::Color::Yellow);
+                        }
+                        stats.shares_stale++;
                         continue;
                     }
 
                     client = node_manager.getClient();
                     if (!client) continue;
+
+                    if (cfg.tui_enabled) {
+                        ui.addLogMessage("Submitting block h=" + std::to_string(sol.height) + "...", tui::Color::Cyan);
+                    }
 
                     bool accepted = client->submitBlock(sol, current_work);
                     if (accepted) {
@@ -530,19 +535,30 @@ int main(int argc, char** argv) {
                         stats.shares_accepted++;
                         node_manager.recordSuccess(0);
 
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("BLOCK ACCEPTED! h=" + std::to_string(sol.height), tui::Color::Green);
+                        }
+
                         auto fresh_work = client->getMiningTemplate(cfg.wallet_address);
                         if (fresh_work) {
                             work_manager.setWork(*fresh_work);
                             current_work = *fresh_work;
                             network_height = fresh_work->height;
                             if (cfg.tui_enabled) {
-                                ui.addLogMessage("Block found! New height: " + std::to_string(fresh_work->height), tui::Color::Green);
+                                ui.addLogMessage("New work: h=" + std::to_string(fresh_work->height), tui::Color::Cyan);
+                            }
+                        } else {
+                            if (cfg.tui_enabled) {
+                                ui.addLogMessage("Failed to get fresh work!", tui::Color::Red);
                             }
                         }
                         break;
                     } else {
                         stats.shares_rejected++;
                         node_manager.recordFailure();
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("Block REJECTED h=" + std::to_string(sol.height), tui::Color::Red);
+                        }
                     }
                 }
             }
