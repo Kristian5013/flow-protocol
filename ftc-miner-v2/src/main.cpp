@@ -441,7 +441,7 @@ int main(int argc, char** argv) {
         auto last_work_poll = std::chrono::steady_clock::now();
         auto last_network_stats = std::chrono::steady_clock::now();
         auto last_node_health = std::chrono::steady_clock::now();
-        constexpr int WORK_POLL_MS = 500;
+        constexpr int WORK_POLL_MS = 50;  // Fast polling for P2Pool (50ms)
         constexpr int NETWORK_STATS_MS = 5000;
         constexpr int NODE_HEALTH_MS = 10000;  // Check node health every 10s
         int consecutive_failures = 0;
@@ -469,49 +469,11 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
-                auto new_work = client->getMiningTemplate(cfg.wallet_address);
-                auto current = work_manager.getWork();
-
-                if (new_work) {
-                    // Success - record latency
-                    auto req_end = std::chrono::steady_clock::now();
-                    double latency = std::chrono::duration<double, std::milli>(req_end - req_start).count();
-                    node_manager.recordSuccess(latency);
-                    consecutive_failures = 0;
-
-                    // Only update work when height changes
-                    if (new_work->height != current.height) {
-                        work_manager.setWork(*new_work);
-                        network_height = new_work->height;
-
-                        if (cfg.tui_enabled) {
-                            ui.addLogMessage("New work: height " + std::to_string(new_work->height), tui::Color::Cyan);
-                        }
-                    }
-                } else {
-                    // Failed - record failure and possibly switch node
-                    node_manager.recordFailure();
-                    consecutive_failures++;
-
-                    if (consecutive_failures >= 3) {
-                        if (cfg.tui_enabled) {
-                            ui.addLogMessage("Node not responding, switching...", tui::Color::Yellow);
-                        }
-                        if (node_manager.switchToNextNode()) {
-                            consecutive_failures = 0;
-                            // Update displayed pool URL
-                            auto* current_node = node_manager.getCurrentNode();
-                            if (current_node) {
-                                stats.pool_url = current_node->host + ":" + std::to_string(current_node->port);
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                // Submit any pending solutions
-                auto solutions = work_manager.getPendingSolutions();
+                // Get current work BEFORE fetching new work (for stale check)
                 mining::Work current_work = work_manager.getWork();
+
+                // Submit any pending solutions BEFORE updating work
+                auto solutions = work_manager.getPendingSolutions();
                 for (const auto& sol : solutions) {
                     if (sol.height != current_work.height) {
                         if (cfg.tui_enabled) {
@@ -558,6 +520,45 @@ int main(int argc, char** argv) {
                         node_manager.recordFailure();
                         if (cfg.tui_enabled) {
                             ui.addLogMessage("Block REJECTED h=" + std::to_string(sol.height), tui::Color::Red);
+                        }
+                    }
+                }
+
+                // Now fetch new work and update if height changed
+                auto new_work = client->getMiningTemplate(cfg.wallet_address);
+
+                if (new_work) {
+                    // Success - record latency
+                    auto req_end = std::chrono::steady_clock::now();
+                    double latency = std::chrono::duration<double, std::milli>(req_end - req_start).count();
+                    node_manager.recordSuccess(latency);
+                    consecutive_failures = 0;
+
+                    // Only update work when height changes
+                    if (new_work->height != current_work.height) {
+                        work_manager.setWork(*new_work);
+                        network_height = new_work->height;
+
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("New work: height " + std::to_string(new_work->height), tui::Color::Cyan);
+                        }
+                    }
+                } else {
+                    // Failed - record failure and possibly switch node
+                    node_manager.recordFailure();
+                    consecutive_failures++;
+
+                    if (consecutive_failures >= 3) {
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("Node not responding, switching...", tui::Color::Yellow);
+                        }
+                        if (node_manager.switchToNextNode()) {
+                            consecutive_failures = 0;
+                            // Update displayed pool URL
+                            auto* current_node = node_manager.getCurrentNode();
+                            if (current_node) {
+                                stats.pool_url = current_node->host + ":" + std::to_string(current_node->port);
+                            }
                         }
                     }
                 }
