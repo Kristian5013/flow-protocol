@@ -179,12 +179,15 @@ public:
     void addAddress(const NetAddr& addr, const std::string& source = "");
     void addAddresses(const std::vector<NetAddrTime>& addrs, const std::string& source = "");
     std::vector<NetAddrTime> getAddresses(size_t max_count = 1000) const;
+    std::vector<NetAddrTime> getGoodAddresses(size_t max_count = 100, double min_score = 0.0) const;
     size_t getAddressCount() const;
+    void pruneDeadAddresses(double min_score = -50.0);  // Remove addresses with very low scores
 
     // Local IP detection (to avoid self-connection)
     void addLocalIP(const uint8_t ip[16]);
     void detectLocalIPs();
     bool isLocalIP(const uint8_t ip[16]) const;
+    std::vector<std::string> getLocalIPs() const;
 
     // Ban management
     void ban(const NetAddr& addr, const std::string& reason = "",

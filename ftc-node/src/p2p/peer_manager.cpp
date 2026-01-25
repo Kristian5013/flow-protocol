@@ -500,31 +500,14 @@ void PeerManager::handlePong(Peer& peer, const PongMessage& msg) {
 }
 
 void PeerManager::handleGetAddr(Peer& peer) {
-    // Send up to 1000 addresses
-    auto addrs = getAddresses(1000);
-
-    if (addrs.empty()) return;
-
-    Message msg;
-    msg.type = MessageType::ADDR;
-    msg.payload = AddrMessage{addrs};
-    peer.conn->send(msg);
-
-    LOG_DEBUG("Sent {} addresses to {}", addrs.size(), peer.info.addr.toString());
+    // DHT handles peer discovery - no address exchange needed
+    (void)peer;
 }
 
 void PeerManager::handleAddr(Peer& peer, const AddrMessage& msg) {
-    if (msg.addrs.size() > 1000) {
-        LOG_WARN("Too many addresses from {}: {}",
-                 peer.info.addr.toString(), msg.addrs.size());
-        peer.conn->addBanScore(20, "too many addresses");
-        return;
-    }
-
-    addAddresses(msg.addrs, peer.info.addr.toString());
-
-    LOG_DEBUG("Received {} addresses from {}",
-              msg.addrs.size(), peer.info.addr.toString());
+    // DHT handles peer discovery - ignore ADDR messages
+    (void)peer;
+    (void)msg;
 }
 
 void PeerManager::handleReject(Peer& peer, const RejectMessage& msg) {
@@ -597,12 +580,7 @@ void PeerManager::completeHandshake(Peer& peer) {
     LOG_INFO("Handshake complete: {} \"{}\" height={}",
              peer.info.addr.toString(), peer.info.user_agent, peer.info.start_height);
 
-    // Request addresses if we need more
-    if (getAddressCount() < 1000) {
-        Message msg;
-        msg.type = MessageType::GETADDR;
-        peer.conn->send(msg);
-    }
+    // DHT handles peer discovery - no GETADDR needed
 
     if (on_new_peer_) {
         on_new_peer_(peer.info.id);
@@ -755,8 +733,65 @@ std::vector<NetAddrTime> PeerManager::getAddresses(size_t max_count) const {
 }
 
 size_t PeerManager::getAddressCount() const {
+    // DHT handles peer discovery - address database not used
+    return 0;
+}
+
+std::vector<NetAddrTime> PeerManager::getGoodAddresses(size_t max_count, double min_score) const {
     std::lock_guard<std::mutex> lock(addr_mutex_);
-    return addresses_.size();
+
+    std::vector<NetAddrTime> result;
+    int64_t now = std::time(nullptr);
+
+    // Score and filter addresses
+    std::vector<std::pair<double, const AddrInfo*>> scored;
+    for (auto& p : addresses_) {
+        double score = p.second.getScore(now);
+        if (score >= min_score) {
+            scored.emplace_back(score, &p.second);
+        }
+    }
+
+    // Sort by score (highest first)
+    std::sort(scored.begin(), scored.end(), [](auto& a, auto& b) {
+        return a.first > b.first;
+    });
+
+    // Return top addresses
+    for (size_t i = 0; i < std::min(max_count, scored.size()); i++) {
+        const AddrInfo* info = scored[i].second;
+        NetAddrTime a;
+        a.timestamp = static_cast<uint32_t>(info->last_seen);
+        a.services = info->services;
+        memcpy(a.ip, info->addr.ip, 16);
+        a.port = info->addr.port;
+        result.push_back(a);
+    }
+
+    return result;
+}
+
+void PeerManager::pruneDeadAddresses(double min_score) {
+    std::lock_guard<std::mutex> lock(addr_mutex_);
+
+    int64_t now = std::time(nullptr);
+    size_t before = addresses_.size();
+
+    auto it = addresses_.begin();
+    while (it != addresses_.end()) {
+        double score = it->second.getScore(now);
+        if (score < min_score) {
+            LOG_DEBUG("Pruning dead address {} (score: {:.1f})", it->first.toString(), score);
+            it = addresses_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    size_t pruned = before - addresses_.size();
+    if (pruned > 0) {
+        LOG_INFO("[Peers] Pruned {} dead addresses (score < {:.1f})", pruned, min_score);
+    }
 }
 
 void PeerManager::addLocalIP(const uint8_t ip[16]) {
@@ -771,6 +806,18 @@ bool PeerManager::isLocalIP(const uint8_t ip[16]) const {
     std::array<uint8_t, 16> arr;
     std::memcpy(arr.data(), ip, 16);
     return local_ips_.count(arr) > 0;
+}
+
+std::vector<std::string> PeerManager::getLocalIPs() const {
+    std::lock_guard<std::mutex> lock(local_ips_mutex_);
+    std::vector<std::string> result;
+    char buf[INET6_ADDRSTRLEN];
+    for (const auto& ip : local_ips_) {
+        if (inet_ntop(AF_INET6, ip.data(), buf, sizeof(buf))) {
+            result.push_back(buf);
+        }
+    }
+    return result;
 }
 
 void PeerManager::detectLocalIPs() {
@@ -1241,20 +1288,7 @@ void PeerManager::cleanupBans() {
 }
 
 void PeerManager::requestAddresses() {
-    if (getAddressCount() >= 1000) return;
-
-    std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
-
-    Message msg;
-    msg.type = MessageType::GETADDR;
-
-    int sent = 0;
-    for (auto& p : peers_) {
-        if (p.second.state == PeerState::ESTABLISHED && sent < 3) {
-            p.second.conn->send(msg);
-            sent++;
-        }
-    }
+    // DHT handles peer discovery - no GETADDR needed
 }
 
 } // namespace p2p

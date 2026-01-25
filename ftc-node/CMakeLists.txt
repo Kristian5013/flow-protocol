@@ -85,6 +85,13 @@ set(UTIL_SOURCES
     src/util/hex.cpp
 )
 
+set(DHT_SOURCES
+    src/dht/dht.cpp
+    src/dht/bencode.cpp
+    src/dht/node_id.cpp
+    src/dht/routing_table.cpp
+)
+
 # Main executable
 add_executable(ftc-node
     src/main.cpp
@@ -97,6 +104,7 @@ add_executable(ftc-node
     ${STORAGE_SOURCES}
     ${API_SOURCES}
     ${UTIL_SOURCES}
+    ${DHT_SOURCES}
 )
 
 target_include_directories(ftc-node PRIVATE

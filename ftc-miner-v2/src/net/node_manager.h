@@ -2,6 +2,7 @@
 #define FTC_MINER_NET_NODE_MANAGER_H
 
 #include "api_client.h"
+#include "../dht/dht.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <thread>
 
 namespace net {
 
@@ -16,7 +18,7 @@ namespace net {
  * NodeManager - Multi-node management with automatic failover
  *
  * Features:
- * - Loads nodes from peers.dat (shared with ftc-node)
+ * - BitTorrent DHT peer discovery (automatic)
  * - Real-time health monitoring (latency, failures)
  * - Automatic failover when node becomes unavailable
  * - Selects best node based on response time
@@ -51,9 +53,11 @@ public:
     NodeManager();
     ~NodeManager();
 
-    // Load nodes from peers.dat (same format as ftc-node)
-    // Searches: ./peers.dat, then data_dir/peers/peers.dat
-    bool loadPeers(const std::string& data_dir = "");
+    // Start DHT peer discovery
+    bool startDHT();
+
+    // Stop DHT
+    void stopDHT();
 
     // Add node manually (e.g., from command line -o option)
     void addNode(const std::string& host, uint16_t port);
@@ -101,13 +105,15 @@ private:
     int health_check_interval_ms_ = 5000;
     int max_consecutive_failures_ = 3;
 
+    // DHT for peer discovery
+    std::unique_ptr<dht::DHT> dht_;
+    std::atomic<bool> dht_running_{false};
+
     // Internal helpers
     bool checkNode(NodeInfo& node);
     void selectBestNode();
     void log(const std::string& msg, bool is_error = false);
-
-    // Parse peers.dat line format: [IPv6]:port or IPv4:port
-    bool parsePeerLine(const std::string& line, std::string& host, uint16_t& port);
+    void onDHTPeerFound(const std::string& ip, uint16_t port);
 };
 
 } // namespace net

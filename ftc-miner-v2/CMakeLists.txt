@@ -87,6 +87,13 @@ set(NET_SOURCES
     src/net/https_client.cpp
 )
 
+set(DHT_SOURCES
+    src/dht/dht.cpp
+    src/dht/bencode.cpp
+    src/dht/node_id.cpp
+    src/dht/routing_table.cpp
+)
+
 set(CONFIG_SOURCES
     src/config/config.cpp
 )
@@ -98,6 +105,7 @@ add_executable(ftc-miner
     ${MINING_SOURCES}
     ${AUTOTUNE_SOURCES}
     ${NET_SOURCES}
+    ${DHT_SOURCES}
     ${CONFIG_SOURCES}
 )
 

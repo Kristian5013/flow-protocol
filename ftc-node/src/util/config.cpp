@@ -115,12 +115,12 @@ void Config::printHelp() {
     std::cout << "  --reindex               Rebuild UTXO set from blocks\n";
     std::cout << "\n";
     std::cout << "Peer Discovery:\n";
-    std::cout << "  peers.dat - one [IPv6]:PORT per line\n";
-    std::cout << "  Searches: ./peers.dat then " << getDefaultDataDir() << "/peers/peers.dat\n";
+    std::cout << "  BitTorrent DHT (automatic, no configuration needed)\n";
+    std::cout << "  DHT port: 17321 (UDP)\n";
     std::cout << "\n";
     std::cout << "First run:\n";
-    std::cout << "  1. Place peers.dat next to ftc-node binary\n";
-    std::cout << "  2. Run: ftc-node\n";
+    std::cout << "  Just run: ftc-node\n";
+    std::cout << "  Peers are discovered automatically via DHT\n";
     std::cout << "\n";
     std::cout << "API: curl http://[::1]:17319/status\n";
     std::cout << "\n";

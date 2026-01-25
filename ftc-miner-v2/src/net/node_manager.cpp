@@ -1,141 +1,66 @@
 #include "node_manager.h"
-#include <fstream>
-#include <sstream>
 #include <algorithm>
-#include <filesystem>
 #include <iostream>
 #include <thread>
 #include <vector>
 #include <atomic>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <shlobj.h>
-#else
-#include <pwd.h>
-#include <unistd.h>
-#endif
-
 namespace net {
 
 NodeManager::NodeManager() = default;
-NodeManager::~NodeManager() = default;
+
+NodeManager::~NodeManager() {
+    stopDHT();
+}
+
+bool NodeManager::startDHT() {
+    if (dht_running_) return true;
+
+    dht_ = std::make_unique<dht::DHT>(17322);  // Use different port than node (17321)
+
+    // Set log callback (DHT already prefixes with [DHT])
+    dht_->setLogCallback([this](const std::string& msg, bool is_error) {
+        log(msg, is_error);
+    });
+
+    // Set peer found callback
+    dht_->setOnPeerFound([this](const std::string& ip, uint16_t port) {
+        onDHTPeerFound(ip, port);
+    });
+
+    if (!dht_->start()) {
+        log("Failed to start DHT", true);
+        return false;
+    }
+
+    dht_running_ = true;
+    log("DHT started - discovering nodes...");
+    return true;
+}
+
+void NodeManager::stopDHT() {
+    if (dht_) {
+        dht_->stop();
+        dht_.reset();
+    }
+    dht_running_ = false;
+}
+
+void NodeManager::onDHTPeerFound(const std::string& ip, uint16_t port) {
+    // DHT returns P2P port (17318), convert to API port (17319)
+    uint16_t api_port = (port == 17318) ? 17319 : port;
+
+    // Skip localhost
+    if (ip == "::1" || ip == "127.0.0.1") return;
+
+    // Add node - verification happens later via checkNode/refreshNodes
+    addNode(ip, api_port);
+}
 
 void NodeManager::log(const std::string& msg, bool is_error) {
     if (log_callback_) {
         log_callback_(msg, is_error);
     }
-}
-
-bool NodeManager::parsePeerLine(const std::string& line, std::string& host, uint16_t& port) {
-    std::string trimmed = line;
-
-    // Skip comments and empty lines
-    if (trimmed.empty() || trimmed[0] == '#') return false;
-
-    // Trim whitespace
-    size_t start = trimmed.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return false;
-    size_t end = trimmed.find_last_not_of(" \t\r\n");
-    trimmed = trimmed.substr(start, end - start + 1);
-
-    if (trimmed.empty()) return false;
-
-    // IPv6 format: [addr]:port
-    if (trimmed[0] == '[') {
-        size_t bracket_end = trimmed.find(']');
-        if (bracket_end == std::string::npos) return false;
-
-        host = trimmed.substr(1, bracket_end - 1);
-
-        if (bracket_end + 1 < trimmed.size() && trimmed[bracket_end + 1] == ':') {
-            try {
-                port = static_cast<uint16_t>(std::stoi(trimmed.substr(bracket_end + 2)));
-            } catch (...) {
-                return false;
-            }
-        } else {
-            port = 17319;  // Default API port
-        }
-        return true;
-    }
-
-    // IPv4 format: host:port
-    size_t colon = trimmed.rfind(':');
-    if (colon != std::string::npos) {
-        host = trimmed.substr(0, colon);
-        try {
-            port = static_cast<uint16_t>(std::stoi(trimmed.substr(colon + 1)));
-        } catch (...) {
-            return false;
-        }
-    } else {
-        host = trimmed;
-        port = 17319;
-    }
-
-    return !host.empty();
-}
-
-bool NodeManager::loadPeers(const std::string& data_dir) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    // Use single peers.dat in FTC data directory
-    std::string peers_path;
-#ifdef _WIN32
-    char path[MAX_PATH];
-    if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, path))) {
-        peers_path = std::string(path) + "\\FTC\\peers.dat";
-    }
-#else
-    const char* home = getenv("HOME");
-    if (home) {
-        peers_path = std::string(home) + "/.ftc/peers.dat";
-    }
-#endif
-
-    if (peers_path.empty()) {
-        return false;
-    }
-
-    std::ifstream file(peers_path);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    int loaded = 0;
-    std::string line;
-    while (std::getline(file, line)) {
-        std::string host;
-        uint16_t port;
-
-        if (parsePeerLine(line, host, port)) {
-            // Convert P2P port to API port (17318 -> 17319)
-            if (port == 17318) {
-                port = 17319;
-            }
-
-            // Check if already exists
-            bool exists = false;
-            for (const auto& node : nodes_) {
-                if (node.host == host && node.port == port) {
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists) {
-                NodeInfo info;
-                info.host = host;
-                info.port = port;
-                info.last_check = std::chrono::steady_clock::now();
-                nodes_.push_back(info);
-                loaded++;
-            }
-        }
-    }
-
-    return loaded > 0;
 }
 
 void NodeManager::addNode(const std::string& host, uint16_t port) {
@@ -155,8 +80,7 @@ void NodeManager::addNode(const std::string& host, uint16_t port) {
 
     // Add at front (priority for manually specified nodes)
     nodes_.insert(nodes_.begin(), info);
-
-    log("Added node: " + host + ":" + std::to_string(port));
+    // Don't log - DHT adds many nodes and we show count at startup
 }
 
 bool NodeManager::checkNode(NodeInfo& node) {

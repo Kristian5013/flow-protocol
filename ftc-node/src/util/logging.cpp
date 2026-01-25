@@ -218,10 +218,11 @@ void heartbeat(
 ) {
     std::ostringstream oss;
 
-    // Format: Heartbeat: height=12345 peers=8/127 sync=100% mempool=42tx/1.2MB in=45.3KB/s out=12.1KB/s up=2h30m
+    // Format: Heartbeat: height=12345 peers=8 sync=100% mempool=42tx/1.2MB in=45.3KB/s out=12.1KB/s up=2h30m
+    (void)known_addrs;  // DHT handles peer discovery
     oss << "Heartbeat: "
         << "height=" << height
-        << " peers=" << peers << "/" << formatCount(known_addrs)
+        << " peers=" << peers
         << " sync=" << static_cast<int>(sync_progress * 100) << "%"
         << " mempool=" << mempool_txs << "tx/" << formatBytes(mempool_bytes)
         << " blk=" << formatCount(blocks_received)

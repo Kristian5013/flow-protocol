@@ -7,7 +7,7 @@
  * - Mempool (pending transactions)
  * - Localhost API (wallet/miner interface)
  *
- * Peer discovery: peers.dat + P2P addr exchange (IPv6 only)
+ * Peer discovery: BitTorrent DHT (IPv6 only)
  * "Kristian Pilatovich 20091227 - First Real P2P"
  */
 
@@ -317,7 +317,7 @@ bool Node::checkExternalAccessibility() {
         LOG_ERROR("Please ensure:");
         LOG_ERROR("  1. Port {} is open in your firewall", config_.p2p_port);
         LOG_ERROR("  2. Port {} is forwarded on your router to this machine", config_.p2p_port);
-        LOG_ERROR("Node will NOT connect to P2P network to avoid polluting peers.dat");
+        LOG_ERROR("Node will NOT connect to P2P network (not accessible from outside)");
         return false;
     }
 
@@ -380,7 +380,7 @@ bool Node::checkExternalAccessibility() {
         LOG_ERROR("Please ensure:");
         LOG_ERROR("  1. Port {} is open in your firewall", config_.p2p_port);
         LOG_ERROR("  2. Port {} is forwarded on your router to this machine", config_.p2p_port);
-        LOG_ERROR("Node will NOT connect to P2P network to avoid polluting peers.dat");
+        LOG_ERROR("Node will NOT connect to P2P network (not accessible from outside)");
         return false;
     }
 #endif
@@ -533,86 +533,7 @@ bool Node::addPeerAddress(const std::string& addr_str, const std::string& source
     return false;
 }
 
-void Node::loadPeers() {
-    // Try current directory first (next to binary)
-    std::string peers_file = "peers.dat";
-    std::ifstream file(peers_file);
-
-    // Fall back to data directory (shared with miner)
-    if (!file) {
-        peers_file = config_.data_dir + "/peers.dat";
-        file.open(peers_file);
-    }
-
-    if (!file) {
-        LOG_INFO("[Peers] No peers.dat found - starting fresh");
-        LOG_INFO("[Peers] Place peers.dat in current directory or {}/", config_.data_dir);
-        return;
-    }
-
-    std::string line;
-    int count = 0;
-    while (std::getline(file, line)) {
-        // Skip empty lines and comments
-        if (line.empty() || line[0] == '#') continue;
-        if (addPeerAddress(line, "peers.dat")) {
-            count++;
-        }
-    }
-
-    if (count > 0) {
-        LOG_INFO("[Peers] Loaded {} peer(s) from {}", count, peers_file);
-    }
-}
-
-void Node::savePeers() {
-    if (!peer_manager_) return;
-
-    // Save to data directory (shared with miner)
-    std::string peers_file = config_.data_dir + "/peers.dat";
-    std::ofstream file(peers_file);
-
-    if (!file) {
-        LOG_WARN("[Peers] Failed to save peers.dat to {}", peers_file);
-        return;
-    }
-
-    // Get our current chain height
-    int32_t our_height = 0;
-    if (chain_) {
-        auto tip = chain_->getTip();
-        if (tip) our_height = tip->height;
-    }
-
-    // Save all connected peers first
-    auto peer_infos = peer_manager_->getPeerInfo();
-    std::set<std::string> saved_addrs;
-    int peer_count = 0;
-
-    for (const auto& peer : peer_infos) {
-        std::string addr_str = peer.addr.toString();
-        if (saved_addrs.find(addr_str) == saved_addrs.end()) {
-            file << addr_str << "\n";
-            saved_addrs.insert(addr_str);
-            peer_count++;
-        }
-    }
-
-    // Also save all known addresses
-    auto addrs = peer_manager_->getAddresses(1000);
-    int known_count = 0;
-    for (const auto& addr : addrs) {
-        std::string addr_str = addr.toString();
-        if (saved_addrs.find(addr_str) == saved_addrs.end()) {
-            file << addr_str << "\n";
-            saved_addrs.insert(addr_str);
-            known_count++;
-        }
-    }
-
-    LOG_INFO("[Peers] Saved {} connected + {} known peer(s) to {}",
-             peer_count, known_count, peers_file);
-}
+// Note: loadPeers() and savePeers() removed - DHT handles peer discovery now
 
 bool Node::initAPI() {
     api::Server::Config api_config;
@@ -684,6 +605,61 @@ bool Node::initP2Pool() {
     }
 
     LOG_DEBUG("P2Pool started: tcp://0.0.0.0:{}", p2pool_config.port);
+    return true;
+}
+
+bool Node::initDHT() {
+    // Initialize BitTorrent DHT for peer discovery
+    // Always use mainnet (FTC doesn't have testnet mode currently)
+    dht_ = std::make_unique<dht::DHT>(17321, true);
+
+    // Set logging callback
+    dht_->setLogCallback([](const std::string& msg, bool is_error) {
+        if (is_error) {
+            LOG_ERROR("{}", msg);
+        } else {
+            LOG_NOTICE("{}", msg);
+        }
+    });
+
+    // Set peer found callback - add discovered FTC nodes to peer manager
+    dht_->setOnPeerFound([this](const std::string& ip, uint16_t port) {
+        if (!peer_manager_) return;
+
+        // Construct address string for P2P port (peers announce their P2P port)
+        std::string addr_str = "[" + ip + "]:" + std::to_string(port);
+
+        LOG_DEBUG("[DHT] Discovered FTC peer: {}", addr_str);
+
+        // Add to peer manager
+        if (addPeerAddress(addr_str, "dht")) {
+            // Try to connect if we need more peers
+            if (peer_manager_->getOutboundCount() < static_cast<size_t>(config_.target_outbound)) {
+                auto addrs = peer_manager_->getAddresses(1);
+                if (!addrs.empty()) {
+                    peer_manager_->connectTo(addrs[0]);
+                }
+            }
+        }
+    });
+
+    // Add local IPs to DHT to filter self-discovery
+    if (peer_manager_) {
+        for (const auto& ip : peer_manager_->getLocalIPs()) {
+            dht_->addLocalIP(ip);
+        }
+    }
+
+    // Start DHT
+    if (!dht_->start()) {
+        LOG_ERROR("Failed to start DHT");
+        return false;
+    }
+
+    // Announce our P2P port on DHT
+    dht_->announce(config_.p2p_port);
+
+    LOG_NOTICE("[DHT] Started on UDP port 17321 (routing table: {} nodes)", dht_->getRoutingTableSize());
     return true;
 }
 
@@ -902,14 +878,6 @@ bool Node::start() {
     // For now, skip this check as our network is IPv6-only
     LOG_NOTICE("Skipping external accessibility check (IPv6-only network)");
 
-    // Load peers from peers.dat and connect
-    loadPeers();
-    auto addrs = peer_manager_->getAddresses(100);
-    for (const auto& a : addrs) {
-        if (peer_manager_->getOutboundCount() >= static_cast<size_t>(config_.target_outbound)) break;
-        peer_manager_->connectTo(a);
-    }
-
     // NOTE: Don't call startSync() here - peers haven't completed VERSION handshake yet.
     // Sync will be triggered by onPeerConnect() when a peer with higher height is established.
 
@@ -921,6 +889,9 @@ bool Node::start() {
     if (p2pool_ && api_server_) {
         api_server_->setP2Pool(p2pool_.get());
     }
+
+    // Start DHT for automatic peer discovery (finds peers via BitTorrent network)
+    initDHT();
 
     // Install signal handlers
     std::signal(SIGINT, signalHandler);
@@ -943,10 +914,8 @@ void Node::stop() {
         heartbeat_thread_.join();
     }
 
-    // Save peers before stopping
-    savePeers();
-
     // Stop all components
+    if (dht_) dht_->stop();
     if (p2pool_) p2pool_->stop();
     if (api_server_) api_server_->stop();
     if (message_handler_) message_handler_->stop();
@@ -1018,17 +987,15 @@ Node::Stats Node::getStats() const {
 // ═══════════════════════════════════════════════════════════════════════════
 
 void Node::heartbeatLoop() {
-    constexpr int HEARTBEAT_INTERVAL_SEC = 60;  // Log heartbeat every 60 seconds
-    constexpr int FIRST_HEARTBEAT_SEC = 10;     // First heartbeat after 10 seconds
+    constexpr int HEARTBEAT_INTERVAL_SEC = 300;  // Log heartbeat every 5 minutes (daemon mode)
+    constexpr int FIRST_HEARTBEAT_SEC = 10;      // First heartbeat after 10 seconds
     constexpr int UTXO_FLUSH_INTERVAL_SEC = 300; // Flush UTXOs every 5 minutes
-    constexpr int PEERS_SAVE_INTERVAL_SEC = 300; // Save peers every 5 minutes
 
     last_bandwidth_check_ = std::chrono::steady_clock::now();
     last_bytes_in_ = bytes_in_.load();
     last_bytes_out_ = bytes_out_.load();
 
     auto last_utxo_flush = std::chrono::steady_clock::now();
-    auto last_peers_save = std::chrono::steady_clock::now();
     bool first_heartbeat = true;
 
     while (running_.load()) {
@@ -1114,14 +1081,6 @@ void Node::heartbeatLoop() {
             utxo_set_->flush();
             last_utxo_flush = now;
             LOG_DEBUG("UTXO set flushed to disk ({} entries)", utxo_set_->size());
-        }
-
-        // Periodic peers save
-        auto peers_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-            now - last_peers_save).count();
-        if (peers_elapsed >= PEERS_SAVE_INTERVAL_SEC) {
-            savePeers();
-            last_peers_save = now;
         }
     }
 }
