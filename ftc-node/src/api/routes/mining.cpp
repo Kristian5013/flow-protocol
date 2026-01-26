@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <ctime>
 #include <cstring>
+#include <iostream>
 
 namespace ftc {
 namespace api {
@@ -264,11 +265,8 @@ void setupMiningRoutes(RouteContext& ctx) {
         auto meetsTarget = [](const crypto::Hash256& hash, uint32_t bits) {
             crypto::Hash256 target = chain::BlockHeader::bitsToTarget(bits);
             // Compare hash to target (hash must be <= target)
-            for (int i = 31; i >= 0; --i) {
-                if (hash[i] < target[i]) return true;
-                if (hash[i] > target[i]) return false;
-            }
-            return true;
+            // Use big-endian comparison: byte[0] = MSB, byte[31] = LSB
+            return crypto::Keccak256::compare(hash, target) <= 0;
         };
 
         // Check P2Pool share difficulty first
@@ -277,26 +275,24 @@ void setupMiningRoutes(RouteContext& ctx) {
         bool is_block = false;
 
         if (p2pool && p2pool->isRunning()) {
-            auto* sharechain = p2pool->getSharechain();
-            if (sharechain) {
-                uint32_t share_bits = sharechain->getNextShareDifficulty();
+            // Use the bits from block header - this is what we gave the miner in template
+            uint32_t share_bits = block.header.bits;
 
-                // Check if meets share difficulty
-                if (meetsTarget(block_hash, share_bits)) {
-                    // Register share with P2Pool
-                    if (!block.transactions.empty()) {
-                        auto& coinbase = block.transactions[0];
-                        if (!coinbase.outputs.empty()) {
-                            p2pool->registerMinerShare(coinbase.outputs[0].script_pubkey);
-                            share_accepted = true;
-                        }
+            // Check if meets share difficulty (the difficulty given to miner)
+            if (meetsTarget(block_hash, share_bits)) {
+                // Register share with P2Pool
+                if (!block.transactions.empty()) {
+                    auto& coinbase = block.transactions[0];
+                    if (!coinbase.outputs.empty()) {
+                        p2pool->registerMinerShare(coinbase.outputs[0].script_pubkey);
+                        share_accepted = true;
                     }
                 }
+            }
 
-                // Check if also meets block difficulty
-                if (meetsTarget(block_hash, block_bits)) {
-                    is_block = true;
-                }
+            // Check if also meets block difficulty
+            if (meetsTarget(block_hash, block_bits)) {
+                is_block = true;
             }
         } else {
             // No P2Pool - check block difficulty directly

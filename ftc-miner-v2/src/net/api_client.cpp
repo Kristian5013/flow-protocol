@@ -354,7 +354,6 @@ bool APIClient::submitBlock(const mining::Solution& solution, const mining::Work
     std::string response = httpPost("/mining/submit", ss.str());
 
     bool accepted = response.find("\"accepted\":true") != std::string::npos;
-    // Reject messages are tracked via TUI stats, no need for debug output
     return accepted;
 }
 

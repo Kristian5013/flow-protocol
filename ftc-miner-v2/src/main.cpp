@@ -481,6 +481,9 @@ int main(int argc, char** argv) {
                         if (cfg.tui_enabled) {
                             ui.addLogMessage("Stale block h=" + std::to_string(sol.height) +
                                            " (work h=" + std::to_string(current_work.height) + ")", tui::Color::Yellow);
+                        } else {
+                            std::cout << "[Submit] Stale block h=" << sol.height
+                                      << " (work h=" << current_work.height << ")\n";
                         }
                         stats.shares_stale++;
                         continue;
@@ -491,6 +494,8 @@ int main(int argc, char** argv) {
 
                     if (cfg.tui_enabled) {
                         ui.addLogMessage("Submitting block h=" + std::to_string(sol.height) + "...", tui::Color::Cyan);
+                    } else {
+                        std::cout << "[Submit] Sending block h=" << sol.height << "...\n";
                     }
 
                     bool accepted = client->submitBlock(sol, current_work);
@@ -501,6 +506,8 @@ int main(int argc, char** argv) {
 
                         if (cfg.tui_enabled) {
                             ui.addLogMessage("BLOCK ACCEPTED! h=" + std::to_string(sol.height), tui::Color::Green);
+                        } else {
+                            std::cout << "[Submit] BLOCK ACCEPTED! h=" << sol.height << "\n";
                         }
 
                         // P2Pool: fetch new work immediately but DON'T break
@@ -524,6 +531,8 @@ int main(int argc, char** argv) {
                         node_manager.recordFailure();
                         if (cfg.tui_enabled) {
                             ui.addLogMessage("Block REJECTED h=" + std::to_string(sol.height), tui::Color::Red);
+                        } else {
+                            std::cout << "[Submit] Block REJECTED h=" << sol.height << "\n";
                         }
                     }
                 }
