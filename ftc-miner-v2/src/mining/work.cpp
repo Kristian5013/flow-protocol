@@ -52,11 +52,21 @@ std::vector<uint8_t> Work::buildHeader() const {
     return header;
 }
 
-std::vector<uint8_t> Work::buildBlock(uint32_t nonce) const {
+std::vector<uint8_t> Work::buildBlock(uint32_t nonce, uint32_t timestamp_offset) const {
     std::vector<uint8_t> block;
 
     // Header (80 bytes with nonce)
     auto header = buildHeader();
+
+    // Apply timestamp offset if provided (bytes 68-71 are timestamp, little-endian)
+    if (timestamp_offset > 0) {
+        uint32_t new_ts = timestamp + timestamp_offset;
+        header[68] = new_ts & 0xFF;
+        header[69] = (new_ts >> 8) & 0xFF;
+        header[70] = (new_ts >> 16) & 0xFF;
+        header[71] = (new_ts >> 24) & 0xFF;
+    }
+
     block.insert(block.end(), header.begin(), header.end());
 
     // Nonce (4 bytes, little-endian)

@@ -2,7 +2,7 @@
  * FTC Node - Flow Token Chain
  *
  * Real P2P cryptocurrency - IPv6 only network.
- * Peer discovery via peers.dat + P2P addr exchange.
+ * Peer discovery via BitTorrent DHT (automatic).
  *
  * Author: Kristian Pilatovich
  * Genesis: "Kristian Pilatovich 20091227 - First Real P2P"

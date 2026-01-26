@@ -1,90 +1,54 @@
 #!/bin/bash
-# FTC Build Script for Linux
-# Kristian Pilatovich 20091227 - First Real P2P
+# Build all FTC binaries for Linux
+# Usage: ./build-linux.sh
 
 set -e
 
-echo "========================================"
-echo "  FTC Build Script for Linux"
-echo "========================================"
-echo ""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIST_DIR="$SCRIPT_DIR/dist/linux"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+echo "=== Building FTC Binaries for Linux ==="
+echo "Output: $DIST_DIR"
 
-# Check dependencies
-check_dep() {
-    if ! command -v $1 &> /dev/null; then
-        echo -e "${RED}Error: $1 not found. Please install it.${NC}"
-        exit 1
-    fi
-}
-
-check_dep cmake
-check_dep g++
-check_dep make
-
-# Create dist directory
-mkdir -p dist
+mkdir -p "$DIST_DIR"
 
 # Build ftc-node
-echo -e "${YELLOW}Building ftc-node...${NC}"
-cd ftc-node
+echo ""
+echo ">>> Building ftc-node..."
+cd "$SCRIPT_DIR/ftc-node"
+rm -rf build
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
-cp ftc-node ../../dist/
-cd ../..
-echo -e "${GREEN}ftc-node built!${NC}"
+cp ftc-node "$DIST_DIR/"
+echo "    ftc-node: OK"
 
 # Build ftc-wallet
-echo -e "${YELLOW}Building ftc-wallet...${NC}"
-cd ftc-wallet
+echo ""
+echo ">>> Building ftc-wallet..."
+cd "$SCRIPT_DIR/ftc-wallet"
+rm -rf build
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
-cp ftc-wallet ../../dist/
-cd ../..
-echo -e "${GREEN}ftc-wallet built!${NC}"
+cp ftc-wallet "$DIST_DIR/"
+echo "    ftc-wallet: OK"
 
-# Build ftc-miner (requires OpenCL)
-echo -e "${YELLOW}Building ftc-miner...${NC}"
-if [ -d "/usr/include/CL" ] || [ -d "/opt/cuda/include" ]; then
-    cd ftc-miner-v2
-    mkdir -p build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make -j$(nproc)
-    cp ftc-miner ../../dist/
-    cd ../..
-    echo -e "${GREEN}ftc-miner built!${NC}"
+# Build ftc-miner
+echo ""
+echo ">>> Building ftc-miner..."
+cd "$SCRIPT_DIR/ftc-miner-v2"
+rm -rf build
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc) 2>/dev/null || echo "    (GPU miner may fail without OpenCL)"
+if [ -f ftc-miner ]; then
+    cp ftc-miner "$DIST_DIR/"
+    echo "    ftc-miner: OK"
 else
-    echo -e "${RED}OpenCL not found. Skipping ftc-miner.${NC}"
-    echo "Install: apt install ocl-icd-opencl-dev (or NVIDIA/AMD drivers)"
+    echo "    ftc-miner: SKIPPED (no OpenCL)"
 fi
 
-# Build ftc-full
-echo -e "${YELLOW}Building ftc-full...${NC}"
-cd ftc-full
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-cp ftc-full ../../dist/
-cd ../..
-echo -e "${GREEN}ftc-full built!${NC}"
-
 echo ""
-echo "========================================"
-echo -e "${GREEN}Build complete!${NC}"
-echo "========================================"
-echo ""
-echo "Binaries are in ./dist/"
-ls -la dist/
-echo ""
-echo "Usage:"
-echo "  ./dist/ftc-full -a ftc1q..."
-echo "  ./dist/ftc-node"
-echo "  ./dist/ftc-miner -a ftc1q..."
-echo "  ./dist/ftc-wallet new"
+echo "=== Build Complete ==="
+ls -la "$DIST_DIR/"

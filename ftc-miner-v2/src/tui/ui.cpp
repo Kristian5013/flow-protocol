@@ -146,7 +146,7 @@ void MinerUI::renderStats() {
               << "1m: " << formatHashrate(stats_.avg_hashrate_1m) << "  "
               << "5m: " << formatHashrate(stats_.avg_hashrate_5m) << "  "
               << "15m: " << formatHashrate(stats_.avg_hashrate_15m)
-              << Terminal::reset();
+              << "\033[K" << Terminal::reset();
 
     // Row 2: Shares
     Terminal::moveTo(4, y + 2);
@@ -156,7 +156,7 @@ void MinerUI::renderStats() {
               << Terminal::fg(Color::Red) << stats_.shares_rejected << " rejected"
               << Terminal::fg(Color::BrightBlack) << "  │  "
               << Terminal::fg(Color::Yellow) << stats_.shares_stale << " stale"
-              << Terminal::reset();
+              << "\033[K" << Terminal::reset();
 
     // Row 3: Blocks and Pool
     Terminal::moveTo(4, y + 3);
@@ -165,28 +165,36 @@ void MinerUI::renderStats() {
               << Terminal::fg(Color::BrightBlack) << "  │  "
               << Terminal::fg(Color::White) << "Pool: "
               << Terminal::fg(Color::Cyan) << truncate(stats_.pool_url, 40)
-              << Terminal::reset();
+              << "\033[K" << Terminal::reset();
 
     // Row 4: Network info
     Terminal::moveTo(4, y + 4);
     std::cout << Terminal::fg(Color::White) << "Network:  "
               << "Height: " << Terminal::fg(Color::Cyan) << stats_.block_height
-              << Terminal::fg(Color::BrightBlack) << "  │  "
+              << Terminal::fg(Color::BrightBlack) << " │ "
+              << Terminal::fg(Color::White) << "Diff: "
+              << Terminal::fg(Color::Yellow) << formatNumber(stats_.difficulty, stats_.difficulty >= 100 ? 0 : 2)
+              << Terminal::fg(Color::BrightBlack) << " │ "
               << Terminal::fg(Color::White) << "Peers: "
               << Terminal::fg(Color::Green) << stats_.peer_count
-              << Terminal::fg(Color::BrightBlack) << "  │  "
+              << Terminal::fg(Color::BrightBlack) << " │ "
               << Terminal::fg(Color::White) << "Miners: "
               << Terminal::fg(Color::Yellow) << stats_.active_miners
-              << Terminal::fg(Color::BrightBlack) << "  │  "
-              << Terminal::fg(Color::White) << "Diff: "
-              << Terminal::fg(Color::Cyan) << stats_.difficulty
+              << Terminal::fg(Color::BrightBlack) << " │ "
+              << Terminal::fg(Color::White) << "Net: "
+              << Terminal::fg(Color::Magenta) << formatHashrate(stats_.network_hashrate)
+              << Terminal::fg(Color::BrightBlack) << " │ "
+              << Terminal::fg(Color::White) << "Lat: "
+              << Terminal::fg(Color::Cyan)
+              << (stats_.is_local_node ? "<1ms" : std::to_string(static_cast<int>(stats_.latency_ms)) + "ms")
+              << "\033[K"  // Clear to end of line
               << Terminal::reset();
 
     // Row 5: Uptime
     Terminal::moveTo(4, y + 5);
     std::cout << Terminal::fg(Color::White) << "Uptime:   "
               << Terminal::fg(Color::BrightBlack) << formatDuration(stats_.uptime_seconds)
-              << Terminal::reset();
+              << "\033[K" << Terminal::reset();
 
     // Auto-tune status (right side)
     if (stats_.autotune_active) {
@@ -273,7 +281,8 @@ void MinerUI::renderDevices() {
         // Accepted/Rejected
         std::cout << Terminal::fg(Color::Green) << dev.accepted
                   << Terminal::fg(Color::BrightBlack) << "/"
-                  << Terminal::fg(Color::Red) << dev.rejected;
+                  << Terminal::fg(Color::Red) << dev.rejected
+                  << "\033[K";  // Clear to end of line
 
         std::cout << Terminal::reset();
     }
@@ -296,7 +305,8 @@ void MinerUI::renderHashrateGraph() {
     // Min/Max labels
     Terminal::moveTo(width_ - 25, y + 1);
     std::cout << Terminal::fg(Color::BrightBlack) << "Peak: "
-              << Terminal::fg(Color::Green) << formatHashrate(stats_.total_hashrate);
+              << Terminal::fg(Color::Green) << formatHashrate(stats_.total_hashrate)
+              << "\033[K";
 }
 
 void MinerUI::renderLog() {
@@ -321,7 +331,7 @@ void MinerUI::renderLog() {
         Terminal::moveTo(4, y + 1 + i);
         std::cout << Terminal::fg(color)
                   << truncate(msg, width_ - 8)
-                  << Terminal::reset();
+                  << "\033[K" << Terminal::reset();
     }
 }
 

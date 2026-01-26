@@ -27,8 +27,8 @@ struct Work {
     // Build 76-byte header (without nonce)
     std::vector<uint8_t> buildHeader() const;
 
-    // Build full block with nonce
-    std::vector<uint8_t> buildBlock(uint32_t nonce) const;
+    // Build full block with nonce and optional timestamp offset
+    std::vector<uint8_t> buildBlock(uint32_t nonce, uint32_t timestamp_offset = 0) const;
 
     // Genesis block has height 0, so we only check bits
     bool isValid() const { return bits > 0; }
@@ -40,6 +40,7 @@ struct Solution {
     uint32_t nonce;
     Hash256 hash;
     uint32_t height;
+    uint32_t timestamp_offset = 0;  // Added to original timestamp when nonce space exhausted
 };
 
 // Work manager

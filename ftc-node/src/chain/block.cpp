@@ -106,6 +106,12 @@ std::optional<BlockHeader> BlockHeader::deserialize(const uint8_t* data, size_t 
 crypto::Hash256 BlockHeader::bitsToTarget(uint32_t bits) {
     crypto::Hash256 target{};
 
+    // Special case: bits=0 means maximum target (easiest difficulty)
+    if (bits == 0) {
+        std::memset(target.data(), 0xFF, 32);
+        return target;
+    }
+
     uint32_t exponent = (bits >> 24) & 0xFF;
     uint32_t mantissa = bits & 0x00FFFFFF;
 

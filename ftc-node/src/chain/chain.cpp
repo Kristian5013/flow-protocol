@@ -1034,16 +1034,22 @@ uint32_t Chain::getNextWorkRequired(const BlockIndex* prev, const BlockHeader* h
         return 0x1d00ffff;  // Initial difficulty
     }
 
+    // Safety check: if bits is 0 (corrupted), use genesis difficulty
+    uint32_t prev_bits = prev->bits;
+    if (prev_bits == 0) {
+        prev_bits = 0x1d00ffff;
+    }
+
     // Check if difficulty adjustment
     if ((prev->height + 1) % params_.difficulty_adjustment_interval != 0) {
-        return prev->bits;
+        return prev_bits;
     }
 
     // Get first block of this interval
     int32_t first_height = prev->height - (params_.difficulty_adjustment_interval - 1);
     const BlockIndex* first = prev->getAncestor(first_height);
     if (!first) {
-        return prev->bits;
+        return prev_bits;
     }
 
     // Calculate actual timespan
@@ -1060,7 +1066,7 @@ uint32_t Chain::getNextWorkRequired(const BlockIndex* prev, const BlockHeader* h
 
     // Calculate new target
     // Note: Hash256 and uint256_t are both std::array<uint8_t, 32>
-    crypto::Hash256 target_hash = BlockHeader::bitsToTarget(prev->bits);
+    crypto::Hash256 target_hash = BlockHeader::bitsToTarget(prev_bits);
     uint256_t target;
     std::copy(target_hash.begin(), target_hash.end(), target.begin());
 
@@ -1183,6 +1189,14 @@ bool Chain::loadBlockIndex() {
         if (tip_ == nullptr || p.first > tip_->height) {
             tip_ = p.second;
         }
+    }
+
+    // Fix genesis bits if corrupted (bits=0 from old chain.dat)
+    if (genesis_ && genesis_->bits == 0) {
+        LOG_WARN("Genesis block has invalid bits=0, fixing to 0x1d00ffff");
+        genesis_->bits = 0x1d00ffff;
+        genesis_->chain_work = getBlockProof(0x1d00ffff);
+        dirty_indices_.insert(genesis_->hash);
     }
 
     // Build transaction index from main chain blocks

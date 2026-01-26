@@ -20,7 +20,7 @@ DHT::DHT(uint16_t port, bool mainnet)
     node_id_ = NodeId::random();
 
     // Generate info_hash for FTC network
-    std::string network_id = mainnet ? "FTC-mainnet-v1" : "FTC-testnet-v1";
+    std::string network_id = mainnet ? "FTC-mainnet-v2" : "FTC-testnet-v2";
     info_hash_ = NodeId::fromHash(network_id);
 
     // Initialize routing table

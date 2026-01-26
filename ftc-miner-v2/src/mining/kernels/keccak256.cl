@@ -120,7 +120,7 @@ void keccak256_80(const uchar* input, ulong nonce, uchar* output) {
 }
 
 // Compare hash with target (returns 1 if hash <= target)
-// BIG-ENDIAN comparison (byte 0 = MSB) - SAME as node
+// BIG-ENDIAN comparison (byte 0 = MSB) - same as node's Keccak256::compare
 int compare_hash(const uchar* hash, __global const uchar* target) {
     for (int i = 0; i < 32; i++) {
         if (hash[i] < target[i]) return 1;  // hash < target = valid

@@ -202,6 +202,9 @@ int main(int argc, char** argv) {
         if (!ui.init()) {
             std::cerr << "Failed to initialize TUI, falling back to simple mode\n";
             cfg.tui_enabled = false;
+        } else {
+            // Disable debug output when TUI is active (prevents screen corruption)
+            node_manager.setDebugOutput(false);
         }
     }
 
@@ -325,7 +328,19 @@ int main(int argc, char** argv) {
 
         stats.connected = true;
         stats.block_height = static_cast<int32_t>(api_client->getBlockHeight());
-        stats.difficulty = api_client->getDifficulty();
+
+        // Calculate human-readable difficulty from bits
+        uint32_t bits = api_client->getDifficulty();
+        if (bits > 0) {
+            uint32_t exponent = (bits >> 24) & 0xFF;
+            uint32_t mantissa = bits & 0x00FFFFFF;
+            if (mantissa > 0) {
+                stats.difficulty = static_cast<double>(0x00FFFF) / static_cast<double>(mantissa);
+                int exp_diff = 0x1d - static_cast<int>(exponent);
+                for (int i = 0; i < exp_diff; i++) stats.difficulty *= 256.0;
+                for (int i = 0; i > exp_diff; i--) stats.difficulty /= 256.0;
+            }
+        }
 
         // Get initial network stats
         auto initial_net_stats = api_client->getNetworkStats();
@@ -475,7 +490,6 @@ int main(int argc, char** argv) {
 
             if (work_elapsed >= WORK_POLL_MS && !cfg.benchmark_mode) {
                 last_work_poll = now;
-                auto req_start = std::chrono::steady_clock::now();
 
                 auto* client = node_manager.getClient();
                 if (!client) {
@@ -491,11 +505,14 @@ int main(int argc, char** argv) {
 
                 // Get current work BEFORE fetching new work (for stale check)
                 mining::Work current_work = work_manager.getWork();
+                // Save original height for stale check (current_work may change in loop)
+                int32_t batch_height = current_work.height;
 
                 // Submit any pending solutions BEFORE updating work
                 auto solutions = work_manager.getPendingSolutions();
                 for (const auto& sol : solutions) {
-                    if (sol.height != current_work.height) {
+                    // Check against batch_height, not current_work.height (which changes after accept)
+                    if (sol.height != batch_height) {
                         if (cfg.tui_enabled) {
                             ui.addLogMessage("Stale block h=" + std::to_string(sol.height) +
                                            " (work h=" + std::to_string(current_work.height) + ")", tui::Color::Yellow);
@@ -521,6 +538,8 @@ int main(int argc, char** argv) {
                             ui.addLogMessage("BLOCK ACCEPTED! h=" + std::to_string(sol.height), tui::Color::Green);
                         }
 
+                        // P2Pool: fetch new work immediately but DON'T break
+                        // Continue processing remaining solutions (they may match new height)
                         auto fresh_work = client->getMiningTemplate(cfg.wallet_address);
                         if (fresh_work) {
                             work_manager.setWork(*fresh_work);
@@ -534,7 +553,7 @@ int main(int argc, char** argv) {
                                 ui.addLogMessage("Failed to get fresh work!", tui::Color::Red);
                             }
                         }
-                        break;
+                        // Don't break - continue processing remaining solutions for P2Pool
                     } else {
                         stats.shares_rejected++;
                         node_manager.recordFailure();
@@ -545,11 +564,12 @@ int main(int argc, char** argv) {
                 }
 
                 // Now fetch new work and update if height changed
+                auto req_start = std::chrono::steady_clock::now();
                 auto new_work = client->getMiningTemplate(cfg.wallet_address);
+                auto req_end = std::chrono::steady_clock::now();
 
                 if (new_work) {
-                    // Success - record latency
-                    auto req_end = std::chrono::steady_clock::now();
+                    // Success - record latency (only getMiningTemplate time, not block submissions)
                     double latency = std::chrono::duration<double, std::milli>(req_end - req_start).count();
                     node_manager.recordSuccess(latency);
                     consecutive_failures = 0;
@@ -597,6 +617,29 @@ int main(int argc, char** argv) {
                     if (net_stats.height > 0) {
                         network_height = net_stats.height;
                     }
+                    // Update network hashrate
+                    stats.network_hashrate = net_stats.network_hashrate;
+                    // Update difficulty periodically
+                    uint32_t new_bits = client->getDifficulty();
+                    if (new_bits > 0) {
+                        uint32_t exponent = (new_bits >> 24) & 0xFF;
+                        uint32_t mantissa = new_bits & 0x00FFFFFF;
+                        if (mantissa > 0) {
+                            double diff = static_cast<double>(0x00FFFF) / static_cast<double>(mantissa);
+                            int exp_diff = 0x1d - static_cast<int>(exponent);
+                            for (int i = 0; i < exp_diff; i++) diff *= 256.0;
+                            for (int i = 0; i > exp_diff; i--) diff /= 256.0;
+                            stats.difficulty = diff;
+                        }
+                    }
+                }
+                // Update latency from current node
+                auto* current_node = node_manager.getCurrentNode();
+                if (current_node) {
+                    stats.latency_ms = current_node->avg_latency_ms;
+                    // Check if it's a local node
+                    const auto& h = current_node->host;
+                    stats.is_local_node = (h == "::1" || h == "127.0.0.1" || h == "localhost");
                 }
             }
 
@@ -695,8 +738,10 @@ int main(int argc, char** argv) {
             if (stats_elapsed >= 10) {
                 last_stats_print = now;
                 std::cout << "[Stats] Hashrate: " << tui::formatHashrate(stats.total_hashrate)
+                          << " | Net: " << tui::formatHashrate(stats.network_hashrate)
                           << " | Blocks: " << stats.blocks_found
                           << " | Height: " << stats.block_height
+                          << " | Latency: " << (stats.is_local_node ? "<1ms" : std::to_string(static_cast<int>(stats.latency_ms)) + "ms")
                           << " | Peers: " << stats.peer_count
                           << " | Miners: " << stats.active_miners << "\n";
             }

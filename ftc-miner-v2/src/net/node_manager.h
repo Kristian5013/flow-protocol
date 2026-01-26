@@ -89,6 +89,9 @@ public:
     // Health check interval
     void setHealthCheckInterval(int ms) { health_check_interval_ms_ = ms; }
 
+    // Control debug output (disable when TUI is active)
+    void setDebugOutput(bool enabled) { debug_output_ = enabled; }
+
     // Get stats
     size_t getNodeCount() const { return nodes_.size(); }
     size_t getAvailableCount() const;
@@ -108,6 +111,7 @@ private:
     // DHT for peer discovery
     std::unique_ptr<dht::DHT> dht_;
     std::atomic<bool> dht_running_{false};
+    bool debug_output_ = true;  // Disabled when TUI is active
 
     // Internal helpers
     bool checkNode(NodeInfo& node);

@@ -8,6 +8,26 @@
 
 namespace net {
 
+// Helper: narrow to wide string (ASCII only, safe for URLs)
+static std::wstring toWide(const std::string& s) {
+    std::wstring result;
+    result.reserve(s.size());
+    for (char c : s) {
+        result += static_cast<wchar_t>(static_cast<unsigned char>(c));
+    }
+    return result;
+}
+
+// Helper: wide to narrow string (ASCII only)
+static std::string toNarrow(const std::wstring& s) {
+    std::string result;
+    result.reserve(s.size());
+    for (wchar_t c : s) {
+        result += static_cast<char>(c & 0xFF);
+    }
+    return result;
+}
+
 static bool parseUrl(const std::string& url, std::wstring& host, std::wstring& path, INTERNET_PORT& port, bool& https) {
     https = false;
     port = 80;
@@ -43,8 +63,8 @@ static bool parseUrl(const std::string& url, std::wstring& host, std::wstring& p
     }
 
     // Convert to wide strings
-    host = std::wstring(host_part.begin(), host_part.end());
-    path = std::wstring(path_part.begin(), path_part.end());
+    host = toWide(host_part);
+    path = toWide(path_part);
 
     return !host.empty();
 }
@@ -79,7 +99,7 @@ HttpsClient::Response HttpsClient::get(const std::string& url) {
     HINTERNET connect = WinHttpConnect(session, host.c_str(), port, 0);
     if (!connect) {
         WinHttpCloseHandle(session);
-        response.error = "Failed to connect to " + std::string(host.begin(), host.end());
+        response.error = "Failed to connect to " + toNarrow(host);
         return response;
     }
 
@@ -228,7 +248,7 @@ HttpsClient::Response HttpsClient::post(const std::string& url, const std::strin
     WinHttpSetTimeouts(request, 10000, 10000, 10000, 10000);
 
     // Set Content-Type header
-    std::wstring headers = L"Content-Type: " + std::wstring(content_type.begin(), content_type.end());
+    std::wstring headers = L"Content-Type: " + toWide(content_type);
 
     BOOL result = WinHttpSendRequest(
         request,

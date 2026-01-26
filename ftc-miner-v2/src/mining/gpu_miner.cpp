@@ -120,10 +120,11 @@ void keccak256_80(const uchar* input, ulong nonce, uchar* output) {
 }
 
 int compare_hash(const uchar* hash, __global const uchar* target) {
-    // Simple check: first 4 bytes of hash must be <= first 4 bytes of target
-    // For difficulty 1: target[0-3] = 0, so hash[0-3] must all be 0
+    // Compare BIG-ENDIAN: byte[0] = MSB, byte[31] = LSB
+    // Same as node's Keccak256::compare
+    // Returns 1 if hash <= target (valid), 0 if hash > target (invalid)
 
-    // Quick reject: if any of first 4 bytes > target, invalid
+    // Quick check first bytes (MSB - most likely to differ)
     if (hash[0] > target[0]) return 0;
     if (hash[0] < target[0]) return 1;
 
@@ -136,7 +137,7 @@ int compare_hash(const uchar* hash, __global const uchar* target) {
     if (hash[3] > target[3]) return 0;
     if (hash[3] < target[3]) return 1;
 
-    // First 4 bytes equal, check rest
+    // Check remaining bytes from low index to high
     for (int i = 4; i < 32; i++) {
         if (hash[i] < target[i]) return 1;
         if (hash[i] > target[i]) return 0;
@@ -502,7 +503,7 @@ void GPUMiner::miningThread(int device_id) {
 
     std::random_device rd;
     std::mt19937_64 gen(rd());
-    std::uniform_int_distribution<uint64_t> dis;
+    std::uniform_int_distribution<uint32_t> dis32(0, UINT32_MAX);
 
     std::vector<uint8_t> header;
     Hash256 target;
@@ -512,7 +513,9 @@ void GPUMiner::miningThread(int device_id) {
     uint64_t local_hashes = 0;
     auto last_stats_time = std::chrono::steady_clock::now();
 
-    uint64_t nonce = dis(gen);
+    uint32_t nonce = dis32(gen);  // Use 32-bit nonce directly
+    uint64_t nonces_tested = 0;  // Track nonces tested for current header
+    uint32_t timestamp_offset = 0;  // Offset to add to timestamp when nonce wraps
 
     while (running_) {
         // Check for pause
@@ -536,17 +539,40 @@ void GPUMiner::miningThread(int device_id) {
             job_id = work.job_id;
             height = work.height;
 
-            nonce = dis(gen);
+            nonce = dis32(gen);  // Random 32-bit starting nonce
+            nonces_tested = 0;   // Reset nonce counter for new work
+            timestamp_offset = 0;  // Reset timestamp offset
 
             if (device_id == 0) {
                 work_manager_->clearNewWork();
             }
 
             // Upload header (76 bytes) and target (32 bytes)
-            // Note: kernel only uses 76 bytes + nonce, nonce is passed separately
             clEnqueueWriteBuffer(ctx.queue, ctx.header_buf, CL_FALSE, 0, header.size(), header.data(), 0, nullptr, nullptr);
             clEnqueueWriteBuffer(ctx.queue, ctx.target_buf, CL_FALSE, 0, 32, target.data(), 0, nullptr, nullptr);
             clFinish(ctx.queue);
+        }
+
+        // Check if we've exhausted the 32-bit nonce space (~4.3 billion)
+        // If so, roll the timestamp to create a new header
+        if (nonces_tested >= 0xFFFFFFFFULL) {
+            timestamp_offset++;
+            nonces_tested = 0;
+            nonce = dis32(gen);  // New random starting nonce
+
+            // Rebuild header with new timestamp
+            Work work = work_manager_->getWork();
+            header = work.buildHeader();
+
+            // Modify timestamp in header (bytes 68-71, little-endian)
+            uint32_t new_ts = work.timestamp + timestamp_offset;
+            header[68] = new_ts & 0xFF;
+            header[69] = (new_ts >> 8) & 0xFF;
+            header[70] = (new_ts >> 16) & 0xFF;
+            header[71] = (new_ts >> 24) & 0xFF;
+
+            // Re-upload header
+            clEnqueueWriteBuffer(ctx.queue, ctx.header_buf, CL_TRUE, 0, header.size(), header.data(), 0, nullptr, nullptr);
         }
 
         if (header.size() < 76) {
@@ -558,10 +584,11 @@ void GPUMiner::miningThread(int device_id) {
         uint32_t zero = 0;
         clEnqueueWriteBuffer(ctx.queue, ctx.count_buf, CL_TRUE, 0, sizeof(uint32_t), &zero, 0, nullptr, nullptr);
 
-        // Set kernel arguments
+        // Set kernel arguments (use 64-bit to pass nonce, kernel extracts lower 32 bits)
+        uint64_t nonce_start = static_cast<uint64_t>(nonce);
         clSetKernelArg(ctx.kernel, 0, sizeof(cl_mem), &ctx.header_buf);
         clSetKernelArg(ctx.kernel, 1, sizeof(cl_mem), &ctx.target_buf);
-        clSetKernelArg(ctx.kernel, 2, sizeof(uint64_t), &nonce);
+        clSetKernelArg(ctx.kernel, 2, sizeof(uint64_t), &nonce_start);
         clSetKernelArg(ctx.kernel, 3, sizeof(cl_mem), &ctx.result_buf);
         clSetKernelArg(ctx.kernel, 4, sizeof(cl_mem), &ctx.count_buf);
 
@@ -588,8 +615,7 @@ void GPUMiner::miningThread(int device_id) {
         clEnqueueReadBuffer(ctx.queue, ctx.count_buf, CL_TRUE, 0, sizeof(uint32_t), &result_count, 0, nullptr, nullptr);
 
         if (result_count > 0) {
-
-            std::vector<uint64_t> results(std::min(result_count, 16u));
+            std::vector<uint64_t> results(std::min(result_count, 256u));
             clEnqueueReadBuffer(ctx.queue, ctx.result_buf, CL_TRUE, 0, results.size() * sizeof(uint64_t), results.data(), 0, nullptr, nullptr);
 
             for (uint64_t found_nonce : results) {
@@ -603,6 +629,7 @@ void GPUMiner::miningThread(int device_id) {
                     sol.nonce = nonce32;
                     sol.hash = hash;
                     sol.height = height;
+                    sol.timestamp_offset = timestamp_offset;  // Include offset for block building
 
                     work_manager_->submitSolution(sol);
                     dev.accepted++;
@@ -616,7 +643,8 @@ void GPUMiner::miningThread(int device_id) {
 
         // Update counters
         local_hashes += global_size;
-        nonce += global_size;
+        nonce += static_cast<uint32_t>(global_size);  // 32-bit nonce wraps naturally
+        nonces_tested += global_size;
 
         // Update stats periodically
         auto now = std::chrono::steady_clock::now();

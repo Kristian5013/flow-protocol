@@ -29,12 +29,13 @@ public:
     int64_t getBlockHeight();
     uint32_t getDifficulty();
 
-    // Network stats (peer count, active miners, height)
+    // Network stats (peer count, active miners, height, hashrate)
     struct NetworkStats {
         uint32_t peer_count = 0;
         uint32_t active_miners = 0;
         int32_t height = 0;
         bool p2pool_running = false;
+        double network_hashrate = 0.0;  // Total network hashrate (H/s)
     };
     NetworkStats getNetworkStats();
 

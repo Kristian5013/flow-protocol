@@ -346,14 +346,16 @@ std::optional<mining::Work> APIClient::getMiningTemplate(const std::string& addr
 }
 
 bool APIClient::submitBlock(const mining::Solution& solution, const mining::Work& work) {
-    std::vector<uint8_t> block_data = work.buildBlock(solution.nonce);
+    std::vector<uint8_t> block_data = work.buildBlock(solution.nonce, solution.timestamp_offset);
     std::string block_hex = bytesToHexString(block_data);
 
     std::ostringstream ss;
     ss << "{\"hex\":\"" << block_hex << "\"}";
     std::string response = httpPost("/mining/submit", ss.str());
 
-    return response.find("\"accepted\":true") != std::string::npos;
+    bool accepted = response.find("\"accepted\":true") != std::string::npos;
+    // Reject messages are tracked via TUI stats, no need for debug output
+    return accepted;
 }
 
 int64_t APIClient::getBlockHeight() {
@@ -377,7 +379,7 @@ uint32_t APIClient::getDifficulty() {
 APIClient::NetworkStats APIClient::getNetworkStats() {
     NetworkStats stats;
 
-    // Get peer count and height from /status endpoint
+    // Get peer count, height, and network hashrate from /status endpoint
     std::string status_response = httpGet("/status");
     if (!status_response.empty()) {
         // Look for "chain_height":N
@@ -390,6 +392,12 @@ APIClient::NetworkStats APIClient::getNetworkStats() {
         size_t peers_pos = status_response.find("\"peer_count\":");
         if (peers_pos != std::string::npos) {
             stats.peer_count = std::stoul(status_response.substr(peers_pos + 13));
+        }
+
+        // Look for "network_hashrate":N
+        size_t hashrate_pos = status_response.find("\"network_hashrate\":");
+        if (hashrate_pos != std::string::npos) {
+            stats.network_hashrate = std::stod(status_response.substr(hashrate_pos + 19));
         }
     }
 

@@ -4,6 +4,9 @@ project(ftc-miner VERSION 2.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# OpenCL version (suppress deprecation warnings)
+add_definitions(-DCL_TARGET_OPENCL_VERSION=120)
+
 # Platform detection
 if(WIN32)
     add_definitions(-D_WIN32_WINNT=0x0601)

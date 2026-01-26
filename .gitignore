@@ -1,7 +1,9 @@
-# Build
+# Build directories
 build/
-dist/
-*.exe
+build-*/
+*/build-*/
+
+# Compiled files (except release binaries)
 *.obj
 *.o
 *.lib
@@ -14,6 +16,7 @@ package-lock.json
 # IDE
 .vs/
 .vscode/
+.claude/
 *.user
 *.suo
 
@@ -26,3 +29,6 @@ package-lock.json
 Thumbs.db
 .DS_Store
 nul
+
+# Temp files
+*.tmp

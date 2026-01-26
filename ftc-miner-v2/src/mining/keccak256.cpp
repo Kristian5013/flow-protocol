@@ -147,11 +147,18 @@ Hash256 Keccak256::hashHeader(const uint8_t* header76, uint32_t nonce) {
 Hash256 Keccak256::bitsToTarget(uint32_t bits) {
     Hash256 target = {0};
 
+    // Special case: bits = 0 means maximum target (easiest difficulty)
+    if (bits == 0) {
+        std::memset(target.data(), 0xFF, 32);
+        return target;
+    }
+
+    // Compact format: XXYYZZWW where XX is exponent, YYZZ is mantissa
     uint32_t exponent = (bits >> 24) & 0xFF;
     uint32_t mantissa = bits & 0x00FFFFFF;
 
-    // Target is stored in BIG-ENDIAN format (byte 0 = MSB, byte 31 = LSB)
-    // Same format as node for compatibility
+    // BIG-ENDIAN format: byte[0] = MSB, byte[31] = LSB
+    // This matches the node's BlockHeader::bitsToTarget exactly
     if (exponent <= 3) {
         mantissa >>= 8 * (3 - exponent);
         target[31] = mantissa & 0xFF;
@@ -161,7 +168,7 @@ Hash256 Keccak256::bitsToTarget(uint32_t bits) {
         // Target overflows 256 bits - set to maximum (easiest difficulty)
         std::memset(target.data(), 0xFF, 32);
     } else {
-        int offset = 32 - exponent;  // Position from MSB
+        int offset = 32 - exponent;
         if (offset >= 0 && offset < 32) {
             target[offset] = (mantissa >> 16) & 0xFF;
             if (offset + 1 < 32) target[offset + 1] = (mantissa >> 8) & 0xFF;
@@ -173,9 +180,9 @@ Hash256 Keccak256::bitsToTarget(uint32_t bits) {
 }
 
 bool Keccak256::meetsTarget(const Hash256& hash, const Hash256& target) {
-    // Compare BIG-ENDIAN (most significant byte is at index 0)
-    // Same as node's crypto::Keccak256::compare
-    for (int i = 0; i < 32; ++i) {
+    // Compare BIG-ENDIAN (byte[0] = MSB) - same as node's Keccak256::compare
+    // Returns true if hash <= target
+    for (size_t i = 0; i < 32; ++i) {
         if (hash[i] < target[i]) return true;
         if (hash[i] > target[i]) return false;
     }

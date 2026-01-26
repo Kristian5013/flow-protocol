@@ -52,11 +52,14 @@ struct MiningStats {
 
     // Network
     std::string pool_url;
-    uint32_t difficulty = 0;
+    double difficulty = 1.0;           // Calculated difficulty (not raw bits)
     int32_t block_height = 0;
     bool connected = false;
     uint32_t peer_count = 0;
     uint32_t active_miners = 0;
+    double latency_ms = 0.0;           // Latency to current node
+    bool is_local_node = false;        // True if connected to localhost
+    double network_hashrate = 0.0;     // Total network hashrate (H/s)
 
     // Time
     std::chrono::steady_clock::time_point start_time;

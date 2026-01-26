@@ -46,6 +46,10 @@ void setupMiningRoutes(RouteContext& ctx) {
         int32_t height = tip->height + 1;
         uint64_t reward = chain->getBlockReward(height);
         uint32_t bits = chain->getNextWorkRequired(tip);
+        // Fallback: if bits is 0 (corrupted), use genesis difficulty
+        if (bits == 0) {
+            bits = 0x1d00ffff;
+        }
         uint32_t timestamp = static_cast<uint32_t>(std::time(nullptr));
 
         // Build coinbase transaction
@@ -264,7 +268,11 @@ void setupMiningRoutes(RouteContext& ctx) {
 
         auto tip = chain->getTip();
         int32_t height = tip ? tip->height : -1;
-        uint32_t bits = tip ? chain->getNextWorkRequired(tip) : 0;
+        uint32_t bits = tip ? chain->getNextWorkRequired(tip) : 0x1d00ffff;
+        // Fallback: if bits is 0 (corrupted), use genesis difficulty
+        if (bits == 0) {
+            bits = 0x1d00ffff;
+        }
 
         JsonBuilder json;
         json.beginObject()
@@ -319,6 +327,10 @@ void setupMiningRoutes(RouteContext& ctx) {
             int32_t height = tip->height + 1;
             uint64_t reward = chain->getBlockReward(height);
             uint32_t bits = chain->getNextWorkRequired(tip);
+            // Fallback: if bits is 0 (corrupted), use genesis difficulty
+            if (bits == 0) {
+                bits = 0x1d00ffff;
+            }
             uint32_t min_timestamp = tip->timestamp + 1;
             uint32_t now = static_cast<uint32_t>(std::time(nullptr));
             uint32_t timestamp = std::max(min_timestamp, now);

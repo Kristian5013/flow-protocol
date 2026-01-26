@@ -53,6 +53,12 @@ void NodeManager::onDHTPeerFound(const std::string& ip, uint16_t port) {
     // Skip localhost
     if (ip == "::1" || ip == "127.0.0.1") return;
 
+    // Skip known stale AWS prefixes (DHT caches old announcements)
+    // AWS us-east-1 IPv6 prefix
+    if (ip.find("2600:1f18:") == 0) {
+        return;  // Skip AWS nodes that are likely stale
+    }
+
     // Add node - verification happens later via checkNode/refreshNodes
     addNode(ip, api_port);
 }
@@ -86,11 +92,21 @@ void NodeManager::addNode(const std::string& host, uint16_t port) {
 bool NodeManager::checkNode(NodeInfo& node) {
     auto start = std::chrono::steady_clock::now();
 
+    if (debug_output_) {
+        std::cerr << "[DEBUG] Checking node: " << node.host << ":" << node.port << std::endl;
+    }
+
     APIClient client(node.host, node.port);
     bool success = client.connect();
 
     auto end = std::chrono::steady_clock::now();
     double latency = std::chrono::duration<double, std::milli>(end - start).count();
+
+    if (debug_output_) {
+        std::cerr << "[DEBUG] Node " << node.host << ":" << node.port
+                  << " connect=" << (success ? "OK" : "FAILED")
+                  << " latency=" << latency << "ms" << std::endl;
+    }
 
     node.last_check = end;
     node.total_requests++;
@@ -117,7 +133,40 @@ bool NodeManager::checkNode(NodeInfo& node) {
 void NodeManager::selectBestNode() {
     if (nodes_.empty()) return;
 
-    // Find node with best score
+    // For solo mining, ALWAYS prefer localhost if available
+    // Remote nodes have different chain tips and will reject our blocks
+    int localhost_index = -1;
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        const auto& node = nodes_[i];
+        if ((node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") &&
+            node.available && node.consecutive_failures < max_consecutive_failures_) {
+            localhost_index = static_cast<int>(i);
+            break;
+        }
+    }
+
+    // If localhost is available and we're already on it, don't switch
+    if (localhost_index >= 0 && current_index_ == localhost_index) {
+        return;
+    }
+
+    // If localhost is available, always use it
+    if (localhost_index >= 0) {
+        current_index_ = localhost_index;
+        const auto& node = nodes_[current_index_];
+
+        current_client_ = std::make_unique<APIClient>(node.host, node.port);
+
+        log("Selected node: " + node.host + ":" + std::to_string(node.port) +
+            " (latency: " + std::to_string(static_cast<int>(node.avg_latency_ms)) + "ms)");
+
+        if (on_node_changed_) {
+            on_node_changed_(node.host, node.port);
+        }
+        return;
+    }
+
+    // Localhost not available, fall back to best remote node
     int best_index = -1;
     double best_score = 999999.0;
 
@@ -136,7 +185,7 @@ void NodeManager::selectBestNode() {
         current_client_ = std::make_unique<APIClient>(node.host, node.port);
 
         log("Selected node: " + node.host + ":" + std::to_string(node.port) +
-            " (latency: " + std::to_string(static_cast<int>(node.avg_latency_ms)) + "ms)");
+            " (latency: " + std::to_string(static_cast<int>(node.avg_latency_ms)) + "ms");
 
         if (on_node_changed_) {
             on_node_changed_(node.host, node.port);
