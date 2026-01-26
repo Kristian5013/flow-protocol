@@ -104,9 +104,10 @@ bool NodeManager::checkNode(NodeInfo& node) {
     auto end = std::chrono::steady_clock::now();
     double latency = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Check if node responded and has peers (not isolated)
+    // Check if node responded and has sufficient peers (not isolated)
+    // Require at least 2 peers - nodes with 1 peer might be in unstable state
     bool reachable = (stats.height > 0);
-    bool has_peers = (stats.peer_count > 0);
+    bool has_peers = (stats.peer_count >= 2);
     bool success = reachable && has_peers;
 
     if (debug_output_) {
@@ -149,13 +150,14 @@ void NodeManager::selectBestNode() {
     if (nodes_.empty()) return;
 
     // Find max height among all available PUBLIC nodes (exclude localhost)
+    // Require at least 2 peers to be considered synced
     int32_t max_height = 0;
     for (const auto& node : nodes_) {
         // Skip localhost - only use public nodes
         if (node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") {
             continue;
         }
-        if (node.available && node.peer_count > 0 && node.height > max_height) {
+        if (node.available && node.peer_count >= 2 && node.height > max_height) {
             max_height = node.height;
         }
     }
@@ -177,8 +179,8 @@ void NodeManager::selectBestNode() {
             continue;
         }
 
-        // Skip unavailable or nodes without peers
-        if (!node.available || node.peer_count == 0) continue;
+        // Skip unavailable or nodes without sufficient peers
+        if (!node.available || node.peer_count < 2) continue;
 
         // Skip nodes that are behind (more than 2 blocks from max)
         if (node.height < max_height - 2) continue;
@@ -362,7 +364,7 @@ size_t NodeManager::getAvailableCount() const {
         if (node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") {
             continue;
         }
-        if (node.available && node.peer_count > 0 &&
+        if (node.available && node.peer_count >= 2 &&
             node.consecutive_failures < max_consecutive_failures_) {
             count++;
         }
