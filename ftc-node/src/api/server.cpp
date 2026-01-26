@@ -20,6 +20,7 @@
 #include <sstream>
 #include <iomanip>
 #include <optional>
+#include <thread>
 
 #ifdef _WIN32
 #pragma comment(lib, "ws2_32.lib")
@@ -320,9 +321,12 @@ bool HttpConnection::parseRequest() {
 
 void HttpConnection::close() {
     if (socket != INVALID_SOCKET) {
+        // Graceful shutdown - signal we're done sending
 #ifdef _WIN32
+        ::shutdown(socket, SD_SEND);
         ::closesocket(socket);
 #else
+        ::shutdown(socket, SHUT_WR);
         ::close(socket);
 #endif
         socket = INVALID_SOCKET;
@@ -668,20 +672,38 @@ void Server::sendResponse(HttpConnection& conn, const HttpResponse& response) {
     std::string raw = response.build();
     conn.write_buffer += raw;
 
-    // Try to send immediately
+    // Try to send all data with retry loop
     if (conn.socket != INVALID_SOCKET && !conn.write_buffer.empty()) {
-        int sent = send(conn.socket, conn.write_buffer.c_str(),
-                       static_cast<int>(conn.write_buffer.size()), 0);
-        if (sent > 0) {
-            conn.write_buffer = conn.write_buffer.substr(sent);
+        int retries = 10;  // Max retry attempts
+        while (!conn.write_buffer.empty() && retries > 0) {
+            int sent = send(conn.socket, conn.write_buffer.c_str(),
+                           static_cast<int>(conn.write_buffer.size()), 0);
+            if (sent > 0) {
+                conn.write_buffer = conn.write_buffer.substr(sent);
+            } else if (sent == 0) {
+                break;  // Connection closed
+            } else {
+                // Error - check if would block
+#ifdef _WIN32
+                if (WSAGetLastError() == WSAEWOULDBLOCK) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    retries--;
+                    continue;
+                }
+#else
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    retries--;
+                    continue;
+                }
+#endif
+                break;  // Other error
+            }
         }
     }
 
-    // Close connection after response (HTTP/1.0 style for simplicity)
-    // Keep-alive would require more complex state management
-    if (conn.write_buffer.empty()) {
-        conn.close();
-    }
+    // Always close connection after response (HTTP/1.0 style)
+    conn.close();
 
     // Reset for next request
     conn.request_complete = false;

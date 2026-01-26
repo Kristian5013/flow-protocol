@@ -620,30 +620,40 @@ uint32_t Consensus::getNextWorkRequired(uint64_t height,
         actual_timespan = target_timespan * 4;
     }
 
-    // Calculate new target
+    // Calculate new target: new_target = current_target * actual_timespan / target_timespan
     Hash256 current_target = bitsToTarget(last_header.bits);
 
-    // new_target = current_target * actual_timespan / target_timespan
-    // This is a simplified calculation - proper implementation needs big integer math
-    // For now, we'll do a rough approximation
+    // Multiply target by actual_timespan (256-bit * 64-bit multiplication)
+    uint64_t carry = 0;
+    Hash256 new_target;
+    std::memset(new_target.data(), 0, 32);
 
-    double ratio = static_cast<double>(actual_timespan) / static_cast<double>(target_timespan);
-
-    // Convert target to a work estimate and adjust
-    uint32_t new_bits = last_header.bits;
-
-    if (ratio > 1.0) {
-        // Make easier (increase target)
-        // Increase exponent or mantissa
-        new_bits += static_cast<uint32_t>((ratio - 1.0) * 0x10000);
-    } else {
-        // Make harder (decrease target)
-        new_bits -= static_cast<uint32_t>((1.0 - ratio) * 0x10000);
+    for (int i = 0; i < 32; i++) {
+        uint64_t product = static_cast<uint64_t>(current_target[i]) * static_cast<uint64_t>(actual_timespan) + carry;
+        new_target[i] = static_cast<uint8_t>(product & 0xFF);
+        carry = product >> 8;
     }
 
-    // Don't exceed pow_limit
+    // Divide by target_timespan (256-bit / 64-bit division)
+    uint64_t remainder = 0;
+    for (int i = 31; i >= 0; i--) {
+        uint64_t dividend = (remainder << 8) | new_target[i];
+        new_target[i] = static_cast<uint8_t>(dividend / static_cast<uint64_t>(target_timespan));
+        remainder = dividend % static_cast<uint64_t>(target_timespan);
+    }
+
+    // Convert back to bits
+    uint32_t new_bits = targetToBits(new_target);
+
+    // Don't exceed pow_limit (easier than minimum difficulty)
     if (new_bits > params_.pow_limit_bits) {
         new_bits = params_.pow_limit_bits;
+    }
+
+    // Ensure we don't go below minimum target (sanity check)
+    // Minimum bits means maximum difficulty - don't allow bits below 0x03000000
+    if (new_bits < 0x03000000) {
+        new_bits = 0x03000000;
     }
 
     return new_bits;
