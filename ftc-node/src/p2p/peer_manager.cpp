@@ -956,9 +956,12 @@ std::vector<PeerInfo> PeerManager::getPeerInfo() const {
 
 size_t PeerManager::getPeerCount() const {
     std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
-    // Count unique nodes by IP (not connections)
+    // Count unique ESTABLISHED nodes by IP (completed VERSION handshake)
     std::set<std::array<uint8_t, 16>> unique_ips;
     for (const auto& p : peers_) {
+        // Only count peers that completed handshake
+        if (p.second.state != PeerState::ESTABLISHED) continue;
+
         std::array<uint8_t, 16> ip;
         std::memcpy(ip.data(), p.second.info.addr.ip, 16);
         unique_ips.insert(ip);
@@ -975,7 +978,8 @@ size_t PeerManager::getInboundCount() const {
     std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
     size_t count = 0;
     for (auto& p : peers_) {
-        if (p.second.info.direction == ConnectionDir::INBOUND) {
+        if (p.second.state == PeerState::ESTABLISHED &&
+            p.second.info.direction == ConnectionDir::INBOUND) {
             count++;
         }
     }
@@ -986,7 +990,8 @@ size_t PeerManager::getOutboundCount() const {
     std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
     size_t count = 0;
     for (auto& p : peers_) {
-        if (p.second.info.direction == ConnectionDir::OUTBOUND) {
+        if (p.second.state == PeerState::ESTABLISHED &&
+            p.second.info.direction == ConnectionDir::OUTBOUND) {
             count++;
         }
     }

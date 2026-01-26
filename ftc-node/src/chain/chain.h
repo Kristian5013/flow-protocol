@@ -122,7 +122,7 @@ public:
 
     // Consensus parameters (legacy - use Consensus class instead)
     struct Params {
-        uint32_t block_time = 600;                  // Target block time in seconds (10 min)
+        uint32_t block_time = 60;                   // Target block time in seconds (1 min)
 
         // LWMA (Linearly Weighted Moving Average) - adjusts difficulty every block
         uint32_t lwma_window = 60;                  // N blocks for averaging
