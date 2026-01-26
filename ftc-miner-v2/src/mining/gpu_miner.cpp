@@ -509,6 +509,7 @@ void GPUMiner::miningThread(int device_id) {
     Hash256 target;
     std::string job_id;
     uint32_t height = 0;
+    Work current_work;  // Store full work for solution submission
 
     uint64_t local_hashes = 0;
     auto last_stats_time = std::chrono::steady_clock::now();
@@ -533,11 +534,11 @@ void GPUMiner::miningThread(int device_id) {
 
         // Get new work
         if (work_manager_->isNewWork() || header.empty()) {
-            Work work = work_manager_->getWork();
-            header = work.buildHeader();
-            target = work.target;
-            job_id = work.job_id;
-            height = work.height;
+            current_work = work_manager_->getWork();
+            header = current_work.buildHeader();
+            target = current_work.target;
+            job_id = current_work.job_id;
+            height = current_work.height;
 
             nonce = dis32(gen);  // Random 32-bit starting nonce
             nonces_tested = 0;   // Reset nonce counter for new work
@@ -560,19 +561,21 @@ void GPUMiner::miningThread(int device_id) {
             nonces_tested = 0;
             nonce = dis32(gen);  // New random starting nonce
 
-            // Rebuild header with new timestamp
-            Work work = work_manager_->getWork();
-            header = work.buildHeader();
+            // Rebuild header with new timestamp - also update target in case difficulty changed
+            current_work = work_manager_->getWork();
+            target = current_work.target;
+            header = current_work.buildHeader();
 
             // Modify timestamp in header (bytes 68-71, little-endian)
-            uint32_t new_ts = work.timestamp + timestamp_offset;
+            uint32_t new_ts = current_work.timestamp + timestamp_offset;
             header[68] = new_ts & 0xFF;
             header[69] = (new_ts >> 8) & 0xFF;
             header[70] = (new_ts >> 16) & 0xFF;
             header[71] = (new_ts >> 24) & 0xFF;
 
-            // Re-upload header
+            // Re-upload header and target
             clEnqueueWriteBuffer(ctx.queue, ctx.header_buf, CL_TRUE, 0, header.size(), header.data(), 0, nullptr, nullptr);
+            clEnqueueWriteBuffer(ctx.queue, ctx.target_buf, CL_TRUE, 0, 32, target.data(), 0, nullptr, nullptr);
         }
 
         if (header.size() < 76) {
@@ -630,6 +633,7 @@ void GPUMiner::miningThread(int device_id) {
                     sol.hash = hash;
                     sol.height = height;
                     sol.timestamp_offset = timestamp_offset;  // Include offset for block building
+                    sol.work = current_work;  // Store work used to find this solution
 
                     work_manager_->submitSolution(sol);
                     dev.accepted++;

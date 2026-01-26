@@ -498,7 +498,7 @@ int main(int argc, char** argv) {
                         std::cout << "[Submit] Sending block h=" << sol.height << "...\n";
                     }
 
-                    bool accepted = client->submitBlock(sol, current_work);
+                    bool accepted = client->submitBlock(sol, sol.work);
                     if (accepted) {
                         stats.blocks_found++;
                         stats.shares_accepted++;

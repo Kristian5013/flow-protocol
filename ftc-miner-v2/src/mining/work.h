@@ -41,6 +41,7 @@ struct Solution {
     Hash256 hash;
     uint32_t height;
     uint32_t timestamp_offset = 0;  // Added to original timestamp when nonce space exhausted
+    Work work;  // Work that was used to find this solution
 };
 
 // Work manager
