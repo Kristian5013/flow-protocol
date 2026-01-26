@@ -123,7 +123,10 @@ public:
     // Consensus parameters (legacy - use Consensus class instead)
     struct Params {
         uint32_t block_time = 600;                  // Target block time in seconds (10 min)
-        uint32_t difficulty_adjustment_interval = 2016;
+
+        // LWMA (Linearly Weighted Moving Average) - adjusts difficulty every block
+        uint32_t lwma_window = 60;                  // N blocks for averaging
+
         uint64_t initial_reward = 50 * 100000000ULL; // 50 FTC in satoshis
         uint32_t halving_interval = 210000;
         uint64_t max_supply = 21000000ULL * 100000000ULL;
@@ -217,6 +220,9 @@ public:
 
     // Difficulty
     uint32_t getNextWorkRequired(const BlockIndex* prev, const BlockHeader* header = nullptr) const;
+
+    // LWMA difficulty calculation (adjusts every block)
+    uint32_t getLwmaNextWork(const BlockIndex* prev) const;
     uint256_t getBlockProof(uint32_t bits) const;
 
     // Genesis

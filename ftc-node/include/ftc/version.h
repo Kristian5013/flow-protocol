@@ -11,8 +11,8 @@
 #define FTC_GENESIS_MESSAGE "Kristian Pilatovich 20091227 - First Real P2P"
 #define FTC_GENESIS_TIME 1737331200  // 2026-01-20 00:00:00 UTC
 
-// Network magic bytes
-#define FTC_MAGIC_MAINNET 0x46544301  // "FTC\x01"
+// Network magic bytes (v2 - LWMA difficulty, NAT detection)
+#define FTC_MAGIC_MAINNET 0x46544302  // "FTC\x02"
 #define FTC_MAGIC_TESTNET 0x46544354  // "FTCT"
 
 // Protocol version

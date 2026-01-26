@@ -137,6 +137,15 @@ void setupAddressRoutes(RouteContext& ctx) {
             .key("peers").beginArray();
 
         for (const auto& peer : peers) {
+            // Map reachability status to string
+            const char* reachability_str = "unknown";
+            switch (peer.reachability) {
+                case p2p::ReachabilityStatus::UNKNOWN: reachability_str = "unknown"; break;
+                case p2p::ReachabilityStatus::CHECKING: reachability_str = "checking"; break;
+                case p2p::ReachabilityStatus::REACHABLE: reachability_str = "reachable"; break;
+                case p2p::ReachabilityStatus::UNREACHABLE: reachability_str = "unreachable"; break;
+            }
+
             json.beginObject()
                 .key("id").value(static_cast<uint64_t>(peer.id))
                 .key("address").value(peer.addr.toString())
@@ -144,6 +153,7 @@ void setupAddressRoutes(RouteContext& ctx) {
                 .key("user_agent").value(peer.user_agent)
                 .key("height").value(static_cast<int64_t>(peer.best_height))
                 .key("inbound").value(peer.direction == p2p::ConnectionDir::INBOUND)
+                .key("reachability").value(reachability_str)
                 .key("ping_ms").value(peer.ping_usec / 1000)
                 .key("bytes_sent").value(peer.bytes_sent)
                 .key("bytes_recv").value(peer.bytes_recv)

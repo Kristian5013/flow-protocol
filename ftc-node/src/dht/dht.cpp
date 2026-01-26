@@ -19,8 +19,8 @@ DHT::DHT(uint16_t port, bool mainnet)
     // Generate random node ID
     node_id_ = NodeId::random();
 
-    // Generate info_hash for FTC network
-    std::string network_id = mainnet ? "FTC-mainnet-v2" : "FTC-testnet-v2";
+    // Generate info_hash for FTC network (v3 - LWMA difficulty, NAT detection)
+    std::string network_id = mainnet ? "FTC-mainnet-v3" : "FTC-testnet-v3";
     info_hash_ = NodeId::fromHash(network_id);
 
     // Initialize routing table
@@ -67,6 +67,8 @@ bool DHT::start() {
     maintenance_thread_ = std::thread(&DHT::maintenanceLoop, this);
 
     log("DHT started on port " + std::to_string(port_));
+    log("Network: " + std::string(mainnet_ ? "FTC-mainnet-v3" : "FTC-testnet-v3"));
+    log("Info hash: " + info_hash_.toHex().substr(0, 16) + "...");
 
     // Bootstrap and start searching for FTC peers
     bootstrap();
@@ -522,10 +524,10 @@ void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const 
                 found_peers_[peer_key] = {ip, port};
             }
 
+            log("Found FTC peer via DHT: " + ip + ":" + std::to_string(port));
             if (peer_callback_) {
                 peer_callback_(ip, port);
             }
-            // Don't log each peer - too spammy with many nodes
         }
     }
 

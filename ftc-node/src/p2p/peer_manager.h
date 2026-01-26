@@ -76,6 +76,14 @@ struct BanEntry {
     std::string reason;
 };
 
+// Reachability status
+enum class ReachabilityStatus {
+    UNKNOWN,        // Not yet checked
+    CHECKING,       // Check in progress
+    REACHABLE,      // Successfully connected back
+    UNREACHABLE     // Failed to connect back
+};
+
 // Peer information
 struct PeerInfo {
     Connection::Id id;
@@ -95,6 +103,10 @@ struct PeerInfo {
     int32_t best_height = 0;
     Hash256 best_hash;
     bool syncing = false;
+
+    // Reachability (NAT detection)
+    ReachabilityStatus reachability = ReachabilityStatus::UNKNOWN;
+    int reachability_failures = 0;  // Number of failed reachability checks
 
     // Statistics
     std::chrono::steady_clock::time_point connect_time;
@@ -225,6 +237,12 @@ public:
     void updatePeerHeight(Connection::Id id, int32_t height, const Hash256& hash);
     void markSyncing(Connection::Id id, bool syncing);
 
+    // Reachability check (NAT detection)
+    void checkReachability(Connection::Id id);
+    ReachabilityStatus getReachability(Connection::Id id) const;
+    size_t getReachableCount() const;
+    size_t getUnreachableCount() const;
+
 private:
     // Internal peer structure
     struct Peer {
@@ -243,10 +261,21 @@ private:
         std::chrono::steady_clock::time_point ping_start;
         std::chrono::steady_clock::time_point last_ping_sent;
 
+        // Reachability tracking
+        std::chrono::steady_clock::time_point reachability_check_start;
+
         // Inventory
         std::set<Hash256> known_blocks;
         std::set<Hash256> known_txs;
         std::deque<Hash256> pending_getdata;
+    };
+
+    // Pending reachability check info
+    struct ReachabilityCheck {
+        Connection::Id peer_id;
+        NetAddr addr;
+        std::chrono::steady_clock::time_point start_time;
+        socket_t sock = INVALID_SOCK;
     };
 
     // Thread functions
@@ -282,6 +311,11 @@ private:
     void sendPings();
     void cleanupBans();
     void requestAddresses();
+
+    // Reachability
+    void startReachabilityCheck(Peer& peer);
+    void processReachabilityChecks();
+    void handleReachabilityResult(Connection::Id peer_id, bool reachable);
 
     // Configuration
     Config config_;
@@ -334,6 +368,11 @@ private:
     std::string our_user_agent_ = "/FTC:1.0.0/";
     std::atomic<int32_t> our_height_{0};
     uint8_t our_node_id_[20] = {0};  // Unique node ID
+
+    // Pending reachability checks
+    std::vector<ReachabilityCheck> reachability_checks_;
+    std::mutex reachability_mutex_;
+    static constexpr std::chrono::seconds REACHABILITY_TIMEOUT{10};  // 10 second timeout
 
     // Statistics
     std::atomic<uint64_t> total_connections_{0};

@@ -85,6 +85,8 @@ void setupStatusRoutes(RouteContext& ctx) {
             json.key("connections").value(static_cast<uint64_t>(peer_manager->getConnectionCount()));
             json.key("inbound").value(static_cast<uint64_t>(peer_manager->getInboundCount()));
             json.key("outbound").value(static_cast<uint64_t>(peer_manager->getOutboundCount()));
+            json.key("reachable_peers").value(static_cast<uint64_t>(peer_manager->getReachableCount()));
+            json.key("unreachable_peers").value(static_cast<uint64_t>(peer_manager->getUnreachableCount()));
             json.key("known_addresses").value(static_cast<uint64_t>(peer_manager->getAddressCount()));
         } else {
             json.key("peer_count").value(static_cast<uint64_t>(0));

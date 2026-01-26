@@ -274,14 +274,16 @@ void setupMiningRoutes(RouteContext& ctx) {
             bits = 0x1d00ffff;
         }
 
+        const auto& params = chain->getParams();
+
         JsonBuilder json;
         json.beginObject()
             .key("height").value(static_cast<int64_t>(height + 1))
             .key("difficulty_bits").value(static_cast<uint64_t>(bits))
             .key("block_reward").value(chain->getBlockReward(height + 1))
-            .key("block_time_target").value(static_cast<uint64_t>(chain->getParams().block_time))
-            .key("difficulty_adjustment_interval").value(
-                static_cast<uint64_t>(chain->getParams().difficulty_adjustment_interval))
+            .key("block_time_target").value(static_cast<uint64_t>(params.block_time))
+            .key("difficulty_algorithm").value("LWMA")
+            .key("lwma_window").value(static_cast<uint64_t>(params.lwma_window))
             .endObject();
         res.success(json.build());
     });

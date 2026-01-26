@@ -80,7 +80,7 @@ private:
 
     // DHT state
     NodeId node_id_;
-    NodeId info_hash_;  // SHA1("FTC-mainnet-v1") or "FTC-testnet-v1"
+    NodeId info_hash_;  // SHA1("FTC-mainnet-v3") or "FTC-testnet-v3"
     std::unique_ptr<RoutingTable> routing_table_;
     bool mainnet_;
 

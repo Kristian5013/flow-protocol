@@ -228,6 +228,9 @@ void PeerManager::maintenanceThread() {
                 last_cleanup = now;
             }
 
+            // Process pending reachability checks
+            processReachabilityChecks();
+
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     } catch (const std::exception& e) {
@@ -579,6 +582,9 @@ void PeerManager::completeHandshake(Peer& peer) {
 
     LOG_INFO("Handshake complete: {} \"{}\" height={}",
              peer.info.addr.toString(), peer.info.user_agent, peer.info.start_height);
+
+    // Start reachability check for inbound connections (NAT detection)
+    startReachabilityCheck(peer);
 
     // DHT handles peer discovery - no GETADDR needed
 
@@ -1289,6 +1295,231 @@ void PeerManager::cleanupBans() {
 
 void PeerManager::requestAddresses() {
     // DHT handles peer discovery - no GETADDR needed
+}
+
+// ============================================================================
+// Reachability Check Implementation (NAT Detection)
+// ============================================================================
+
+void PeerManager::checkReachability(Connection::Id id) {
+    std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
+    auto it = peers_.find(id);
+    if (it != peers_.end()) {
+        startReachabilityCheck(it->second);
+    }
+}
+
+ReachabilityStatus PeerManager::getReachability(Connection::Id id) const {
+    std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
+    auto it = peers_.find(id);
+    if (it != peers_.end()) {
+        return it->second.info.reachability;
+    }
+    return ReachabilityStatus::UNKNOWN;
+}
+
+size_t PeerManager::getReachableCount() const {
+    std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
+    size_t count = 0;
+    for (const auto& p : peers_) {
+        if (p.second.info.reachability == ReachabilityStatus::REACHABLE) {
+            count++;
+        }
+    }
+    return count;
+}
+
+size_t PeerManager::getUnreachableCount() const {
+    std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
+    size_t count = 0;
+    for (const auto& p : peers_) {
+        if (p.second.info.reachability == ReachabilityStatus::UNREACHABLE) {
+            count++;
+        }
+    }
+    return count;
+}
+
+void PeerManager::startReachabilityCheck(Peer& peer) {
+    // Only check inbound connections - outbound are already reachable (we connected to them)
+    if (peer.info.direction == ConnectionDir::OUTBOUND) {
+        peer.info.reachability = ReachabilityStatus::REACHABLE;
+        return;
+    }
+
+    // Skip if already checked or checking
+    if (peer.info.reachability == ReachabilityStatus::REACHABLE ||
+        peer.info.reachability == ReachabilityStatus::CHECKING) {
+        return;
+    }
+
+    // Create non-blocking socket to test connectivity
+    socket_t sock = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCK) {
+        LOG_WARN("Failed to create socket for reachability check: {}", peer.info.addr.toString());
+        return;
+    }
+
+    // Set non-blocking
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(sock, FIONBIO, &mode);
+#else
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#endif
+
+    // Allow IPv6 only
+    int ipv6only = 0;
+    setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&ipv6only, sizeof(ipv6only));
+
+    // Try to connect
+    sockaddr_in6 addr6{};
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_port = htons(peer.info.addr.port);
+    memcpy(&addr6.sin6_addr, peer.info.addr.ip, 16);
+
+    int result = ::connect(sock, reinterpret_cast<sockaddr*>(&addr6), sizeof(addr6));
+
+    if (result == 0) {
+        // Immediate success (unlikely for non-blocking)
+#ifdef _WIN32
+        closesocket(sock);
+#else
+        close(sock);
+#endif
+        peer.info.reachability = ReachabilityStatus::REACHABLE;
+        LOG_INFO("[Reachability] {} is REACHABLE", peer.info.addr.toString());
+        return;
+    }
+
+    int err = SOCKET_ERROR_CODE;
+    if (err != IN_PROGRESS && err != WOULD_BLOCK) {
+        // Immediate failure
+#ifdef _WIN32
+        closesocket(sock);
+#else
+        close(sock);
+#endif
+        peer.info.reachability = ReachabilityStatus::UNREACHABLE;
+        peer.info.reachability_failures++;
+        LOG_INFO("[Reachability] {} is UNREACHABLE (connect failed: {})",
+                 peer.info.addr.toString(), err);
+        return;
+    }
+
+    // Connection in progress - track it
+    peer.info.reachability = ReachabilityStatus::CHECKING;
+    peer.reachability_check_start = std::chrono::steady_clock::now();
+
+    ReachabilityCheck check;
+    check.peer_id = peer.info.id;
+    check.addr = peer.info.addr;
+    check.start_time = std::chrono::steady_clock::now();
+    check.sock = sock;
+
+    {
+        std::lock_guard<std::mutex> lock(reachability_mutex_);
+        reachability_checks_.push_back(check);
+    }
+
+    LOG_DEBUG("[Reachability] Started check for {}", peer.info.addr.toString());
+}
+
+void PeerManager::processReachabilityChecks() {
+    std::lock_guard<std::mutex> lock(reachability_mutex_);
+
+    if (reachability_checks_.empty()) return;
+
+    auto now = std::chrono::steady_clock::now();
+    std::vector<ReachabilityCheck> still_pending;
+
+    for (auto& check : reachability_checks_) {
+        // Check timeout
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - check.start_time);
+        if (elapsed >= REACHABILITY_TIMEOUT) {
+#ifdef _WIN32
+            closesocket(check.sock);
+#else
+            close(check.sock);
+#endif
+            handleReachabilityResult(check.peer_id, false);
+            continue;
+        }
+
+        // Check if socket is writable (connected)
+        fd_set write_fds, error_fds;
+        FD_ZERO(&write_fds);
+        FD_ZERO(&error_fds);
+        FD_SET(check.sock, &write_fds);
+        FD_SET(check.sock, &error_fds);
+
+        timeval tv{0, 0};  // Non-blocking check
+        int ready = select(static_cast<int>(check.sock) + 1, nullptr, &write_fds, &error_fds, &tv);
+
+        if (ready > 0) {
+            bool connected = false;
+            if (FD_ISSET(check.sock, &write_fds)) {
+                // Check for connection error
+                int error = 0;
+                socklen_t len = sizeof(error);
+                getsockopt(check.sock, SOL_SOCKET, SO_ERROR, (char*)&error, &len);
+                connected = (error == 0);
+            }
+
+#ifdef _WIN32
+            closesocket(check.sock);
+#else
+            close(check.sock);
+#endif
+            handleReachabilityResult(check.peer_id, connected);
+        } else {
+            // Still pending
+            still_pending.push_back(check);
+        }
+    }
+
+    reachability_checks_ = std::move(still_pending);
+}
+
+void PeerManager::handleReachabilityResult(Connection::Id peer_id, bool reachable) {
+    std::lock_guard<std::recursive_mutex> lock(peers_mutex_);
+
+    auto it = peers_.find(peer_id);
+    if (it == peers_.end()) return;
+
+    Peer& peer = it->second;
+
+    if (reachable) {
+        peer.info.reachability = ReachabilityStatus::REACHABLE;
+        LOG_INFO("[Reachability] {} is REACHABLE", peer.info.addr.toString());
+
+        // Update address info score
+        std::lock_guard<std::mutex> addr_lock(addr_mutex_);
+        auto addr_it = addresses_.find(peer.info.addr);
+        if (addr_it != addresses_.end()) {
+            addr_it->second.success_count++;  // Bonus for reachability
+        }
+    } else {
+        peer.info.reachability = ReachabilityStatus::UNREACHABLE;
+        peer.info.reachability_failures++;
+        LOG_WARN("[Reachability] {} is UNREACHABLE (behind NAT/firewall)",
+                 peer.info.addr.toString());
+
+        // Penalize in address database
+        std::lock_guard<std::mutex> addr_lock(addr_mutex_);
+        auto addr_it = addresses_.find(peer.info.addr);
+        if (addr_it != addresses_.end()) {
+            addr_it->second.attempts += 5;  // Heavy penalty for unreachable
+        }
+
+        // Optionally disconnect unreachable peers after multiple failures
+        if (peer.info.reachability_failures >= 3) {
+            LOG_WARN("[Reachability] Disconnecting {} - repeatedly unreachable",
+                     peer.info.addr.toString());
+            peer.conn->disconnect("unreachable - behind NAT");
+        }
+    }
 }
 
 } // namespace p2p

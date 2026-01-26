@@ -1029,34 +1029,33 @@ uint64_t Chain::getBlockReward(int32_t height) const {
 }
 
 uint32_t Chain::getNextWorkRequired(const BlockIndex* prev, const BlockHeader* header) const {
-    if (prev == nullptr) {
-        // Genesis block
-        return 0x1d00ffff;  // Initial difficulty
+    // LWMA adjusts difficulty every block
+    return getLwmaNextWork(prev);
+}
+
+uint32_t Chain::getLwmaNextWork(const BlockIndex* prev) const {
+    const uint32_t N = params_.lwma_window;  // Window size (60 blocks)
+    const int64_t T = params_.block_time;    // Target time (600 seconds)
+
+    // Genesis or not enough blocks - use minimum difficulty
+    if (prev == nullptr || prev->height < static_cast<int32_t>(N)) {
+        return 0x1d00ffff;
     }
 
-    // Safety check: if bits is 0 (corrupted), use genesis difficulty
-    uint32_t prev_bits = prev->bits;
-    if (prev_bits == 0) {
-        prev_bits = 0x1d00ffff;
-    }
-
-    // Check if difficulty adjustment
-    if ((prev->height + 1) % params_.difficulty_adjustment_interval != 0) {
-        return prev_bits;
-    }
-
-    // Get first block of this interval
-    int32_t first_height = prev->height - (params_.difficulty_adjustment_interval - 1);
-    const BlockIndex* first = prev->getAncestor(first_height);
+    // Get the block N blocks ago
+    const BlockIndex* first = prev->getAncestor(prev->height - N);
     if (!first) {
-        return prev_bits;
+        return prev->bits != 0 ? prev->bits : 0x1d00ffff;
     }
 
-    // Calculate actual timespan
-    int64_t actual_timespan = prev->timestamp - first->timestamp;
+    // Calculate actual timespan for last N blocks
+    int64_t actual_timespan = static_cast<int64_t>(prev->timestamp) -
+                              static_cast<int64_t>(first->timestamp);
 
-    // Limit adjustment
-    int64_t target_timespan = params_.block_time * params_.difficulty_adjustment_interval;
+    // Expected timespan
+    int64_t target_timespan = N * T;
+
+    // Bitcoin-style limits: max 4x adjustment in either direction
     if (actual_timespan < target_timespan / 4) {
         actual_timespan = target_timespan / 4;
     }
@@ -1064,26 +1063,45 @@ uint32_t Chain::getNextWorkRequired(const BlockIndex* prev, const BlockHeader* h
         actual_timespan = target_timespan * 4;
     }
 
-    // Calculate new target
-    // Note: Hash256 and uint256_t are both std::array<uint8_t, 32>
+    // Get current target from previous block
+    uint32_t prev_bits = prev->bits;
+    if (prev_bits == 0) prev_bits = 0x1d00ffff;
+
     crypto::Hash256 target_hash = BlockHeader::bitsToTarget(prev_bits);
     uint256_t target;
-    std::copy(target_hash.begin(), target_hash.end(), target.begin());
+    // Hash256 is big-endian, uint256_t is little-endian - reverse bytes
+    for (int i = 0; i < 32; i++) {
+        target[i] = target_hash[31 - i];
+    }
 
-    // Multiply by actual time, divide by target time
+    // new_target = prev_target * actual_timespan / target_timespan
     target = mul256_64(target, static_cast<uint64_t>(actual_timespan));
     target = div256_64(target, static_cast<uint64_t>(target_timespan));
 
-    // Ensure target doesn't exceed maximum
+    // Clamp to maximum target (minimum difficulty)
     crypto::Hash256 max_target_hash = BlockHeader::bitsToTarget(0x1d00ffff);
     uint256_t max_target;
-    std::copy(max_target_hash.begin(), max_target_hash.end(), max_target.begin());
+    // Reverse bytes: big-endian Hash256 -> little-endian uint256_t
+    for (int i = 0; i < 32; i++) {
+        max_target[i] = max_target_hash[31 - i];
+    }
+
     if (compare256(target, max_target) > 0) {
         target = max_target;
     }
 
+    // Clamp to minimum target (maximum difficulty) - prevent underflow
+    uint256_t min_target{};
+    min_target[0] = 0x01;  // Very small target (little-endian: LSB first)
+    if (compare256(target, min_target) < 0) {
+        target = min_target;
+    }
+
+    // Convert back: little-endian uint256_t -> big-endian Hash256
     crypto::Hash256 result;
-    std::copy(target.begin(), target.end(), result.begin());
+    for (int i = 0; i < 32; i++) {
+        result[i] = target[31 - i];
+    }
     return BlockHeader::targetToBits(result);
 }
 
