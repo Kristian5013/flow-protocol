@@ -148,46 +148,43 @@ bool NodeManager::checkNode(NodeInfo& node) {
 void NodeManager::selectBestNode() {
     if (nodes_.empty()) return;
 
-    // For solo mining, ALWAYS prefer localhost if available AND has peers
-    // Remote nodes have different chain tips and will reject our blocks
-    int localhost_index = -1;
-    for (size_t i = 0; i < nodes_.size(); ++i) {
-        const auto& node = nodes_[i];
-        if ((node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") &&
-            node.available && node.peer_count > 0 &&
-            node.consecutive_failures < max_consecutive_failures_) {
-            localhost_index = static_cast<int>(i);
-            break;
+    // Find max height among all available PUBLIC nodes (exclude localhost)
+    int32_t max_height = 0;
+    for (const auto& node : nodes_) {
+        // Skip localhost - only use public nodes
+        if (node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") {
+            continue;
+        }
+        if (node.available && node.peer_count > 0 && node.height > max_height) {
+            max_height = node.height;
         }
     }
 
-    // If localhost is available and we're already on it, don't switch
-    if (localhost_index >= 0 && current_index_ == localhost_index) {
+    if (max_height == 0) {
+        log("No synchronized public nodes found!", true);
         return;
     }
 
-    // If localhost is available, always use it
-    if (localhost_index >= 0) {
-        current_index_ = localhost_index;
-        const auto& node = nodes_[current_index_];
-
-        current_client_ = std::make_unique<APIClient>(node.host, node.port);
-
-        log("Selected node: " + node.host + ":" + std::to_string(node.port) +
-            " (latency: " + std::to_string(static_cast<int>(node.avg_latency_ms)) + "ms)");
-
-        if (on_node_changed_) {
-            on_node_changed_(node.host, node.port);
-        }
-        return;
-    }
-
-    // Localhost not available, fall back to best remote node
+    // Select best node that is synchronized (within 2 blocks of max height)
     int best_index = -1;
     double best_score = 999999.0;
 
     for (size_t i = 0; i < nodes_.size(); ++i) {
-        double score = nodes_[i].score();
+        const auto& node = nodes_[i];
+
+        // Skip localhost - only use public nodes
+        if (node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") {
+            continue;
+        }
+
+        // Skip unavailable or nodes without peers
+        if (!node.available || node.peer_count == 0) continue;
+
+        // Skip nodes that are behind (more than 2 blocks from max)
+        if (node.height < max_height - 2) continue;
+
+        // Score based on latency (lower is better)
+        double score = node.avg_latency_ms + (node.consecutive_failures * 100.0);
         if (score < best_score) {
             best_score = score;
             best_index = static_cast<int>(i);
@@ -201,7 +198,9 @@ void NodeManager::selectBestNode() {
         current_client_ = std::make_unique<APIClient>(node.host, node.port);
 
         log("Selected node: " + node.host + ":" + std::to_string(node.port) +
-            " (latency: " + std::to_string(static_cast<int>(node.avg_latency_ms)) + "ms");
+            " (height: " + std::to_string(node.height) +
+            ", peers: " + std::to_string(node.peer_count) +
+            ", latency: " + std::to_string(static_cast<int>(node.avg_latency_ms)) + "ms)");
 
         if (on_node_changed_) {
             on_node_changed_(node.host, node.port);
@@ -219,25 +218,17 @@ void NodeManager::refreshNodes() {
 
     if (nodes_copy.empty()) return;
 
-    // Early exit flag - stop once we find a working node
-    std::atomic<bool> found_working{false};
-
-    // Check all nodes in parallel
+    // Check ALL nodes in parallel (need all heights to find max)
     std::vector<std::thread> threads;
     threads.reserve(nodes_copy.size());
 
     for (size_t i = 0; i < nodes_copy.size(); ++i) {
-        threads.emplace_back([this, i, &nodes_copy, &found_working]() {
-            // Skip if already found a working node
-            if (found_working.load()) return;
-
-            if (checkNode(nodes_copy[i])) {
-                found_working = true;
-            }
+        threads.emplace_back([this, i, &nodes_copy]() {
+            checkNode(nodes_copy[i]);
         });
     }
 
-    // Wait for all threads (they exit early if found_working)
+    // Wait for all threads
     for (auto& t : threads) {
         if (t.joinable()) {
             t.join();
@@ -367,6 +358,10 @@ size_t NodeManager::getAvailableCount() const {
 
     size_t count = 0;
     for (const auto& node : nodes_) {
+        // Skip localhost - only count public nodes
+        if (node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") {
+            continue;
+        }
         if (node.available && node.peer_count > 0 &&
             node.consecutive_failures < max_consecutive_failures_) {
             count++;
