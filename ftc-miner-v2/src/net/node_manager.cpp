@@ -7,7 +7,14 @@
 
 namespace net {
 
-NodeManager::NodeManager() = default;
+NodeManager::NodeManager() {
+    // Add localhost as fallback (lowest priority - at end of list)
+    NodeInfo localhost_node;
+    localhost_node.host = "127.0.0.1";
+    localhost_node.port = 17319;
+    localhost_node.last_check = std::chrono::steady_clock::now();
+    nodes_.push_back(localhost_node);
+}
 
 NodeManager::~NodeManager() {
     stopDHT();
@@ -149,51 +156,60 @@ bool NodeManager::checkNode(NodeInfo& node) {
 void NodeManager::selectBestNode() {
     if (nodes_.empty()) return;
 
+    // Helper to check if host is localhost
+    auto isLocalhost = [](const std::string& host) {
+        return host == "::1" || host == "127.0.0.1" || host == "localhost";
+    };
+
     // Find max height among all available PUBLIC nodes (exclude localhost)
     // Require at least 2 peers to be considered synced
     int32_t max_height = 0;
     for (const auto& node : nodes_) {
-        // Skip localhost - only use public nodes
-        if (node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") {
-            continue;
-        }
+        if (isLocalhost(node.host)) continue;
         if (node.available && node.peer_count >= 2 && node.height > max_height) {
             max_height = node.height;
         }
     }
 
-    if (max_height == 0) {
-        log("No synchronized public nodes found!", true);
-        return;
-    }
-
-    // Select best node that is synchronized (within 2 blocks of max height)
+    // Select best PUBLIC node that is synchronized (within 2 blocks of max height)
     int best_index = -1;
     double best_score = 999999.0;
 
-    for (size_t i = 0; i < nodes_.size(); ++i) {
-        const auto& node = nodes_[i];
+    if (max_height > 0) {
+        for (size_t i = 0; i < nodes_.size(); ++i) {
+            const auto& node = nodes_[i];
+            if (isLocalhost(node.host)) continue;
+            if (!node.available || node.peer_count < 2) continue;
+            if (node.height < max_height - 2) continue;
 
-        // Skip localhost - only use public nodes
-        if (node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") {
-            continue;
-        }
-
-        // Skip unavailable or nodes without sufficient peers
-        if (!node.available || node.peer_count < 2) continue;
-
-        // Skip nodes that are behind (more than 2 blocks from max)
-        if (node.height < max_height - 2) continue;
-
-        // Score based on latency (lower is better)
-        double score = node.avg_latency_ms + (node.consecutive_failures * 100.0);
-        if (score < best_score) {
-            best_score = score;
-            best_index = static_cast<int>(i);
+            double score = node.avg_latency_ms + (node.consecutive_failures * 100.0);
+            if (score < best_score) {
+                best_score = score;
+                best_index = static_cast<int>(i);
+            }
         }
     }
 
-    if (best_index >= 0 && best_index != current_index_) {
+    // FALLBACK: If no good public nodes, try localhost
+    if (best_index < 0) {
+        for (size_t i = 0; i < nodes_.size(); ++i) {
+            const auto& node = nodes_[i];
+            if (!isLocalhost(node.host)) continue;
+            if (!node.available || node.peer_count < 2) continue;
+
+            // Found a good localhost node
+            best_index = static_cast<int>(i);
+            log("No public nodes available, using localhost");
+            break;
+        }
+    }
+
+    if (best_index < 0) {
+        log("No synchronized nodes found (public or localhost)!", true);
+        return;
+    }
+
+    if (best_index != current_index_) {
         current_index_ = best_index;
         const auto& node = nodes_[current_index_];
 
