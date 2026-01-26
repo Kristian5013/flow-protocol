@@ -37,12 +37,15 @@ public:
         int total_failures = 0;         // Total failures
         int total_requests = 0;         // Total requests made
         bool available = false;         // Currently reachable
+        uint32_t peer_count = 0;        // Node's peer count (0 = isolated)
+        int32_t height = 0;             // Node's chain height
         std::chrono::steady_clock::time_point last_check;
         std::chrono::steady_clock::time_point last_success;
 
         // Calculated score (lower is better)
         double score() const {
             if (!available || consecutive_failures >= 3) return 999999.0;
+            if (peer_count == 0) return 999998.0;  // Isolated nodes are very bad
             return avg_latency_ms + (consecutive_failures * 100.0);
         }
     };

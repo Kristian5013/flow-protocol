@@ -97,19 +97,30 @@ bool NodeManager::checkNode(NodeInfo& node) {
     }
 
     APIClient client(node.host, node.port);
-    bool success = client.connect();
+
+    // Get network stats which includes peer_count and height
+    auto stats = client.getNetworkStats();
 
     auto end = std::chrono::steady_clock::now();
     double latency = std::chrono::duration<double, std::milli>(end - start).count();
 
+    // Check if node responded and has peers (not isolated)
+    bool reachable = (stats.height > 0);
+    bool has_peers = (stats.peer_count > 0);
+    bool success = reachable && has_peers;
+
     if (debug_output_) {
         std::cerr << "[DEBUG] Node " << node.host << ":" << node.port
-                  << " connect=" << (success ? "OK" : "FAILED")
+                  << " reachable=" << (reachable ? "OK" : "FAILED")
+                  << " peers=" << stats.peer_count
+                  << " height=" << stats.height
                   << " latency=" << latency << "ms" << std::endl;
     }
 
     node.last_check = end;
     node.total_requests++;
+    node.peer_count = stats.peer_count;
+    node.height = stats.height;
 
     if (success) {
         node.available = true;
@@ -125,6 +136,10 @@ bool NodeManager::checkNode(NodeInfo& node) {
         node.available = false;
         node.consecutive_failures++;
         node.total_failures++;
+
+        if (reachable && !has_peers) {
+            log("Node " + node.host + " has no peers (isolated)", true);
+        }
     }
 
     return success;
@@ -133,13 +148,14 @@ bool NodeManager::checkNode(NodeInfo& node) {
 void NodeManager::selectBestNode() {
     if (nodes_.empty()) return;
 
-    // For solo mining, ALWAYS prefer localhost if available
+    // For solo mining, ALWAYS prefer localhost if available AND has peers
     // Remote nodes have different chain tips and will reject our blocks
     int localhost_index = -1;
     for (size_t i = 0; i < nodes_.size(); ++i) {
         const auto& node = nodes_[i];
         if ((node.host == "::1" || node.host == "127.0.0.1" || node.host == "localhost") &&
-            node.available && node.consecutive_failures < max_consecutive_failures_) {
+            node.available && node.peer_count > 0 &&
+            node.consecutive_failures < max_consecutive_failures_) {
             localhost_index = static_cast<int>(i);
             break;
         }
@@ -241,6 +257,8 @@ void NodeManager::refreshNodes() {
                 nodes_[i].total_requests = nodes_copy[i].total_requests;
                 nodes_[i].last_check = nodes_copy[i].last_check;
                 nodes_[i].last_success = nodes_copy[i].last_success;
+                nodes_[i].peer_count = nodes_copy[i].peer_count;
+                nodes_[i].height = nodes_copy[i].height;
             }
         }
         selectBestNode();
@@ -349,7 +367,8 @@ size_t NodeManager::getAvailableCount() const {
 
     size_t count = 0;
     for (const auto& node : nodes_) {
-        if (node.available && node.consecutive_failures < max_consecutive_failures_) {
+        if (node.available && node.peer_count > 0 &&
+            node.consecutive_failures < max_consecutive_failures_) {
             count++;
         }
     }
