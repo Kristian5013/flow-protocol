@@ -342,30 +342,10 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Get initial network stats and verify node has sufficient peers
+        // Get initial network stats
         auto initial_net_stats = api_client->getNetworkStats();
         stats.peer_count = initial_net_stats.peer_count;
         stats.active_miners = initial_net_stats.active_miners;
-
-        // If node has < 2 peers, it's isolated - try to find a better one
-        int retry_count = 0;
-        while (stats.peer_count < 2 && retry_count < 5) {
-            if (cfg.tui_enabled) {
-                ui.addLogMessage("Node has only " + std::to_string(stats.peer_count) +
-                                " peers (isolated), switching...", tui::Color::Yellow);
-            }
-            if (!node_manager.switchToNextNode()) {
-                break;  // No more nodes available
-            }
-            api_client = node_manager.getClient();
-            if (api_client) {
-                initial_net_stats = api_client->getNetworkStats();
-                stats.peer_count = initial_net_stats.peer_count;
-                stats.active_miners = initial_net_stats.active_miners;
-                stats.block_height = static_cast<int32_t>(api_client->getBlockHeight());
-            }
-            retry_count++;
-        }
 
         // Update pool URL to show current node
         auto* current_node = node_manager.getCurrentNode();
@@ -638,11 +618,10 @@ int main(int argc, char** argv) {
                         network_height = net_stats.height;
                     }
 
-                    // If node lost peers (became isolated), switch to another
-                    if (net_stats.peer_count < 2) {
+                    // If node has few peers, try to find a better one (but don't loop)
+                    if (net_stats.peer_count < 2 && node_manager.getAvailableCount() > 0) {
                         if (cfg.tui_enabled) {
-                            ui.addLogMessage("Node lost peers (" + std::to_string(net_stats.peer_count) +
-                                           "), switching...", tui::Color::Yellow);
+                            ui.addLogMessage("Found better node, switching...", tui::Color::Yellow);
                         }
                         node_manager.switchToNextNode();
                         auto* new_node = node_manager.getCurrentNode();

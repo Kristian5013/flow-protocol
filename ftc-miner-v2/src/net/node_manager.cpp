@@ -111,11 +111,8 @@ bool NodeManager::checkNode(NodeInfo& node) {
     auto end = std::chrono::steady_clock::now();
     double latency = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Check if node responded and has sufficient peers (not isolated)
-    // Require at least 2 peers - nodes with 1 peer might be in unstable state
+    // Node is reachable if it responds with valid height
     bool reachable = (stats.height > 0);
-    bool has_peers = (stats.peer_count >= 2);
-    bool success = reachable && has_peers;
 
     if (debug_output_) {
         std::cerr << "[DEBUG] Node " << node.host << ":" << node.port
@@ -130,7 +127,7 @@ bool NodeManager::checkNode(NodeInfo& node) {
     node.peer_count = stats.peer_count;
     node.height = stats.height;
 
-    if (success) {
+    if (reachable) {
         node.available = true;
         node.consecutive_failures = 0;
         node.last_success = end;
@@ -144,13 +141,10 @@ bool NodeManager::checkNode(NodeInfo& node) {
         node.available = false;
         node.consecutive_failures++;
         node.total_failures++;
-
-        if (reachable && !has_peers) {
-            log("Node " + node.host + " has no peers (isolated)", true);
-        }
     }
 
-    return success;
+    // Return true only if node has good peers (for priority selection)
+    return reachable && (stats.peer_count >= 2);
 }
 
 void NodeManager::selectBestNode() {
@@ -161,8 +155,7 @@ void NodeManager::selectBestNode() {
         return host == "::1" || host == "127.0.0.1" || host == "localhost";
     };
 
-    // Find max height among all available PUBLIC nodes (exclude localhost)
-    // Require at least 2 peers to be considered synced
+    // Find max height among all available PUBLIC nodes with good peers
     int32_t max_height = 0;
     for (const auto& node : nodes_) {
         if (isLocalhost(node.host)) continue;
@@ -171,10 +164,10 @@ void NodeManager::selectBestNode() {
         }
     }
 
-    // Select best PUBLIC node that is synchronized (within 2 blocks of max height)
     int best_index = -1;
     double best_score = 999999.0;
 
+    // PRIORITY 1: Public node with >= 2 peers (well-connected)
     if (max_height > 0) {
         for (size_t i = 0; i < nodes_.size(); ++i) {
             const auto& node = nodes_[i];
@@ -190,22 +183,51 @@ void NodeManager::selectBestNode() {
         }
     }
 
-    // FALLBACK: If no good public nodes, try localhost
+    // PRIORITY 2: Localhost with >= 2 peers
     if (best_index < 0) {
         for (size_t i = 0; i < nodes_.size(); ++i) {
             const auto& node = nodes_[i];
             if (!isLocalhost(node.host)) continue;
             if (!node.available || node.peer_count < 2) continue;
 
-            // Found a good localhost node
             best_index = static_cast<int>(i);
             log("No public nodes available, using localhost");
             break;
         }
     }
 
+    // PRIORITY 3: ANY responding node (even with few peers) - better than nothing
     if (best_index < 0) {
-        log("No synchronized nodes found (public or localhost)!", true);
+        int32_t any_max_height = 0;
+        for (const auto& node : nodes_) {
+            if (node.available && node.height > any_max_height) {
+                any_max_height = node.height;
+            }
+        }
+        if (any_max_height > 0) {
+            best_score = 999999.0;
+            for (size_t i = 0; i < nodes_.size(); ++i) {
+                const auto& node = nodes_[i];
+                if (!node.available) continue;
+                // Prefer nodes closer to max height
+                if (node.height < any_max_height - 5) continue;
+
+                double score = node.avg_latency_ms + (node.consecutive_failures * 100.0);
+                // Penalize low peer count but don't exclude
+                score += (2 - std::min(2u, node.peer_count)) * 50.0;
+                if (score < best_score) {
+                    best_score = score;
+                    best_index = static_cast<int>(i);
+                }
+            }
+            if (best_index >= 0) {
+                log("Warning: Using node with limited peers (network may be degraded)", true);
+            }
+        }
+    }
+
+    if (best_index < 0) {
+        log("No responding nodes found!", true);
         return;
     }
 
