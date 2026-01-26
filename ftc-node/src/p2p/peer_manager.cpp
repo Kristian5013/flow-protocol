@@ -1394,7 +1394,7 @@ void PeerManager::startReachabilityCheck(Peer& peer) {
         close(sock);
 #endif
         peer.info.reachability = ReachabilityStatus::REACHABLE;
-        LOG_INFO("[Reachability] {} is REACHABLE", peer.info.addr.toString());
+        LOG_DEBUG("[Reachability] {} is REACHABLE", peer.info.addr.toString());
         return;
     }
 
@@ -1408,7 +1408,7 @@ void PeerManager::startReachabilityCheck(Peer& peer) {
 #endif
         peer.info.reachability = ReachabilityStatus::UNREACHABLE;
         peer.info.reachability_failures++;
-        LOG_INFO("[Reachability] {} is UNREACHABLE (connect failed: {})",
+        LOG_DEBUG("[Reachability] {} is UNREACHABLE (connect failed: {})",
                  peer.info.addr.toString(), err);
         return;
     }
@@ -1497,7 +1497,7 @@ void PeerManager::handleReachabilityResult(Connection::Id peer_id, bool reachabl
 
     if (reachable) {
         peer.info.reachability = ReachabilityStatus::REACHABLE;
-        LOG_INFO("[Reachability] {} is REACHABLE", peer.info.addr.toString());
+        LOG_DEBUG("[Reachability] {} is REACHABLE", peer.info.addr.toString());
 
         // Update address info score
         std::lock_guard<std::mutex> addr_lock(addr_mutex_);
@@ -1508,7 +1508,7 @@ void PeerManager::handleReachabilityResult(Connection::Id peer_id, bool reachabl
     } else {
         peer.info.reachability = ReachabilityStatus::UNREACHABLE;
         peer.info.reachability_failures++;
-        LOG_WARN("[Reachability] {} is UNREACHABLE (behind NAT/firewall)",
+        LOG_DEBUG("[Reachability] {} is UNREACHABLE (behind NAT/firewall)",
                  peer.info.addr.toString());
 
         // Penalize in address database

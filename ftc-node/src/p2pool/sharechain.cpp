@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <set>
 
 namespace ftc {
 namespace p2pool {
@@ -888,6 +889,24 @@ std::vector<ShareIndex*> Sharechain::getPPLNSWindow() const {
     }
 
     return window;
+}
+
+uint32_t Sharechain::getUniqueMinerCount() const {
+    std::lock_guard<std::mutex> lock(index_mutex_);
+
+    std::set<std::vector<uint8_t>> unique_miners;
+
+    ShareIndex* current = tip_;
+    uint32_t count = 0;
+    while (current && count < config_.pplns_window) {
+        if (!current->payout_script.empty()) {
+            unique_miners.insert(current->payout_script);
+        }
+        current = current->prev;
+        count++;
+    }
+
+    return static_cast<uint32_t>(unique_miners.size());
 }
 
 std::map<std::vector<uint8_t>, uint64_t> Sharechain::calculatePayouts(uint64_t reward) const {

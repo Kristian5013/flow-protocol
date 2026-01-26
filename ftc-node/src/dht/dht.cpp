@@ -524,7 +524,7 @@ void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const 
                 found_peers_[peer_key] = {ip, port};
             }
 
-            log("Found FTC peer via DHT: " + ip + ":" + std::to_string(port));
+            // Don't log individual peers - too spammy. Peer callback handles it.
             if (peer_callback_) {
                 peer_callback_(ip, port);
             }

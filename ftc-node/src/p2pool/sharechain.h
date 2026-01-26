@@ -159,6 +159,9 @@ public:
     std::vector<ShareIndex*> getPPLNSWindow() const;
     std::map<std::vector<uint8_t>, uint64_t> calculatePayouts(uint64_t reward) const;
 
+    // Get unique miner count from PPLNS window
+    uint32_t getUniqueMinerCount() const;
+
     // Block building
     chain::Transaction buildGenerationTx(
         const std::vector<uint8_t>& pool_script,

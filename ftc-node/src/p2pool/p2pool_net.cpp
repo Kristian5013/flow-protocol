@@ -1054,15 +1054,15 @@ uint64_t P2Pool::getPoolHashrate() const {
 }
 
 uint32_t P2Pool::getMinerCount() const {
-    // Use Stratum server connection count for instant disconnect detection
-    if (get_connected_miners_) {
-        size_t stratum_count = get_connected_miners_();
-        if (stratum_count > 0) {
-            return static_cast<uint32_t>(stratum_count);
+    // Count unique miners from sharechain PPLNS window (network-wide)
+    if (sharechain_) {
+        uint32_t sharechain_miners = sharechain_->getUniqueMinerCount();
+        if (sharechain_miners > 0) {
+            return sharechain_miners;
         }
     }
 
-    // Fallback: HTTP API miners tracked with timeout
+    // Fallback: HTTP API miners tracked with timeout (local only)
     std::lock_guard<std::mutex> lock(miner_mutex_);
     auto now = std::chrono::steady_clock::now();
     uint32_t active_count = 0;
