@@ -1135,6 +1135,14 @@ P2Pool::Stats P2Pool::getStats() const {
         stats.shares_per_minute = sc_stats.share_rate;
     }
 
+    // Add local miner shares (from registerMinerShare calls)
+    {
+        std::lock_guard<std::mutex> lock(miner_mutex_);
+        for (const auto& pair : miner_work_count_) {
+            stats.total_shares += pair.second;
+        }
+    }
+
     stats.pool_hashrate = getPoolHashrate();
     stats.active_miners = getMinerCount();
 
