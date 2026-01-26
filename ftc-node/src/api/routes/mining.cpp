@@ -45,11 +45,33 @@ void setupMiningRoutes(RouteContext& ctx) {
 
         int32_t height = tip->height + 1;
         uint64_t reward = chain->getBlockReward(height);
-        uint32_t bits = chain->getNextWorkRequired(tip);
+        uint32_t block_bits = chain->getNextWorkRequired(tip);
         // Fallback: if bits is 0 (corrupted), use genesis difficulty
-        if (bits == 0) {
-            bits = 0x1d00ffff;
+        if (block_bits == 0) {
+            block_bits = 0x1d00ffff;
         }
+
+        // Use P2Pool share difficulty (easier than block difficulty)
+        // This allows miners to find shares more frequently
+        uint32_t bits = block_bits;
+        if (p2pool && p2pool->isRunning()) {
+            auto* sharechain = p2pool->getSharechain();
+            if (sharechain) {
+                uint32_t share_bits = sharechain->getNextShareDifficulty();
+
+                // If share difficulty is too easy (sharechain starting up),
+                // use 1/8 of block difficulty as minimum
+                if (share_bits < 10 || share_bits > block_bits) {
+                    // Multiply target by 8 = add 1 to exponent (easier difficulty)
+                    uint32_t exp = (block_bits >> 24) & 0xFF;
+                    uint32_t mantissa = block_bits & 0x00FFFFFF;
+                    share_bits = ((exp + 1) << 24) | mantissa;
+                }
+
+                bits = share_bits;
+            }
+        }
+
         uint32_t timestamp = static_cast<uint32_t>(std::time(nullptr));
 
         // Build coinbase transaction
@@ -170,6 +192,7 @@ void setupMiningRoutes(RouteContext& ctx) {
             .key("merkle_root").value(hashToHex(merkle_root))
             .key("timestamp").value(static_cast<int64_t>(timestamp))
             .key("bits").value(static_cast<uint64_t>(bits))
+            .key("block_bits").value(static_cast<uint64_t>(block_bits))
             .key("coinbase").value(bytesToHex(coinbase_data))
             .key("coinbase_value").value(reward + tmpl.total_fee)
             .key("block_reward").value(reward)
@@ -186,8 +209,8 @@ void setupMiningRoutes(RouteContext& ctx) {
         res.success(json.build());
     });
 
-    // Submit mined block
-    server->post("/mining/submit", [chain, mempool, peer_manager](const HttpRequest& req, HttpResponse& res) {
+    // Submit mined block/share
+    server->post("/mining/submit", [server, chain, mempool, peer_manager](const HttpRequest& req, HttpResponse& res) {
         if (!chain) {
             res.error(HttpStatus::SERVICE_UNAVAILABLE, "Chain not available");
             return;
@@ -224,38 +247,114 @@ void setupMiningRoutes(RouteContext& ctx) {
         }
         chain::Block& block = *block_opt;
 
-        auto result = chain->processBlock(block);
+        // Get current difficulty targets
+        auto tip = chain->getTip();
+        if (!tip) {
+            res.error(HttpStatus::SERVICE_UNAVAILABLE, "No chain tip");
+            return;
+        }
 
-        if (result == chain::ValidationResult::VALID) {
-            if (mempool) {
-                mempool->removeForBlock(block.transactions);
+        uint32_t block_bits = chain->getNextWorkRequired(tip);
+        if (block_bits == 0) block_bits = 0x1d00ffff;
+
+        // Calculate block hash
+        crypto::Hash256 block_hash = block.getHash();
+
+        // Helper to check if hash meets difficulty target
+        auto meetsTarget = [](const crypto::Hash256& hash, uint32_t bits) {
+            crypto::Hash256 target = chain::BlockHeader::bitsToTarget(bits);
+            // Compare hash to target (hash must be <= target)
+            for (int i = 31; i >= 0; --i) {
+                if (hash[i] < target[i]) return true;
+                if (hash[i] > target[i]) return false;
             }
+            return true;
+        };
 
-            // Broadcast block to peers
-            if (peer_manager) {
-                peer_manager->broadcastBlock(block.getHash(), block);
+        // Check P2Pool share difficulty first
+        auto* p2pool = server->getP2Pool();
+        bool share_accepted = false;
+        bool is_block = false;
+
+        if (p2pool && p2pool->isRunning()) {
+            auto* sharechain = p2pool->getSharechain();
+            if (sharechain) {
+                uint32_t share_bits = sharechain->getNextShareDifficulty();
+
+                // Check if meets share difficulty
+                if (meetsTarget(block_hash, share_bits)) {
+                    // Register share with P2Pool
+                    if (!block.transactions.empty()) {
+                        auto& coinbase = block.transactions[0];
+                        if (!coinbase.outputs.empty()) {
+                            p2pool->registerMinerShare(coinbase.outputs[0].script_pubkey);
+                            share_accepted = true;
+                        }
+                    }
+                }
+
+                // Check if also meets block difficulty
+                if (meetsTarget(block_hash, block_bits)) {
+                    is_block = true;
+                }
             }
+        } else {
+            // No P2Pool - check block difficulty directly
+            if (meetsTarget(block_hash, block_bits)) {
+                is_block = true;
+            }
+        }
 
+        if (is_block) {
+            // Process as main chain block
+            auto result = chain->processBlock(block);
+
+            if (result == chain::ValidationResult::VALID) {
+                if (mempool) {
+                    mempool->removeForBlock(block.transactions);
+                }
+
+                // Broadcast block to peers
+                if (peer_manager) {
+                    peer_manager->broadcastBlock(block.getHash(), block);
+                }
+
+                JsonBuilder json;
+                json.beginObject()
+                    .key("hash").value(hashToHex(block.getHash()))
+                    .key("accepted").value(true)
+                    .key("is_block").value(true)
+                    .key("share_accepted").value(share_accepted)
+                    .endObject();
+                res.success(json.build());
+            } else {
+                std::string reason;
+                switch (result) {
+                    case chain::ValidationResult::INVALID_BLOCK_HEADER: reason = "Invalid header"; break;
+                    case chain::ValidationResult::INVALID_POW: reason = "Invalid proof of work"; break;
+                    case chain::ValidationResult::INVALID_TIMESTAMP: reason = "Invalid timestamp"; break;
+                    case chain::ValidationResult::INVALID_MERKLE_ROOT: reason = "Invalid merkle root"; break;
+                    case chain::ValidationResult::INVALID_TX: reason = "Invalid transaction"; break;
+                    case chain::ValidationResult::INVALID_COINBASE: reason = "Invalid coinbase"; break;
+                    case chain::ValidationResult::DUPLICATE_TX: reason = "Duplicate block"; break;
+                    case chain::ValidationResult::BLOCK_MISSING_PREV: reason = "Orphan block"; break;
+                    default: reason = "Unknown error"; break;
+                }
+                res.error(HttpStatus::BAD_REQUEST, reason);
+            }
+        } else if (share_accepted) {
+            // Share accepted but not a block
             JsonBuilder json;
             json.beginObject()
                 .key("hash").value(hashToHex(block.getHash()))
                 .key("accepted").value(true)
+                .key("is_block").value(false)
+                .key("share_accepted").value(true)
                 .endObject();
             res.success(json.build());
         } else {
-            std::string reason;
-            switch (result) {
-                case chain::ValidationResult::INVALID_BLOCK_HEADER: reason = "Invalid header"; break;
-                case chain::ValidationResult::INVALID_POW: reason = "Invalid proof of work"; break;
-                case chain::ValidationResult::INVALID_TIMESTAMP: reason = "Invalid timestamp"; break;
-                case chain::ValidationResult::INVALID_MERKLE_ROOT: reason = "Invalid merkle root"; break;
-                case chain::ValidationResult::INVALID_TX: reason = "Invalid transaction"; break;
-                case chain::ValidationResult::INVALID_COINBASE: reason = "Invalid coinbase"; break;
-                case chain::ValidationResult::DUPLICATE_TX: reason = "Duplicate block"; break;
-                case chain::ValidationResult::BLOCK_MISSING_PREV: reason = "Orphan block"; break;
-                default: reason = "Unknown error"; break;
-            }
-            res.error(HttpStatus::BAD_REQUEST, reason);
+            // Doesn't meet share difficulty
+            res.error(HttpStatus::BAD_REQUEST, "Does not meet share difficulty");
         }
     });
 

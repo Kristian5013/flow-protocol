@@ -736,14 +736,60 @@ void P2PoolNet::stopSync() {
     syncing_ = false;
 }
 
+void P2PoolNet::addPeerAddress(const p2p::NetAddr& addr) {
+    // Convert to P2Pool port (17320)
+    p2p::NetAddr p2pool_addr = addr;
+    p2pool_addr.port = config_.port;
+
+    // Don't add if already connected or connecting
+    {
+        std::lock_guard<std::mutex> plock(peers_mutex_);
+        for (const auto& [id, peer] : peers_) {
+            if (peer.addr.ip == p2pool_addr.ip) {
+                return;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> clock(connecting_mutex_);
+        if (connecting_.count(p2pool_addr) > 0) {
+            return;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(candidates_mutex_);
+    candidate_addrs_.insert(p2pool_addr);
+}
+
 void P2PoolNet::tryConnectPeers() {
     size_t current = getPeerCount();
     if (current >= config_.target_peers) {
         return;
     }
 
-    // Connect to discovered peers
-    // This would use addresses from discovery or saved peer list
+    // Get candidates to try
+    std::vector<p2p::NetAddr> to_try;
+    {
+        std::lock_guard<std::mutex> lock(candidates_mutex_);
+        for (const auto& addr : candidate_addrs_) {
+            if (to_try.size() >= 3) break;  // Try max 3 at a time
+            to_try.push_back(addr);
+        }
+    }
+
+    // Try connecting to candidates
+    for (const auto& addr : to_try) {
+        if (getPeerCount() >= config_.target_peers) break;
+
+        LOG_DEBUG("P2Pool: trying to connect to {}", addr.toString());
+        connectTo(addr);
+
+        // Remove from candidates after attempting
+        {
+            std::lock_guard<std::mutex> lock(candidates_mutex_);
+            candidate_addrs_.erase(addr);
+        }
+    }
 }
 
 void P2PoolNet::sendPings() {

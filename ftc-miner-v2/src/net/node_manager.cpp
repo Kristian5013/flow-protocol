@@ -7,14 +7,7 @@
 
 namespace net {
 
-NodeManager::NodeManager() {
-    // Add localhost as fallback (lowest priority - at end of list)
-    NodeInfo localhost_node;
-    localhost_node.host = "127.0.0.1";
-    localhost_node.port = 17319;
-    localhost_node.last_check = std::chrono::steady_clock::now();
-    nodes_.push_back(localhost_node);
-}
+NodeManager::NodeManager() = default;
 
 NodeManager::~NodeManager() {
     stopDHT();
@@ -150,79 +143,25 @@ bool NodeManager::checkNode(NodeInfo& node) {
 void NodeManager::selectBestNode() {
     if (nodes_.empty()) return;
 
-    // Helper to check if host is localhost
-    auto isLocalhost = [](const std::string& host) {
-        return host == "::1" || host == "127.0.0.1" || host == "localhost";
-    };
-
-    // Find max height among all available PUBLIC nodes with good peers
-    int32_t max_height = 0;
-    for (const auto& node : nodes_) {
-        if (isLocalhost(node.host)) continue;
-        if (node.available && node.peer_count >= 2 && node.height > max_height) {
-            max_height = node.height;
-        }
-    }
-
+    // Simple: find ANY responding node, prefer ones with more peers and lower latency
     int best_index = -1;
     double best_score = 999999.0;
 
-    // PRIORITY 1: Public node with >= 2 peers (well-connected)
-    if (max_height > 0) {
-        for (size_t i = 0; i < nodes_.size(); ++i) {
-            const auto& node = nodes_[i];
-            if (isLocalhost(node.host)) continue;
-            if (!node.available || node.peer_count < 2) continue;
-            if (node.height < max_height - 2) continue;
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        const auto& node = nodes_[i];
+        if (!node.available) continue;
 
-            double score = node.avg_latency_ms + (node.consecutive_failures * 100.0);
-            if (score < best_score) {
-                best_score = score;
-                best_index = static_cast<int>(i);
-            }
-        }
-    }
+        // Score: lower is better
+        // - Base: latency
+        // - Penalty for failures
+        // - Bonus for more peers
+        double score = node.avg_latency_ms;
+        score += node.consecutive_failures * 100.0;
+        score -= std::min(5u, node.peer_count) * 10.0;  // Bonus for peers (up to 5)
 
-    // PRIORITY 2: Localhost with >= 2 peers
-    if (best_index < 0) {
-        for (size_t i = 0; i < nodes_.size(); ++i) {
-            const auto& node = nodes_[i];
-            if (!isLocalhost(node.host)) continue;
-            if (!node.available || node.peer_count < 2) continue;
-
+        if (score < best_score) {
+            best_score = score;
             best_index = static_cast<int>(i);
-            log("No public nodes available, using localhost");
-            break;
-        }
-    }
-
-    // PRIORITY 3: ANY responding node (even with few peers) - better than nothing
-    if (best_index < 0) {
-        int32_t any_max_height = 0;
-        for (const auto& node : nodes_) {
-            if (node.available && node.height > any_max_height) {
-                any_max_height = node.height;
-            }
-        }
-        if (any_max_height > 0) {
-            best_score = 999999.0;
-            for (size_t i = 0; i < nodes_.size(); ++i) {
-                const auto& node = nodes_[i];
-                if (!node.available) continue;
-                // Prefer nodes closer to max height
-                if (node.height < any_max_height - 5) continue;
-
-                double score = node.avg_latency_ms + (node.consecutive_failures * 100.0);
-                // Penalize low peer count but don't exclude
-                score += (2 - std::min(2u, node.peer_count)) * 50.0;
-                if (score < best_score) {
-                    best_score = score;
-                    best_index = static_cast<int>(i);
-                }
-            }
-            if (best_index >= 0) {
-                log("Warning: Using node with limited peers (network may be degraded)", true);
-            }
         }
     }
 
@@ -237,10 +176,8 @@ void NodeManager::selectBestNode() {
 
         current_client_ = std::make_unique<APIClient>(node.host, node.port);
 
-        log("Selected node: " + node.host + ":" + std::to_string(node.port) +
-            " (height: " + std::to_string(node.height) +
-            ", peers: " + std::to_string(node.peer_count) +
-            ", latency: " + std::to_string(static_cast<int>(node.avg_latency_ms)) + "ms)");
+        log("Connected to node (height: " + std::to_string(node.height) +
+            ", peers: " + std::to_string(node.peer_count) + ")");
 
         if (on_node_changed_) {
             on_node_changed_(node.host, node.port);

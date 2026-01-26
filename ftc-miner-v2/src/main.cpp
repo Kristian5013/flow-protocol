@@ -44,10 +44,8 @@ Required:
   -a, --address ADDR   Mining wallet address (ftc1q...)
 
 Node Connection:
-  -o, --pool URL       Node address (optional - uses DHT discovery by default)
-                       e.g., 127.0.0.1:17319 or [::1]:17319
-  Nodes are discovered automatically via BitTorrent DHT
-  Automatic failover to next available node on connection failure
+  -o, --node URL       Node address (default: [::1]:17319 - localhost IPv6)
+                       e.g., [::1]:17319 or 192.168.1.100:17319
 
 GPU Mining:
   -I, --intensity N    GPU intensity 8-31 (default: auto)
@@ -127,14 +125,14 @@ int main(int argc, char** argv) {
         std::cout << "\n[Benchmark Mode] Running without real node connection\n\n";
     }
 
-    // Initialize NodeManager for multi-node support with automatic failover
+    // Initialize NodeManager
     net::NodeManager node_manager;
 
-    // Add manually specified node (if any) as priority
-    if (!cfg.pool_url.empty() && cfg.pool_url != "http://localhost:17319") {
-        std::string host = "::1";
-        uint16_t port = 17319;
+    // Parse node address (default: localhost IPv6)
+    std::string host = "::1";
+    uint16_t port = 17319;
 
+    if (!cfg.pool_url.empty() && cfg.pool_url != "http://localhost:17319") {
         std::string url = cfg.pool_url;
         if (url.find("://") != std::string::npos) {
             url = url.substr(url.find("://") + 3);
@@ -158,42 +156,10 @@ int main(int argc, char** argv) {
                 host = url;
             }
         }
-
-        node_manager.addNode(host, port);
     }
 
-    // Setup early logging for DHT bootstrap
-    node_manager.setLogCallback([](const std::string& msg, bool is_error) {
-        if (is_error) {
-            std::cerr << msg << "\n";
-        } else {
-            std::cout << msg << "\n";
-        }
-    });
-
-    // Start DHT for automatic node discovery
-    std::cout << "Starting DHT peer discovery...\n";
-    if (!node_manager.startDHT()) {
-        std::cerr << "Warning: DHT failed to start, using manual nodes only\n";
-    }
-
-    // Wait for DHT to discover nodes (up to 10 seconds)
-    if (node_manager.getNodeCount() == 0) {
-        std::cout << "Waiting for nodes via DHT";
-        for (int i = 0; i < 20 && node_manager.getNodeCount() == 0; ++i) {
-            std::cout << "." << std::flush;
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-        std::cout << "\n";
-    }
-
-    if (node_manager.getNodeCount() == 0) {
-        std::cerr << "Error: No nodes found via DHT\n";
-        std::cerr << "Make sure at least one FTC node is running on the network\n";
-        return 1;
-    }
-
-    std::cout << "Nodes:  " << node_manager.getNodeCount() << " discovered via DHT\n";
+    node_manager.addNode(host, port);
+    std::cout << "Node:   [" << host << "]:" << port << "\n";
     std::cout << "Wallet: " << cfg.wallet_address << "\n\n";
 
     // Initialize TUI
@@ -288,7 +254,6 @@ int main(int argc, char** argv) {
         std::cout << "       FTC Miner v2.0.0 (GPU-only)\n";
         std::cout << "       Keccak-256 OpenCL Miner\n";
         std::cout << "============================================\n\n";
-        std::cout << "Nodes:    " << node_manager.getNodeCount() << " via DHT\n";
         std::cout << "Address:  " << cfg.wallet_address << "\n";
         std::cout << "GPUs:     " << gpus.size() << " device(s)\n";
         for (const auto& gpu : gpus) {
@@ -618,17 +583,8 @@ int main(int argc, char** argv) {
                         network_height = net_stats.height;
                     }
 
-                    // If node has few peers, try to find a better one (but don't loop)
-                    if (net_stats.peer_count < 2 && node_manager.getAvailableCount() > 0) {
-                        if (cfg.tui_enabled) {
-                            ui.addLogMessage("Found better node, switching...", tui::Color::Yellow);
-                        }
-                        node_manager.switchToNextNode();
-                        auto* new_node = node_manager.getCurrentNode();
-                        if (new_node) {
-                            stats.pool_url = new_node->host + ":" + std::to_string(new_node->port);
-                        }
-                    }
+                    // Periodically refresh nodes to find better options
+                    // (handled by refreshNodes in node health check loop)
 
                     // Update network hashrate
                     stats.network_hashrate = net_stats.network_hashrate;
@@ -754,9 +710,7 @@ int main(int argc, char** argv) {
                           << " | Net: " << tui::formatHashrate(stats.network_hashrate)
                           << " | Blocks: " << stats.blocks_found
                           << " | Height: " << stats.block_height
-                          << " | Latency: " << (stats.is_local_node ? "<1ms" : std::to_string(static_cast<int>(stats.latency_ms)) + "ms")
-                          << " | Peers: " << stats.peer_count
-                          << " | Miners: " << stats.active_miners << "\n";
+                          << " | Peers: " << stats.peer_count << "\n";
             }
         }
 

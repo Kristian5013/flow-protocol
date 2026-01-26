@@ -1134,10 +1134,12 @@ void Node::printStatusLine() {
 
 void Node::onNewPeer(p2p::Connection::Id peer_id) {
     int32_t peer_height = 0;
+    p2p::NetAddr peer_addr;
     auto info = peer_manager_->getPeerInfo();
     for (const auto& peer : info) {
         if (peer.id == peer_id) {
             peer_height = peer.best_height;
+            peer_addr = peer.addr;
             LOG_INFO("P2P: new peer {} \"{}\" (height: {})",
                      peer.addr.toString(), peer.user_agent, peer.best_height);
             break;
@@ -1157,6 +1159,13 @@ void Node::onNewPeer(p2p::Connection::Id peer_id) {
         }
     }
 
+    // Add peer address to P2Pool for potential P2Pool connection
+    if (p2pool_ && p2pool_->isRunning() && peer_addr.port != 0) {
+        auto* network = p2pool_->getNetwork();
+        if (network) {
+            network->addPeerAddress(peer_addr);
+        }
+    }
 }
 
 void Node::onPeerDisconnect(p2p::Connection::Id peer_id, const std::string& reason) {

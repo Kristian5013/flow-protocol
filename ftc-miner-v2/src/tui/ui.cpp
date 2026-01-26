@@ -178,15 +178,8 @@ void MinerUI::renderStats() {
               << Terminal::fg(Color::White) << "Peers: "
               << Terminal::fg(Color::Green) << stats_.peer_count
               << Terminal::fg(Color::BrightBlack) << " │ "
-              << Terminal::fg(Color::White) << "Miners: "
-              << Terminal::fg(Color::Yellow) << stats_.active_miners
-              << Terminal::fg(Color::BrightBlack) << " │ "
               << Terminal::fg(Color::White) << "Net: "
               << Terminal::fg(Color::Magenta) << formatHashrate(stats_.network_hashrate)
-              << Terminal::fg(Color::BrightBlack) << " │ "
-              << Terminal::fg(Color::White) << "Lat: "
-              << Terminal::fg(Color::Cyan)
-              << (stats_.is_local_node ? "<1ms" : std::to_string(static_cast<int>(stats_.latency_ms)) + "ms")
               << "\033[K"  // Clear to end of line
               << Terminal::reset();
 

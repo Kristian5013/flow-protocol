@@ -180,6 +180,9 @@ public:
     size_t getPeerCount() const;
     std::vector<P2PoolPeer> getPeerInfo() const;
 
+    // Add candidate peer address (from main chain peers)
+    void addPeerAddress(const p2p::NetAddr& addr);
+
     // Sync
     void startSync();
     void stopSync();
@@ -215,6 +218,10 @@ private:
     // Pending connections
     std::set<p2p::NetAddr> connecting_;
     std::mutex connecting_mutex_;
+
+    // Candidate peer addresses (from main chain)
+    std::set<p2p::NetAddr> candidate_addrs_;
+    std::mutex candidates_mutex_;
 
     // Share relay
     std::set<crypto::Hash256> recently_seen_;
