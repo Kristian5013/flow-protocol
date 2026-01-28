@@ -320,9 +320,10 @@ int main(int argc, char** argv) {
     if (pid > 0) return 0;
 
     setsid();
-    freopen("/dev/null", "r", stdin);
-    freopen("/dev/null", "w", stdout);
-    freopen("/dev/null", "w", stderr);
+    // Redirect standard streams to /dev/null for daemon mode
+    if (!freopen("/dev/null", "r", stdin)) { /* ignore */ }
+    if (!freopen("/dev/null", "w", stdout)) { /* ignore */ }
+    if (!freopen("/dev/null", "w", stderr)) { /* ignore */ }
 
     return runNode(data_dir);
 }
