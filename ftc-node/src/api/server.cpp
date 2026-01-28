@@ -1426,6 +1426,7 @@ void Server::setupRoutes() {
     ctx.peer_manager = peer_manager_;
     ctx.message_handler = message_handler_;
     ctx.p2pool = p2pool_;
+    ctx.dht = dht_;
 
     // Register all route modules
     routes::setupStatusRoutes(ctx);     // /, /status, /health, /genesis, /sync

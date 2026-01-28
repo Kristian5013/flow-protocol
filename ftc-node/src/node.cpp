@@ -16,6 +16,7 @@
 #include "util/time.h"
 #include "crypto/keccak256.h"
 #include "chain/genesis.h"
+#include "ftc/version.h"
 
 #include <cstring>
 #include <random>
@@ -398,7 +399,7 @@ bool Node::initP2P() {
     // Set our node info
     peer_manager_->setOurVersion(70015);  // Protocol version
     peer_manager_->setOurServices(1);      // NODE_NETWORK
-    peer_manager_->setOurUserAgent("/FTC:1.0.0/");
+    peer_manager_->setOurUserAgent("/FTC:" FTC_VERSION "/");
     peer_manager_->setOurNodeId(node_id_);  // Unique node ID for peer deduplication
 
     auto tip = chain_->getTip();
@@ -891,6 +892,9 @@ bool Node::start() {
 
     // Start DHT for automatic peer discovery (finds peers via BitTorrent network)
     initDHT();
+    if (dht_ && api_server_) {
+        api_server_->setDHT(dht_.get());
+    }
 
     // Install signal handlers
     std::signal(SIGINT, signalHandler);

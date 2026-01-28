@@ -73,7 +73,7 @@ public:
     p2p::MessageHandler* getMessageHandler() { return message_handler_.get(); }
     api::Server* getAPIServer() { return api_server_.get(); }
     p2pool::P2Pool* getP2Pool() { return p2pool_.get(); }
-    dht::DHT* getDHT() { return dht_.get(); }
+    ::dht::DHT* getDHT() { return dht_.get(); }
 
     // Get config
     const util::Config& getConfig() const { return config_; }
@@ -167,7 +167,7 @@ private:
     std::unique_ptr<p2pool::P2Pool> p2pool_;
 
     // 9. DHT - BitTorrent-style peer discovery
-    std::unique_ptr<dht::DHT> dht_;
+    std::unique_ptr<::dht::DHT> dht_;
 
     // =========================================================================
     // Initialization

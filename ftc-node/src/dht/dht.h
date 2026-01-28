@@ -59,6 +59,10 @@ public:
     // Get routing table size
     size_t getRoutingTableSize() const;
 
+    // Get IPv4/IPv6 node counts
+    size_t getIPv4NodeCount() const;
+    size_t getIPv6NodeCount() const;
+
     // Get our node ID
     const NodeId& getNodeId() const { return node_id_; }
 
@@ -83,9 +87,10 @@ public:
     void setLogCallback(LogCallback cb) { log_callback_ = cb; }
 
 private:
-    // Network
+    // Network (dual-stack: separate IPv4 and IPv6 sockets)
     uint16_t port_;
-    SOCKET socket_ = INVALID_SOCKET;
+    SOCKET socket_ipv4_ = INVALID_SOCKET;
+    SOCKET socket_ipv6_ = INVALID_SOCKET;
 
     // DHT state
     NodeId node_id_;
@@ -129,9 +134,8 @@ private:
     PeerCallback peer_callback_;
     LogCallback log_callback_;
 
-    // Bootstrap nodes (BitTorrent DHT IPv6 network)
+    // Bootstrap nodes (BitTorrent DHT - IPv4 and IPv6)
     const std::vector<std::pair<std::string, uint16_t>> bootstrap_nodes_ = {
-        {"dht.transmissionbt.com", 6881},
         {"router.bittorrent.com", 6881},
         {"router.utorrent.com", 6881},
     };
@@ -143,10 +147,11 @@ private:
     void recvLoop();
     void maintenanceLoop();
 
-    void handleMessage(const uint8_t* data, size_t len, const sockaddr_in6& from);
-    void handleQuery(const BencodeDict& msg, const std::string& txid, const sockaddr_in6& from);
-    void handleResponse(const BencodeDict& msg, const std::string& txid, const sockaddr_in6& from);
-    void handleError(const BencodeDict& msg, const std::string& txid, const sockaddr_in6& from);
+    // Message handling - uses string IP for protocol independence
+    void handleMessage(const uint8_t* data, size_t len, const std::string& from_ip, uint16_t from_port);
+    void handleQuery(const BencodeDict& msg, const std::string& txid, const std::string& sender_ip, uint16_t sender_port);
+    void handleResponse(const BencodeDict& msg, const std::string& txid, const std::string& sender_ip, uint16_t sender_port);
+    void handleError(const BencodeDict& msg, const std::string& txid);
 
     // RPC methods
     void sendPing(const std::string& ip, uint16_t port);
@@ -155,7 +160,6 @@ private:
     void sendAnnouncePeer(const std::string& ip, uint16_t port, const std::string& token);
 
     void sendMessage(const BencodeDict& msg, const std::string& ip, uint16_t port);
-    void sendMessage(const BencodeDict& msg, const sockaddr_in6& addr);
 
     std::string generateTxid();
     std::string generateToken(const std::string& ip);
@@ -168,10 +172,11 @@ private:
     void log(const std::string& msg, bool is_error = false);
 
     // Utility
-    static std::string addrToString(const sockaddr_in6& addr);
-    static bool stringToAddr(const std::string& ip, uint16_t port, sockaddr_in6& addr);
-    static std::string compactNodeInfo(const NodeId& id, const std::string& ip, uint16_t port);
-    static bool parseCompactNodeInfo(const std::string& data, size_t offset, NodeId& id, std::string& ip, uint16_t& port);
+    static bool isIPv4(const std::string& ip);
+    static std::string compactNodeInfo4(const NodeId& id, const std::string& ip, uint16_t port);  // IPv4: 26 bytes
+    static std::string compactNodeInfo6(const NodeId& id, const std::string& ip, uint16_t port);  // IPv6: 38 bytes
+    static bool parseCompactNodeInfo4(const std::string& data, size_t offset, NodeId& id, std::string& ip, uint16_t& port);
+    static bool parseCompactNodeInfo6(const std::string& data, size_t offset, NodeId& id, std::string& ip, uint16_t& port);
 };
 
 } // namespace dht

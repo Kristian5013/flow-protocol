@@ -4,6 +4,7 @@
 #include "p2p/connection.h"
 #include "p2p/protocol.h"
 #include "crypto/keccak256.h"
+#include "ftc/version.h"
 #include <map>
 #include <set>
 #include <vector>
@@ -366,7 +367,7 @@ private:
     // Node info for VERSION message
     int32_t our_version_ = 70015;
     uint64_t our_services_ = 1;  // NODE_NETWORK
-    std::string our_user_agent_ = "/FTC:1.0.0/";
+    std::string our_user_agent_ = "/FTC:" FTC_VERSION "/";
     std::atomic<int32_t> our_height_{0};
     uint8_t our_node_id_[20] = {0};  // Unique node ID
 

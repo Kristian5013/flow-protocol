@@ -16,6 +16,7 @@
 #include "p2p/peer_manager.h"
 #include "p2p/message_handler.h"
 #include "p2pool/p2pool_net.h"
+#include "dht/dht.h"
 #include "crypto/keccak256.h"
 #include "crypto/secp256k1.h"
 #include "crypto/bech32.h"
@@ -82,6 +83,7 @@ struct RouteContext {
     p2p::PeerManager* peer_manager;
     p2p::MessageHandler* message_handler;
     p2pool::P2Pool* p2pool;
+    ::dht::DHT* dht;
 };
 
 //-----------------------------------------------------------------------------

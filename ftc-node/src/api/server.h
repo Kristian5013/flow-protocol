@@ -26,6 +26,11 @@ typedef int socket_t;
 #define closesocket close
 #endif
 
+// Forward declaration for global dht namespace
+namespace dht {
+class DHT;
+}
+
 namespace ftc {
 
 // Forward declarations
@@ -204,6 +209,8 @@ public:
     void setMessageHandler(p2p::MessageHandler* mh) { message_handler_ = mh; }
     void setP2Pool(p2pool::P2Pool* p2pool) { p2pool_ = p2pool; }
     p2pool::P2Pool* getP2Pool() const { return p2pool_; }
+    void setDHT(::dht::DHT* dht) { dht_ = dht; }
+    ::dht::DHT* getDHT() const { return dht_; }
 
     // Lifecycle
     bool start();
@@ -283,6 +290,7 @@ private:
     p2p::PeerManager* peer_manager_ = nullptr;
     p2p::MessageHandler* message_handler_ = nullptr;
     p2pool::P2Pool* p2pool_ = nullptr;
+    ::dht::DHT* dht_ = nullptr;
 
     // Statistics
     std::atomic<uint64_t> request_count_{0};

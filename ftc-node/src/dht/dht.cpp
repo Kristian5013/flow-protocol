@@ -106,41 +106,68 @@ void DHT::stop() {
 }
 
 bool DHT::initSocket() {
-    // Create IPv6 UDP socket
-    socket_ = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
-    if (socket_ == INVALID_SOCKET) {
-        log("Failed to create socket", true);
-        return false;
+    int yes = 1;
+
+    // Create IPv4 UDP socket
+    socket_ipv4_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_ipv4_ != INVALID_SOCKET) {
+        setsockopt(socket_ipv4_, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+#ifdef _WIN32
+        DWORD timeout = 1000;
+        setsockopt(socket_ipv4_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+#else
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        setsockopt(socket_ipv4_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+        sockaddr_in addr4{};
+        addr4.sin_family = AF_INET;
+        addr4.sin_port = htons(port_);
+        addr4.sin_addr.s_addr = INADDR_ANY;
+
+        if (bind(socket_ipv4_, (sockaddr*)&addr4, sizeof(addr4)) == SOCKET_ERROR) {
+            log("Failed to bind IPv4 DHT socket to port " + std::to_string(port_), true);
+            closesocket(socket_ipv4_);
+            socket_ipv4_ = INVALID_SOCKET;
+        } else {
+            log("DHT IPv4 socket bound to port " + std::to_string(port_));
+        }
     }
 
-    // Allow IPv4-mapped addresses (dual-stack)
-    int no = 0;
-    setsockopt(socket_, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&no, sizeof(no));
-
-    // Set non-blocking and reuse address
-    int yes = 1;
-    setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
-
-    // Set receive timeout
+    // Create IPv6 UDP socket
+    socket_ipv6_ = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_ipv6_ != INVALID_SOCKET) {
+        // IPv6 only - no dual-stack (we have separate IPv4 socket)
+        int v6only = 1;
+        setsockopt(socket_ipv6_, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&v6only, sizeof(v6only));
+        setsockopt(socket_ipv6_, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 #ifdef _WIN32
-    DWORD timeout = 1000;
-    setsockopt(socket_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+        DWORD timeout = 1000;
+        setsockopt(socket_ipv6_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
 #else
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(socket_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        setsockopt(socket_ipv6_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
+        sockaddr_in6 addr6{};
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(port_);
+        addr6.sin6_addr = in6addr_any;
 
-    // Bind to port
-    sockaddr_in6 addr{};
-    addr.sin6_family = AF_INET6;
-    addr.sin6_port = htons(port_);
-    addr.sin6_addr = in6addr_any;
+        if (bind(socket_ipv6_, (sockaddr*)&addr6, sizeof(addr6)) == SOCKET_ERROR) {
+            log("Failed to bind IPv6 DHT socket to port " + std::to_string(port_), true);
+            closesocket(socket_ipv6_);
+            socket_ipv6_ = INVALID_SOCKET;
+        } else {
+            log("DHT IPv6 socket bound to port " + std::to_string(port_));
+        }
+    }
 
-    if (bind(socket_, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        log("Failed to bind to port " + std::to_string(port_), true);
-        closeSocket();
+    // Need at least one socket
+    if (socket_ipv4_ == INVALID_SOCKET && socket_ipv6_ == INVALID_SOCKET) {
+        log("Failed to create any DHT socket", true);
         return false;
     }
 
@@ -148,9 +175,13 @@ bool DHT::initSocket() {
 }
 
 void DHT::closeSocket() {
-    if (socket_ != INVALID_SOCKET) {
-        closesocket(socket_);
-        socket_ = INVALID_SOCKET;
+    if (socket_ipv4_ != INVALID_SOCKET) {
+        closesocket(socket_ipv4_);
+        socket_ipv4_ = INVALID_SOCKET;
+    }
+    if (socket_ipv6_ != INVALID_SOCKET) {
+        closesocket(socket_ipv6_);
+        socket_ipv6_ = INVALID_SOCKET;
     }
 }
 
@@ -158,14 +189,50 @@ void DHT::recvLoop() {
     uint8_t buffer[65536];
 
     while (running_) {
-        sockaddr_in6 from{};
-        socklen_t fromlen = sizeof(from);
+        fd_set readfds;
+        FD_ZERO(&readfds);
 
-        int len = recvfrom(socket_, (char*)buffer, sizeof(buffer), 0,
-                          (sockaddr*)&from, &fromlen);
+        SOCKET max_fd = 0;
+        if (socket_ipv4_ != INVALID_SOCKET) {
+            FD_SET(socket_ipv4_, &readfds);
+            if (socket_ipv4_ > max_fd) max_fd = socket_ipv4_;
+        }
+        if (socket_ipv6_ != INVALID_SOCKET) {
+            FD_SET(socket_ipv6_, &readfds);
+            if (socket_ipv6_ > max_fd) max_fd = socket_ipv6_;
+        }
 
-        if (len > 0) {
-            handleMessage(buffer, len, from);
+        timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+
+        int ready = select(static_cast<int>(max_fd + 1), &readfds, nullptr, nullptr, &tv);
+        if (ready <= 0) continue;
+
+        // Check IPv4 socket
+        if (socket_ipv4_ != INVALID_SOCKET && FD_ISSET(socket_ipv4_, &readfds)) {
+            sockaddr_in from4{};
+            socklen_t fromlen = sizeof(from4);
+            int len = recvfrom(socket_ipv4_, (char*)buffer, sizeof(buffer), 0,
+                              (sockaddr*)&from4, &fromlen);
+            if (len > 0) {
+                char ip_buf[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &from4.sin_addr, ip_buf, sizeof(ip_buf));
+                handleMessage(buffer, len, std::string(ip_buf), ntohs(from4.sin_port));
+            }
+        }
+
+        // Check IPv6 socket
+        if (socket_ipv6_ != INVALID_SOCKET && FD_ISSET(socket_ipv6_, &readfds)) {
+            sockaddr_in6 from6{};
+            socklen_t fromlen = sizeof(from6);
+            int len = recvfrom(socket_ipv6_, (char*)buffer, sizeof(buffer), 0,
+                              (sockaddr*)&from6, &fromlen);
+            if (len > 0) {
+                char ip_buf[INET6_ADDRSTRLEN];
+                inet_ntop(AF_INET6, &from6.sin6_addr, ip_buf, sizeof(ip_buf));
+                handleMessage(buffer, len, std::string(ip_buf), ntohs(from6.sin6_port));
+            }
         }
     }
 }
@@ -223,7 +290,7 @@ void DHT::maintenanceLoop() {
     }
 }
 
-void DHT::handleMessage(const uint8_t* data, size_t len, const sockaddr_in6& from) {
+void DHT::handleMessage(const uint8_t* data, size_t len, const std::string& from_ip, uint16_t from_port) {
     BencodeValue msg;
     if (!Bencode::decode(data, len, msg) || !msg.isDict()) {
         return;
@@ -246,15 +313,15 @@ void DHT::handleMessage(const uint8_t* data, size_t len, const sockaddr_in6& fro
     std::string type = y_it->second.asString();
 
     if (type == "q") {
-        handleQuery(dict, txid, from);
+        handleQuery(dict, txid, from_ip, from_port);
     } else if (type == "r") {
-        handleResponse(dict, txid, from);
+        handleResponse(dict, txid, from_ip, from_port);
     } else if (type == "e") {
-        handleError(dict, txid, from);
+        handleError(dict, txid);
     }
 }
 
-void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const sockaddr_in6& from) {
+void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const std::string& sender_ip, uint16_t sender_port) {
     auto q_it = msg.find("q");
     if (q_it == msg.end() || !q_it->second.isString()) return;
     std::string query_type = q_it->second.asString();
@@ -268,13 +335,11 @@ void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const soc
     if (id_it == args.end() || !id_it->second.isString()) return;
     NodeId sender_id(id_it->second.asString());
 
-    std::string sender_ip = addrToString(from);
-
     // Add sender to routing table
     NodeEntry sender;
     sender.id = sender_id;
     sender.ip = sender_ip;
-    sender.port = ntohs(from.sin6_port);
+    sender.port = sender_port;
     routing_table_->addNode(sender);
 
     if (query_type == "ping") {
@@ -285,7 +350,7 @@ void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const soc
         BencodeDict r;
         r["id"] = std::string(reinterpret_cast<const char*>(node_id_.data()), NodeId::SIZE);
         response["r"] = r;
-        sendMessage(response, from);
+        sendMessage(response, sender_ip, sender_port);
     }
     else if (query_type == "find_node") {
         auto target_it = args.find("target");
@@ -295,10 +360,15 @@ void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const soc
         // Find closest nodes
         auto closest = routing_table_->findClosest(target, 8);
 
-        // Build compact node info (20 bytes ID + 18 bytes IPv6 addr)
-        std::string nodes6;
+        // Build compact node info for both IPv4 and IPv6
+        std::string nodes4;  // 26 bytes per node: 20 ID + 4 IPv4 + 2 port
+        std::string nodes6;  // 38 bytes per node: 20 ID + 16 IPv6 + 2 port
         for (const auto& node : closest) {
-            nodes6 += compactNodeInfo(node.id, node.ip, node.port);
+            if (isIPv4(node.ip)) {
+                nodes4 += compactNodeInfo4(node.id, node.ip, node.port);
+            } else {
+                nodes6 += compactNodeInfo6(node.id, node.ip, node.port);
+            }
         }
 
         BencodeDict response;
@@ -306,11 +376,14 @@ void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const soc
         response["y"] = "r";
         BencodeDict r;
         r["id"] = std::string(reinterpret_cast<const char*>(node_id_.data()), NodeId::SIZE);
+        if (!nodes4.empty()) {
+            r["nodes"] = nodes4;
+        }
         if (!nodes6.empty()) {
             r["nodes6"] = nodes6;
         }
         response["r"] = r;
-        sendMessage(response, from);
+        sendMessage(response, sender_ip, sender_port);
     }
     else if (query_type == "get_peers") {
         auto ih_it = args.find("info_hash");
@@ -331,38 +404,59 @@ void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const soc
         if (query_hash == info_hash_) {
             std::lock_guard<std::mutex> lock(peers_mutex_);
             if (!found_peers_.empty()) {
-                // Return peers as compact format
-                std::string values;
+                // Return peers as compact format (both IPv4 and IPv6)
+                BencodeList peers_list;
                 for (const auto& [id, peer] : found_peers_) {
-                    sockaddr_in6 addr{};
-                    if (stringToAddr(peer.first, peer.second, addr)) {
-                        values += std::string(reinterpret_cast<char*>(&addr.sin6_addr), 16);
-                        values += std::string(reinterpret_cast<char*>(&addr.sin6_port), 2);
+                    const std::string& ip = peer.first;
+                    uint16_t port = peer.second;
+                    if (isIPv4(ip)) {
+                        // IPv4: 6 bytes (4 IP + 2 port)
+                        in_addr addr4{};
+                        if (inet_pton(AF_INET, ip.c_str(), &addr4) == 1) {
+                            std::string compact;
+                            compact.append(reinterpret_cast<char*>(&addr4), 4);
+                            uint16_t port_be = htons(port);
+                            compact.append(reinterpret_cast<char*>(&port_be), 2);
+                            peers_list.push_back(compact);
+                        }
+                    } else {
+                        // IPv6: 18 bytes (16 IP + 2 port)
+                        in6_addr addr6{};
+                        if (inet_pton(AF_INET6, ip.c_str(), &addr6) == 1) {
+                            std::string compact;
+                            compact.append(reinterpret_cast<char*>(&addr6), 16);
+                            uint16_t port_be = htons(port);
+                            compact.append(reinterpret_cast<char*>(&port_be), 2);
+                            peers_list.push_back(compact);
+                        }
                     }
                 }
-                if (!values.empty()) {
-                    BencodeList peers_list;
-                    // Each peer is 18 bytes
-                    for (size_t i = 0; i + 18 <= values.size(); i += 18) {
-                        peers_list.push_back(values.substr(i, 18));
-                    }
+                if (!peers_list.empty()) {
                     r["values"] = peers_list;
                 }
             }
         }
 
-        // Return closest nodes
+        // Return closest nodes (both IPv4 and IPv6)
         auto closest = routing_table_->findClosest(query_hash, 8);
+        std::string nodes4;
         std::string nodes6;
         for (const auto& node : closest) {
-            nodes6 += compactNodeInfo(node.id, node.ip, node.port);
+            if (isIPv4(node.ip)) {
+                nodes4 += compactNodeInfo4(node.id, node.ip, node.port);
+            } else {
+                nodes6 += compactNodeInfo6(node.id, node.ip, node.port);
+            }
+        }
+        if (!nodes4.empty()) {
+            r["nodes"] = nodes4;
         }
         if (!nodes6.empty()) {
             r["nodes6"] = nodes6;
         }
 
         response["r"] = r;
-        sendMessage(response, from);
+        sendMessage(response, sender_ip, sender_port);
     }
     else if (query_type == "announce_peer") {
         auto ih_it = args.find("info_hash");
@@ -385,7 +479,7 @@ void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const soc
             e.push_back(int64_t(203));
             e.push_back("Bad token");
             error["e"] = e;
-            sendMessage(error, from);
+            sendMessage(error, sender_ip, sender_port);
             return;
         }
 
@@ -408,11 +502,11 @@ void DHT::handleQuery(const BencodeDict& msg, const std::string& txid, const soc
         BencodeDict r;
         r["id"] = std::string(reinterpret_cast<const char*>(node_id_.data()), NodeId::SIZE);
         response["r"] = r;
-        sendMessage(response, from);
+        sendMessage(response, sender_ip, sender_port);
     }
 }
 
-void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const sockaddr_in6& from) {
+void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const std::string& sender_ip, uint16_t sender_port) {
     auto r_it = msg.find("r");
     if (r_it == msg.end() || !r_it->second.isDict()) return;
     const auto& r = r_it->second.asDict();
@@ -422,13 +516,11 @@ void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const 
     if (id_it == r.end() || !id_it->second.isString()) return;
     NodeId responder_id(id_it->second.asString());
 
-    std::string responder_ip = addrToString(from);
-
     // Add responder to routing table
     NodeEntry responder;
     responder.id = responder_id;
-    responder.ip = responder_ip;
-    responder.port = ntohs(from.sin6_port);
+    responder.ip = sender_ip;
+    responder.port = sender_port;
     routing_table_->addNode(responder);
 
     // Check pending query
@@ -445,7 +537,30 @@ void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const 
     // Collect nodes for iterative lookup
     std::vector<std::pair<std::string, uint16_t>> closer_nodes;
 
-    // Process nodes6 if present (IPv6 compact node info)
+    // Process nodes (IPv4 compact node info)
+    auto nodes_it = r.find("nodes");
+    if (nodes_it != r.end() && nodes_it->second.isString()) {
+        const std::string& nodes = nodes_it->second.asString();
+        // Each node is 26 bytes: 20 bytes ID + 4 bytes IPv4 + 2 bytes port
+        for (size_t i = 0; i + 26 <= nodes.size(); i += 26) {
+            NodeId id;
+            std::string ip;
+            uint16_t port;
+            if (parseCompactNodeInfo4(nodes, i, id, ip, port)) {
+                NodeEntry entry;
+                entry.id = id;
+                entry.ip = ip;
+                entry.port = port;
+                routing_table_->addNode(entry);
+                closer_nodes.push_back({ip, port});
+                if (routing_table_->size() < 50) {
+                    sendPing(ip, port);
+                }
+            }
+        }
+    }
+
+    // Process nodes6 (IPv6 compact node info)
     auto nodes6_it = r.find("nodes6");
     if (nodes6_it != r.end() && nodes6_it->second.isString()) {
         const std::string& nodes6 = nodes6_it->second.asString();
@@ -454,25 +569,19 @@ void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const 
             NodeId id;
             std::string ip;
             uint16_t port;
-            if (parseCompactNodeInfo(nodes6, i, id, ip, port)) {
+            if (parseCompactNodeInfo6(nodes6, i, id, ip, port)) {
                 NodeEntry entry;
                 entry.id = id;
                 entry.ip = ip;
                 entry.port = port;
                 routing_table_->addNode(entry);
-
-                // Collect for iterative lookup
                 closer_nodes.push_back({ip, port});
-
-                // If we don't have many nodes, ping them
                 if (routing_table_->size() < 50) {
                     sendPing(ip, port);
                 }
             }
         }
     }
-
-    // Skip IPv4 nodes - we only want native IPv6
 
     // ITERATIVE LOOKUP: If this was a get_peers query and we got nodes (not values),
     // continue the search by querying those nodes (with deduplication to prevent spam)
@@ -486,29 +595,35 @@ void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const 
         }
     }
 
-    // Process peers (values) if present - IPv6 only, port 17318 only
+    // Process peers (values) if present - both IPv4 (6 bytes) and IPv6 (18 bytes)
     auto values_it = r.find("values");
     if (values_it != r.end() && values_it->second.isList()) {
         for (const auto& v : values_it->second.asList()) {
             if (!v.isString()) continue;
             const std::string& peer = v.asString();
 
-            // Only process IPv6 peers (18 bytes)
-            if (peer.size() != 18) continue;
+            std::string ip;
+            uint16_t port;
 
-            sockaddr_in6 addr{};
-            addr.sin6_family = AF_INET6;
-            memcpy(&addr.sin6_addr, peer.data(), 16);
-            memcpy(&addr.sin6_port, peer.data() + 16, 2);
-            std::string ip = addrToString(addr);
-            uint16_t port = ntohs(addr.sin6_port);
+            if (peer.size() == 6) {
+                // IPv4: 4 bytes IP + 2 bytes port
+                char ip_buf[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, peer.data(), ip_buf, sizeof(ip_buf));
+                ip = ip_buf;
+                port = ntohs(*reinterpret_cast<const uint16_t*>(peer.data() + 4));
+            } else if (peer.size() == 18) {
+                // IPv6: 16 bytes IP + 2 bytes port
+                char ip_buf[INET6_ADDRSTRLEN];
+                inet_ntop(AF_INET6, peer.data(), ip_buf, sizeof(ip_buf));
+                ip = ip_buf;
+                port = ntohs(*reinterpret_cast<const uint16_t*>(peer.data() + 16));
 
-            // Skip IPv4-mapped addresses
-            if (ip.find("::ffff:") == 0) continue;
-
-            // Skip local/private IPv6 ranges (not globally routable)
-            // fd00::/8 = Unique Local Address, fe80::/10 = Link-local
-            if (ip.find("fd") == 0 || ip.find("fe80:") == 0 || ip.find("fc") == 0) continue;
+                // Skip IPv4-mapped addresses and private ranges
+                if (ip.find("::ffff:") == 0) continue;
+                if (ip.find("fd") == 0 || ip.find("fe80:") == 0 || ip.find("fc") == 0) continue;
+            } else {
+                continue;
+            }
 
             // Only accept FTC nodes (port 17318)
             if (port != 17318) continue;
@@ -534,11 +649,11 @@ void DHT::handleResponse(const BencodeDict& msg, const std::string& txid, const 
     // If we got a token, use it to announce (don't log every announce)
     auto token_it = r.find("token");
     if (token_it != r.end() && token_it->second.isString() && announced_port_ > 0) {
-        sendAnnouncePeer(responder_ip, responder.port, token_it->second.asString());
+        sendAnnouncePeer(sender_ip, sender_port, token_it->second.asString());
     }
 }
 
-void DHT::handleError(const BencodeDict& msg, const std::string& txid, const sockaddr_in6& from) {
+void DHT::handleError(const BencodeDict& msg, const std::string& txid) {
     // Just remove from pending
     std::lock_guard<std::mutex> lock(pending_mutex_);
     pending_queries_.erase(txid);
@@ -573,7 +688,7 @@ void DHT::sendFindNode(const std::string& ip, uint16_t port, const NodeId& targe
     BencodeDict a;
     a["id"] = std::string(reinterpret_cast<const char*>(node_id_.data()), NodeId::SIZE);
     a["target"] = std::string(reinterpret_cast<const char*>(target.data()), NodeId::SIZE);
-    a["want"] = BencodeList{std::string("n6")};  // Request IPv6 nodes
+    a["want"] = BencodeList{std::string("n4"), std::string("n6")};  // Request both IPv4 and IPv6 nodes
     msg["a"] = a;
 
     {
@@ -594,7 +709,7 @@ void DHT::sendGetPeers(const std::string& ip, uint16_t port) {
     BencodeDict a;
     a["id"] = std::string(reinterpret_cast<const char*>(node_id_.data()), NodeId::SIZE);
     a["info_hash"] = std::string(reinterpret_cast<const char*>(info_hash_.data()), NodeId::SIZE);
-    a["want"] = BencodeList{std::string("n6")};
+    a["want"] = BencodeList{std::string("n4"), std::string("n6")};
     msg["a"] = a;
 
     {
@@ -629,17 +744,27 @@ void DHT::sendAnnouncePeer(const std::string& ip, uint16_t port, const std::stri
 }
 
 void DHT::sendMessage(const BencodeDict& msg, const std::string& ip, uint16_t port) {
-    sockaddr_in6 addr{};
-    if (!stringToAddr(ip, port, addr)) {
-        return;
-    }
-    sendMessage(msg, addr);
-}
-
-void DHT::sendMessage(const BencodeDict& msg, const sockaddr_in6& addr) {
     std::string data = Bencode::encode(BencodeValue(msg));
-    sendto(socket_, data.data(), static_cast<int>(data.size()), 0,
-           (const sockaddr*)&addr, sizeof(addr));
+
+    if (isIPv4(ip)) {
+        // Send via IPv4 socket
+        if (socket_ipv4_ == INVALID_SOCKET) return;
+        sockaddr_in addr4{};
+        addr4.sin_family = AF_INET;
+        addr4.sin_port = htons(port);
+        if (inet_pton(AF_INET, ip.c_str(), &addr4.sin_addr) != 1) return;
+        sendto(socket_ipv4_, data.data(), static_cast<int>(data.size()), 0,
+               (const sockaddr*)&addr4, sizeof(addr4));
+    } else {
+        // Send via IPv6 socket
+        if (socket_ipv6_ == INVALID_SOCKET) return;
+        sockaddr_in6 addr6{};
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(port);
+        if (inet_pton(AF_INET6, ip.c_str(), &addr6.sin6_addr) != 1) return;
+        sendto(socket_ipv6_, data.data(), static_cast<int>(data.size()), 0,
+               (const sockaddr*)&addr6, sizeof(addr6));
+    }
 }
 
 std::string DHT::generateTxid() {
@@ -679,28 +804,52 @@ bool DHT::verifyToken(const std::string& ip, const std::string& token) {
 }
 
 void DHT::bootstrap() {
-    log("Bootstrapping DHT...");
+    log("Bootstrapping DHT (dual-stack)...");
 
-    // Try to resolve and contact bootstrap nodes
+    // Try to resolve and contact bootstrap nodes (both IPv4 and IPv6)
     for (const auto& [host, port] : bootstrap_nodes_) {
-        // Resolve hostname
-        addrinfo hints{};
-        hints.ai_family = AF_INET6;
-        hints.ai_socktype = SOCK_DGRAM;
-        hints.ai_flags = 0;  // Native IPv6 only (no IPv4-mapped)
+        // Try IPv4 first
+        if (socket_ipv4_ != INVALID_SOCKET) {
+            addrinfo hints{};
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
 
-        addrinfo* result = nullptr;
-        if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &result) == 0 && result) {
-            for (addrinfo* p = result; p != nullptr; p = p->ai_next) {
-                if (p->ai_family == AF_INET6) {
-                    sockaddr_in6* addr = (sockaddr_in6*)p->ai_addr;
-                    std::string ip = addrToString(*addr);
-                    log("Bootstrap: " + host + " -> " + ip);
-                    sendFindNode(ip, port, node_id_);
-                    break;
+            addrinfo* result = nullptr;
+            if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &result) == 0 && result) {
+                for (addrinfo* p = result; p != nullptr; p = p->ai_next) {
+                    if (p->ai_family == AF_INET) {
+                        sockaddr_in* addr = (sockaddr_in*)p->ai_addr;
+                        char ip_buf[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &addr->sin_addr, ip_buf, sizeof(ip_buf));
+                        log("Bootstrap IPv4: " + host + " -> " + std::string(ip_buf));
+                        sendFindNode(ip_buf, port, node_id_);
+                        break;
+                    }
                 }
+                freeaddrinfo(result);
             }
-            freeaddrinfo(result);
+        }
+
+        // Also try IPv6
+        if (socket_ipv6_ != INVALID_SOCKET) {
+            addrinfo hints{};
+            hints.ai_family = AF_INET6;
+            hints.ai_socktype = SOCK_DGRAM;
+
+            addrinfo* result = nullptr;
+            if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &result) == 0 && result) {
+                for (addrinfo* p = result; p != nullptr; p = p->ai_next) {
+                    if (p->ai_family == AF_INET6) {
+                        sockaddr_in6* addr = (sockaddr_in6*)p->ai_addr;
+                        char ip_buf[INET6_ADDRSTRLEN];
+                        inet_ntop(AF_INET6, &addr->sin6_addr, ip_buf, sizeof(ip_buf));
+                        log("Bootstrap IPv6: " + host + " -> " + std::string(ip_buf));
+                        sendFindNode(ip_buf, port, node_id_);
+                        break;
+                    }
+                }
+                freeaddrinfo(result);
+            }
         }
     }
 }
@@ -740,68 +889,97 @@ size_t DHT::getRoutingTableSize() const {
     return routing_table_->size();
 }
 
+size_t DHT::getIPv4NodeCount() const {
+    size_t count = 0;
+    auto nodes = routing_table_->getAllNodes();
+    for (const auto& node : nodes) {
+        if (isIPv4(node.ip)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+size_t DHT::getIPv6NodeCount() const {
+    size_t count = 0;
+    auto nodes = routing_table_->getAllNodes();
+    for (const auto& node : nodes) {
+        if (!isIPv4(node.ip)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 void DHT::log(const std::string& msg, bool is_error) {
     if (log_callback_) {
         log_callback_("[DHT] " + msg, is_error);
     }
 }
 
-std::string DHT::addrToString(const sockaddr_in6& addr) {
-    char buf[INET6_ADDRSTRLEN];
-    inet_ntop(AF_INET6, &addr.sin6_addr, buf, sizeof(buf));
-    return std::string(buf);
+bool DHT::isIPv4(const std::string& ip) {
+    // Simple check: if it contains a dot and no colon, it's IPv4
+    return ip.find('.') != std::string::npos && ip.find(':') == std::string::npos;
 }
 
-bool DHT::stringToAddr(const std::string& ip, uint16_t port, sockaddr_in6& addr) {
-    memset(&addr, 0, sizeof(addr));
-    addr.sin6_family = AF_INET6;
-    addr.sin6_port = htons(port);
-
-    if (inet_pton(AF_INET6, ip.c_str(), &addr.sin6_addr) == 1) {
-        return true;
-    }
-
-    // Try as IPv4 and convert to IPv6-mapped
-    in_addr addr4;
-    if (inet_pton(AF_INET, ip.c_str(), &addr4) == 1) {
-        // Create IPv4-mapped IPv6 address
-        memset(&addr.sin6_addr, 0, sizeof(addr.sin6_addr));
-        addr.sin6_addr.s6_addr[10] = 0xFF;
-        addr.sin6_addr.s6_addr[11] = 0xFF;
-        memcpy(&addr.sin6_addr.s6_addr[12], &addr4, 4);
-        return true;
-    }
-
-    return false;
-}
-
-std::string DHT::compactNodeInfo(const NodeId& id, const std::string& ip, uint16_t port) {
-    sockaddr_in6 addr{};
-    if (!stringToAddr(ip, port, addr)) {
+std::string DHT::compactNodeInfo4(const NodeId& id, const std::string& ip, uint16_t port) {
+    // IPv4 compact format: 26 bytes (20 ID + 4 IPv4 + 2 port)
+    in_addr addr4{};
+    if (inet_pton(AF_INET, ip.c_str(), &addr4) != 1) {
         return "";
     }
 
     std::string result;
     result.append(reinterpret_cast<const char*>(id.data()), NodeId::SIZE);
-    result.append(reinterpret_cast<const char*>(&addr.sin6_addr), 16);
+    result.append(reinterpret_cast<const char*>(&addr4), 4);
     uint16_t port_be = htons(port);
     result.append(reinterpret_cast<const char*>(&port_be), 2);
 
     return result;
 }
 
-bool DHT::parseCompactNodeInfo(const std::string& data, size_t offset, NodeId& id, std::string& ip, uint16_t& port) {
+std::string DHT::compactNodeInfo6(const NodeId& id, const std::string& ip, uint16_t port) {
+    // IPv6 compact format: 38 bytes (20 ID + 16 IPv6 + 2 port)
+    in6_addr addr6{};
+    if (inet_pton(AF_INET6, ip.c_str(), &addr6) != 1) {
+        return "";
+    }
+
+    std::string result;
+    result.append(reinterpret_cast<const char*>(id.data()), NodeId::SIZE);
+    result.append(reinterpret_cast<const char*>(&addr6), 16);
+    uint16_t port_be = htons(port);
+    result.append(reinterpret_cast<const char*>(&port_be), 2);
+
+    return result;
+}
+
+bool DHT::parseCompactNodeInfo4(const std::string& data, size_t offset, NodeId& id, std::string& ip, uint16_t& port) {
+    // IPv4 compact format: 26 bytes (20 ID + 4 IPv4 + 2 port)
+    if (offset + 26 > data.size()) return false;
+
+    id = NodeId(reinterpret_cast<const uint8_t*>(data.data() + offset));
+
+    char ip_buf[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, data.data() + offset + 20, ip_buf, sizeof(ip_buf));
+    ip = ip_buf;
+
+    port = ntohs(*reinterpret_cast<const uint16_t*>(data.data() + offset + 24));
+
+    return true;
+}
+
+bool DHT::parseCompactNodeInfo6(const std::string& data, size_t offset, NodeId& id, std::string& ip, uint16_t& port) {
+    // IPv6 compact format: 38 bytes (20 ID + 16 IPv6 + 2 port)
     if (offset + 38 > data.size()) return false;
 
     id = NodeId(reinterpret_cast<const uint8_t*>(data.data() + offset));
 
-    sockaddr_in6 addr{};
-    addr.sin6_family = AF_INET6;
-    memcpy(&addr.sin6_addr, data.data() + offset + 20, 16);
-    memcpy(&addr.sin6_port, data.data() + offset + 36, 2);
+    char ip_buf[INET6_ADDRSTRLEN];
+    inet_ntop(AF_INET6, data.data() + offset + 20, ip_buf, sizeof(ip_buf));
+    ip = ip_buf;
 
-    ip = addrToString(addr);
-    port = ntohs(addr.sin6_port);
+    port = ntohs(*reinterpret_cast<const uint16_t*>(data.data() + offset + 36));
 
     return true;
 }

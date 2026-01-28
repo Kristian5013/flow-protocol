@@ -7,6 +7,7 @@
 #include "chain/genesis.h"
 #include "chain/snapshot.h"
 #include "chain/consensus.h"
+#include "ftc/version.h"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -20,13 +21,14 @@ void setupStatusRoutes(RouteContext& ctx) {
     auto* chain = ctx.chain;
     auto* mempool = ctx.mempool;
     auto* peer_manager = ctx.peer_manager;
+    auto* dht = ctx.dht;
 
     // Root endpoint - API info
     server->get("/", [](const HttpRequest& req, HttpResponse& res) {
         JsonBuilder json;
         json.beginObject()
             .key("name").value("FTC Node API")
-            .key("version").value("1.0.0")
+            .key("version").value(FTC_VERSION)
             .key("endpoints").beginArray()
                 .value("/status")
                 .value("/block/:id")
@@ -49,10 +51,12 @@ void setupStatusRoutes(RouteContext& ctx) {
     // Status endpoint - node status (flat format for web UI)
     static auto start_time = std::chrono::steady_clock::now();
     server->get("/status", [server, chain, mempool, peer_manager](const HttpRequest& req, HttpResponse& res) {
+        // Get DHT at runtime (it's set after routes are registered)
+        auto* dht = server->getDHT();
         JsonBuilder json;
         json.beginObject()
             .key("node").value("FTC Node")
-            .key("version").value("1.0.0")
+            .key("version").value(FTC_VERSION)
             .key("network").value("mainnet")
             .key("running").value(true);
 
@@ -92,6 +96,19 @@ void setupStatusRoutes(RouteContext& ctx) {
             json.key("peer_count").value(static_cast<uint64_t>(0));
             json.key("connections").value(static_cast<uint64_t>(0));
             json.key("known_addresses").value(static_cast<uint64_t>(0));
+        }
+
+        // DHT info
+        if (dht) {
+            json.key("dht_running").value(dht->isRunning());
+            json.key("dht_nodes").value(static_cast<uint64_t>(dht->getRoutingTableSize()));
+            json.key("dht_nodes_ipv4").value(static_cast<uint64_t>(dht->getIPv4NodeCount()));
+            json.key("dht_nodes_ipv6").value(static_cast<uint64_t>(dht->getIPv6NodeCount()));
+        } else {
+            json.key("dht_running").value(false);
+            json.key("dht_nodes").value(static_cast<uint64_t>(0));
+            json.key("dht_nodes_ipv4").value(static_cast<uint64_t>(0));
+            json.key("dht_nodes_ipv6").value(static_cast<uint64_t>(0));
         }
 
         // Network hashrate - calculated from actual miner share submissions

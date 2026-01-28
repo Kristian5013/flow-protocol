@@ -9,6 +9,7 @@
 #include "chain/block.h"
 #include "p2p/peer_manager.h"
 #include "crypto/keccak256.h"
+#include "ftc/version.h"
 #include <string>
 #include <vector>
 #include <optional>
@@ -187,7 +188,7 @@ struct ApiContext {
     RateLimiter* rate_limiter = nullptr;
 
     // Node info
-    std::string version = "1.0.0";
+    std::string version = FTC_VERSION;
     std::string network = "mainnet";
     bool testnet = false;
 
