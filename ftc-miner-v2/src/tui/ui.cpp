@@ -159,11 +159,11 @@ void MinerUI::renderStats() {
               << Terminal::fg(Color::Yellow) << stats_.blocks_found
               << "\033[K" << Terminal::reset();
 
-    // Row 3: Pool info (miners, your share, est. daily)
+    // Row 3: Pool info (miners, your share)
     Terminal::moveTo(4, y + 3);
     double your_pct = 100.0;
-    if (stats_.active_miners > 1 && stats_.pool_hashrate > 0) {
-        your_pct = (stats_.total_hashrate / stats_.pool_hashrate) * 100.0;
+    if (stats_.active_miners > 1 && stats_.network_hashrate > 0) {
+        your_pct = (stats_.total_hashrate / stats_.network_hashrate) * 100.0;
         if (your_pct > 100.0) your_pct = 100.0;
     }
     std::cout << Terminal::fg(Color::White) << "Pool:     "
@@ -172,9 +172,8 @@ void MinerUI::renderStats() {
               << Terminal::fg(Color::White) << "Your share: "
               << Terminal::fg(Color::Magenta) << formatNumber(your_pct, 1) << "%"
               << Terminal::fg(Color::BrightBlack) << "  │  "
-              << Terminal::fg(Color::White) << "Est. daily: "
-              << Terminal::fg(Color::Yellow)
-              << formatNumber(1440.0 * (your_pct / 100.0) * 50.0, 1) << " FTC"
+              << Terminal::fg(Color::White) << "Net HR: "
+              << Terminal::fg(Color::Yellow) << formatHashrate(stats_.network_hashrate)
               << "\033[K" << Terminal::reset();
 
     // Row 4: Chain info

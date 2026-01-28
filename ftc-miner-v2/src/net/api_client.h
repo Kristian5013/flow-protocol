@@ -26,7 +26,8 @@ public:
     std::optional<mining::Work> getMiningTemplate(const std::string& address);
 
     // Submit found block/share (builds full block from work + solution)
-    SubmitResult submitBlock(const mining::Solution& solution, const mining::Work& work);
+    // solutions_found: total solutions found by miner (for accurate hashrate calculation)
+    SubmitResult submitBlock(const mining::Solution& solution, const mining::Work& work, uint64_t solutions_found = 0);
 
     // Get node status
     int64_t getBlockHeight();
@@ -43,7 +44,6 @@ public:
         bool p2pool_enabled = false;     // P2Pool available on node
         bool p2pool_running = false;     // P2Pool is active
         uint64_t sharechain_height = 0;  // P2Pool sharechain height
-        double pool_hashrate = 0.0;      // P2Pool total hashrate
         uint64_t total_shares = 0;       // Total shares submitted
         uint64_t total_blocks = 0;       // Blocks found by P2Pool
         double shares_per_minute = 0.0;  // Share rate

@@ -239,6 +239,9 @@ void setupMiningRoutes(RouteContext& ctx) {
             return;
         }
 
+        // Parse optional solutions_found (total solutions found by miner)
+        uint64_t solutions_found = parser.getUint("solutions_found");
+
         std::vector<uint8_t> raw_block;
         raw_block.reserve(hex.size() / 2);
         for (size_t i = 0; i + 1 < hex.size(); i += 2) {
@@ -336,6 +339,22 @@ void setupMiningRoutes(RouteContext& ctx) {
                     // Register miner activity
                     if (!coinbase.outputs.empty()) {
                         p2pool->registerMinerShare(coinbase.outputs[0].script_pubkey);
+
+                        // Register ALL shares that meet difficulty for accurate hashrate
+                        // (including stale shares - they still represent real work)
+                        p2pool->registerMinerShareSubmission(
+                            coinbase.outputs[0].script_pubkey,
+                            share_bits
+                        );
+
+                        // If miner reports solutions_found, use that for most accurate hashrate
+                        if (solutions_found > 0) {
+                            p2pool->registerMinerSolutionsFound(
+                                coinbase.outputs[0].script_pubkey,
+                                solutions_found,
+                                share_bits
+                            );
+                        }
                     }
                 }
 
@@ -344,8 +363,8 @@ void setupMiningRoutes(RouteContext& ctx) {
                 if (sharechain->processShare(share, error)) {
                     share_accepted = true;
                 } else {
-                    // Share rejected by sharechain (e.g., orphan, duplicate)
-                    // Still count it as activity but not as accepted
+                    // Share rejected by sharechain (e.g., orphan, duplicate, stale)
+                    // Still counted for hashrate above
                 }
             }
 

@@ -211,9 +211,6 @@ std::vector<uint8_t> PoolStatusMessage::serialize() const {
     data.insert(data.end(), main_tip.begin(), main_tip.end());
 
     // Pool stats
-    for (int i = 0; i < 8; i++) {
-        data.push_back((pool_hashrate >> (i * 8)) & 0xFF);
-    }
     data.push_back(miner_count & 0xFF);
     data.push_back((miner_count >> 8) & 0xFF);
     data.push_back((miner_count >> 16) & 0xFF);
@@ -226,7 +223,7 @@ std::vector<uint8_t> PoolStatusMessage::serialize() const {
 }
 
 bool PoolStatusMessage::deserialize(const std::vector<uint8_t>& data) {
-    if (data.size() < 92) return false;
+    if (data.size() < 84) return false;
 
     size_t pos = 0;
 
@@ -241,12 +238,6 @@ bool PoolStatusMessage::deserialize(const std::vector<uint8_t>& data) {
 
     std::copy(data.begin() + pos, data.begin() + pos + 32, main_tip.begin());
     pos += 32;
-
-    pool_hashrate = 0;
-    for (int i = 0; i < 8; i++) {
-        pool_hashrate |= static_cast<uint64_t>(data[pos + i]) << (i * 8);
-    }
-    pos += 8;
 
     miner_count = data[pos] | (data[pos+1] << 8) | (data[pos+2] << 16) | (data[pos+3] << 24);
     pos += 4;
@@ -606,9 +597,9 @@ void P2PoolNet::handlePoolStatus(p2p::Connection::Id id, const PoolStatusMessage
         it->second.share_height = msg.share_height;
         it->second.share_tip = msg.share_tip;
 
-        LOG_DEBUG("P2Pool: peer {} status: height={} hashrate={}",
+        LOG_DEBUG("P2Pool: peer {} status: height={} miners={}",
                   it->second.addr.toString(),
-                  msg.share_height, msg.pool_hashrate);
+                  msg.share_height, msg.miner_count);
 
         // If they have more shares, sync
         if (msg.share_height > sharechain_->getHeight()) {
@@ -1088,48 +1079,6 @@ std::map<std::vector<uint8_t>, uint64_t> P2Pool::getEstimatedPayouts() const {
     return payouts;
 }
 
-uint64_t P2Pool::getPoolHashrate() const {
-    if (!sharechain_) return 0;
-
-    auto stats = sharechain_->getStats();
-    if (stats.share_rate <= 0) return 0;
-
-    // Estimate hashrate from share submission rate
-    // For share with bits, expected hashes to find = 2^256 / target
-    // Simplified: expected_hashes = 2^32 * 256^(0x1d - exp) * (0xffff / mantissa)
-    //
-    // For genesis (0x1d00ffff): expected_hashes ≈ 2^32 = 4.3 billion
-    // For easier shares (higher exp): expected_hashes decreases by 256x per exp
-
-    auto* tip = sharechain_->getTip();
-    if (!tip) return 0;
-
-    uint32_t bits = tip->bits;
-    uint32_t exp = (bits >> 24) & 0xFF;
-    uint32_t mantissa = bits & 0x00FFFFFF;
-    if (mantissa == 0) mantissa = 1;
-
-    // Base hashes for genesis difficulty (exp=0x1d, mantissa=0xffff)
-    double expected_hashes = 4294967296.0;  // 2^32
-
-    // Adjust for exponent difference from genesis (0x1d = 29)
-    int exp_diff = 0x1d - static_cast<int>(exp);
-    for (int i = 0; i < exp_diff && i < 8; i++) {
-        expected_hashes *= 256.0;  // Harder target
-    }
-    for (int i = 0; i > exp_diff && i > -8; i--) {
-        expected_hashes /= 256.0;  // Easier target
-    }
-
-    // Adjust for mantissa (0xffff / actual_mantissa)
-    expected_hashes *= static_cast<double>(0xffff) / static_cast<double>(mantissa);
-
-    // hashrate = shares_per_minute * expected_hashes_per_share / 60
-    double hashrate = stats.share_rate * expected_hashes / 60.0;
-
-    return static_cast<uint64_t>(hashrate);
-}
-
 uint32_t P2Pool::getMinerCount() const {
     // Count unique miners from sharechain PPLNS window (network-wide)
     if (sharechain_) {
@@ -1174,8 +1123,8 @@ P2Pool::Stats P2Pool::getStats() const {
         }
     }
 
-    stats.pool_hashrate = getPoolHashrate();
     stats.active_miners = getMinerCount();
+    stats.total_hashrate = getTotalMinerHashrate();
 
     if (network_) {
         stats.peer_count = network_->getPeerCount();
@@ -1242,6 +1191,118 @@ void P2Pool::onNewBlock(const chain::Block& block) {
     if (on_block_found_) {
         on_block_found_(block);
     }
+}
+
+void P2Pool::registerMinerShareSubmission(const std::vector<uint8_t>& payout_script, uint32_t share_bits) {
+    if (payout_script.empty()) return;
+
+    std::lock_guard<std::mutex> lock(miner_mutex_);
+    auto now = std::chrono::steady_clock::now();
+
+    auto& info = miner_shares_[payout_script];
+    info.share_times.push_back(now);
+    info.last_share_bits = share_bits;
+
+    // Clean old entries (older than SHARE_WINDOW_SECONDS)
+    auto cutoff = now - std::chrono::seconds(SHARE_WINDOW_SECONDS);
+    while (!info.share_times.empty() && info.share_times.front() < cutoff) {
+        info.share_times.pop_front();
+    }
+
+    // Update last seen
+    miner_last_seen_[payout_script] = now;
+}
+
+void P2Pool::registerMinerSolutionsFound(const std::vector<uint8_t>& payout_script, uint64_t total_solutions, uint32_t share_bits) {
+    std::lock_guard<std::mutex> lock(miner_mutex_);
+    auto now = std::chrono::steady_clock::now();
+
+    auto& info = miner_shares_[payout_script];
+    info.last_share_bits = share_bits;
+
+    if (!info.has_solutions_data) {
+        // First report from this miner
+        info.has_solutions_data = true;
+        info.first_report_time = now;
+        info.last_solutions_count = total_solutions;
+    } else {
+        // Update solutions count
+        info.last_solutions_count = total_solutions;
+    }
+
+    // Update last seen
+    miner_last_seen_[payout_script] = now;
+}
+
+uint64_t P2Pool::getTotalMinerHashrate() const {
+    std::lock_guard<std::mutex> lock(miner_mutex_);
+    auto now = std::chrono::steady_clock::now();
+
+    uint64_t total_hashrate = 0;
+
+    for (const auto& [script, info] : miner_shares_) {
+        // Skip inactive miners
+        auto last_seen_it = miner_last_seen_.find(script);
+        if (last_seen_it != miner_last_seen_.end()) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_seen_it->second).count();
+            if (elapsed >= MINER_TIMEOUT_SECONDS) {
+                continue;  // Miner is offline
+            }
+        }
+
+        if (info.last_share_bits == 0) {
+            continue;
+        }
+
+        // Calculate difficulty from bits
+        uint32_t bits = info.last_share_bits;
+        uint32_t exp = (bits >> 24) & 0xFF;
+        uint32_t mantissa = bits & 0x00FFFFFF;
+        if (mantissa == 0) mantissa = 1;
+
+        double difficulty = 1.0;
+        difficulty = static_cast<double>(0x00FFFF) / static_cast<double>(mantissa);
+        int exp_diff = 0x1d - static_cast<int>(exp);
+        for (int i = 0; i < exp_diff && i < 8; i++) difficulty *= 256.0;
+        for (int i = 0; i > exp_diff && i > -8; i--) difficulty /= 256.0;
+
+        // Prefer solutions_found data (most accurate) over share count
+        if (info.has_solutions_data && info.last_solutions_count > 0) {
+            // Calculate elapsed time since first report
+            auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - info.first_report_time).count();
+            if (elapsed_seconds < 1) elapsed_seconds = 1;
+
+            // hashrate = solutions * difficulty * 2^32 / time
+            double miner_hashrate = static_cast<double>(info.last_solutions_count) * difficulty * 4294967296.0 / static_cast<double>(elapsed_seconds);
+            total_hashrate += static_cast<uint64_t>(miner_hashrate);
+        } else {
+            // Fallback: use share count (less accurate due to queue bottleneck)
+            auto cutoff = now - std::chrono::seconds(SHARE_WINDOW_SECONDS);
+            size_t recent_shares = 0;
+            std::chrono::steady_clock::time_point oldest_share = now;
+            for (const auto& t : info.share_times) {
+                if (t >= cutoff) {
+                    recent_shares++;
+                    if (t < oldest_share) {
+                        oldest_share = t;
+                    }
+                }
+            }
+
+            if (recent_shares == 0) {
+                continue;
+            }
+
+            auto actual_elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - oldest_share).count();
+            if (actual_elapsed < 1) actual_elapsed = 1;
+            if (actual_elapsed > SHARE_WINDOW_SECONDS) actual_elapsed = SHARE_WINDOW_SECONDS;
+
+            double miner_hashrate = static_cast<double>(recent_shares) * difficulty * 4294967296.0 / static_cast<double>(actual_elapsed);
+            total_hashrate += static_cast<uint64_t>(miner_hashrate);
+        }
+    }
+
+    return total_hashrate;
 }
 
 } // namespace p2pool

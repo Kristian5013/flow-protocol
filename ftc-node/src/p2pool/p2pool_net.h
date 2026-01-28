@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <queue>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <atomic>
@@ -98,7 +99,6 @@ struct PoolStatusMessage {
     crypto::Hash256 share_tip;
     uint32_t main_height;
     crypto::Hash256 main_tip;
-    uint64_t pool_hashrate;
     uint32_t miner_count;
     uint64_t shares_per_minute;
 
@@ -324,22 +324,31 @@ public:
     // Payout info
     std::map<std::vector<uint8_t>, uint64_t> getEstimatedPayouts() const;
     std::map<std::vector<uint8_t>, uint64_t> getPayouts() const { return getEstimatedPayouts(); }
-    uint64_t getPoolHashrate() const;
     uint32_t getMinerCount() const;
 
-    // Register a miner's share contribution
+    // Register a miner's share contribution (for activity tracking)
     void registerMinerShare(const std::vector<uint8_t>& payout_script);
+
+    // Register an accepted share submission (for accurate hashrate calculation)
+    void registerMinerShareSubmission(const std::vector<uint8_t>& payout_script, uint32_t share_bits);
+
+    // Register total solutions found by a miner (for most accurate hashrate)
+    // This is called with cumulative total, not delta
+    void registerMinerSolutionsFound(const std::vector<uint8_t>& payout_script, uint64_t total_solutions, uint32_t share_bits);
+
+    // Get total hashrate from all active miners (based on actual share submissions)
+    uint64_t getTotalMinerHashrate() const;
 
     // Statistics
     struct Stats {
         uint32_t sharechain_height;
         crypto::Hash256 sharechain_tip;
-        uint64_t pool_hashrate;
         uint32_t active_miners;
         uint64_t total_shares;
         uint64_t total_blocks;
         double shares_per_minute;
         size_t peer_count;
+        uint64_t total_hashrate;  // Sum of all miners' hashrates (from shares)
     };
     Stats getStats() const;
 
@@ -375,7 +384,20 @@ private:
     std::map<std::vector<uint8_t>, uint64_t> miner_work_count_;  // script -> work count
     std::map<std::vector<uint8_t>, std::chrono::steady_clock::time_point> miner_last_seen_;  // script -> last activity
 
+    // Per-miner share tracking for accurate hashrate calculation
+    struct MinerShareInfo {
+        std::deque<std::chrono::steady_clock::time_point> share_times;  // Recent share timestamps
+        uint32_t last_share_bits = 0;  // Difficulty of last share
+
+        // Solutions-based hashrate tracking (most accurate)
+        uint64_t last_solutions_count = 0;  // Last reported total solutions
+        std::chrono::steady_clock::time_point first_report_time;  // When first report received
+        bool has_solutions_data = false;  // Whether miner reports solutions_found
+    };
+    std::map<std::vector<uint8_t>, MinerShareInfo> miner_shares_;  // script -> share info
+
     static constexpr int MINER_TIMEOUT_SECONDS = 15;  // 15 seconds (miners poll every 2-3 sec)
+    static constexpr int SHARE_WINDOW_SECONDS = 300;  // 5 minutes window for hashrate calculation
 
     // Internal
     void onShareAccepted(const Share& share, bool accepted);

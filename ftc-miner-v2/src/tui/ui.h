@@ -63,7 +63,6 @@ struct MiningStats {
     bool p2pool_running = false;       // P2Pool active
     uint32_t active_miners = 0;        // Miners in P2Pool
     uint64_t sharechain_height = 0;    // P2Pool sharechain height
-    double pool_hashrate = 0.0;        // P2Pool total hashrate
     uint64_t pool_total_shares = 0;    // Total shares in pool
     uint64_t pool_total_blocks = 0;    // Blocks found by pool
     double shares_per_minute = 0.0;    // Pool share rate

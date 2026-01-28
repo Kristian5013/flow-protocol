@@ -48,7 +48,7 @@ void setupStatusRoutes(RouteContext& ctx) {
 
     // Status endpoint - node status (flat format for web UI)
     static auto start_time = std::chrono::steady_clock::now();
-    server->get("/status", [chain, mempool, peer_manager](const HttpRequest& req, HttpResponse& res) {
+    server->get("/status", [server, chain, mempool, peer_manager](const HttpRequest& req, HttpResponse& res) {
         JsonBuilder json;
         json.beginObject()
             .key("node").value("FTC Node")
@@ -94,49 +94,12 @@ void setupStatusRoutes(RouteContext& ctx) {
             json.key("known_addresses").value(static_cast<uint64_t>(0));
         }
 
-        // Network hashrate (estimate from difficulty and block time)
-        // hashrate = difficulty * 2^32 / avg_block_time
-        // difficulty = 0xFFFF * 2^208 / target (Bitcoin-style)
-        // For simplicity: hashrate ≈ 2^32 * difficulty / avg_block_time
+        // Network hashrate - calculated from actual miner share submissions
+        // This is accurate per-miner tracking, not blockchain-based estimate
         uint64_t network_hashrate = 0;
-        if (chain) {
-            int32_t height = chain->getHeight();
-            if (height >= 10) {
-                auto* tip = chain->getBlockIndex(height);
-                auto* old_block = chain->getBlockIndex(height - 10);
-
-                if (tip && old_block) {
-                    int64_t time_diff = static_cast<int64_t>(tip->timestamp) - static_cast<int64_t>(old_block->timestamp);
-                    if (time_diff > 0) {
-                        // Calculate difficulty from current bits
-                        uint32_t bits = tip->bits;
-                        uint32_t exponent = (bits >> 24) & 0xFF;
-                        uint32_t mantissa = bits & 0x00FFFFFF;
-
-                        // difficulty = 0xFFFF * 2^208 / target
-                        // target = mantissa * 2^(8*(exponent-3))
-                        // For bits=0x1d00ffff: difficulty = 1
-                        // For bits=0x1c00ffff: difficulty = 256
-                        // etc.
-
-                        // Simplified: difficulty relative to 0x1d00ffff
-                        // diff_shift = 0x1d - exponent (number of bytes difference)
-                        double difficulty = 1.0;
-                        if (mantissa > 0) {
-                            // Base difficulty from mantissa ratio
-                            difficulty = static_cast<double>(0x00FFFF) / static_cast<double>(mantissa);
-                            // Adjust for exponent (each byte shift = 256x difficulty)
-                            int exp_diff = 0x1d - static_cast<int>(exponent);
-                            for (int i = 0; i < exp_diff; i++) difficulty *= 256.0;
-                            for (int i = 0; i > exp_diff; i--) difficulty /= 256.0;
-                        }
-
-                        // hashrate = difficulty * 2^32 * blocks / time_diff
-                        double avg_block_time = static_cast<double>(time_diff) / 10.0;
-                        network_hashrate = static_cast<uint64_t>(difficulty * 4294967296.0 / avg_block_time);
-                    }
-                }
-            }
+        auto* p2pool = server->getP2Pool();
+        if (p2pool && p2pool->isRunning()) {
+            network_hashrate = p2pool->getTotalMinerHashrate();
         }
         json.key("network_hashrate").value(network_hashrate);
 

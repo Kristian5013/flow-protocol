@@ -321,7 +321,6 @@ int main(int argc, char** argv) {
         stats.p2pool_enabled = initial_net_stats.p2pool_enabled;
         stats.p2pool_running = initial_net_stats.p2pool_running;
         stats.sharechain_height = initial_net_stats.sharechain_height;
-        stats.pool_hashrate = initial_net_stats.pool_hashrate;
         stats.pool_total_shares = initial_net_stats.total_shares;
         stats.pool_total_blocks = initial_net_stats.total_blocks;
         stats.shares_per_minute = initial_net_stats.shares_per_minute;
@@ -453,7 +452,6 @@ int main(int argc, char** argv) {
     // P2Pool stats (shared with network thread) - initialize from initial stats
     std::atomic<bool> network_p2pool_running{stats.p2pool_running};
     std::atomic<uint64_t> network_sharechain_height{stats.sharechain_height};
-    std::atomic<double> network_pool_hashrate{stats.pool_hashrate};
     std::atomic<uint64_t> network_pool_shares{stats.pool_total_shares};
     std::atomic<uint64_t> network_pool_blocks{stats.pool_total_blocks};
     std::atomic<double> network_shares_per_minute{stats.shares_per_minute};
@@ -500,15 +498,16 @@ int main(int argc, char** argv) {
 
                 // Check staleness NOW (not when it was queued)
                 mining::Work current_work = work_manager.getWork();
-                if (sol.height != current_work.height) {
-                    // Stale - discard without network call
-                    stats.shares_stale++;
-                    // Don't log every stale - too spammy
-                    continue;
+                bool is_stale = (sol.height != current_work.height);
+
+                // Get total solutions found by all GPUs (for accurate hashrate reporting)
+                uint64_t total_solutions = 0;
+                for (const auto& gpu : gpus) {
+                    total_solutions += gpu.accepted;
                 }
 
-                // Valid solution - submit
-                auto result = client->submitBlock(sol, sol.work);
+                // Submit ALL shares to node (even stale) for accurate hashrate tracking
+                auto result = client->submitBlock(sol, sol.work, total_solutions);
                 if (result.accepted) {
                     stats.shares_accepted++;
                     node_manager.recordSuccess(0);
@@ -527,13 +526,8 @@ int main(int argc, char** argv) {
                             if (cfg.tui_enabled) {
                                 ui.addLogMessage("New work: h=" + std::to_string(fresh_work->height), tui::Color::Cyan);
                             }
-
-                            // Clear ALL pending solutions - they're for old height
-                            size_t cleared = work_manager.clearPendingSolutions();
-                            stats.shares_stale += cleared;
-                            if (cfg.tui_enabled && cleared > 0) {
-                                ui.addLogMessage("Cleared " + std::to_string(cleared) + " stale", tui::Color::Yellow);
-                            }
+                            // DON'T clear pending solutions - let them be submitted as stale
+                            // The node will count them for hashrate calculation
                         }
                     } else {
                         if (cfg.tui_enabled) {
@@ -541,10 +535,16 @@ int main(int argc, char** argv) {
                         }
                     }
                 } else {
-                    stats.shares_rejected++;
-                    node_manager.recordFailure();
-                    if (cfg.tui_enabled) {
-                        ui.addLogMessage("Share REJECTED h=" + std::to_string(sol.height), tui::Color::Red);
+                    // Not accepted - check if stale or rejected
+                    if (is_stale) {
+                        stats.shares_stale++;
+                        // Don't log stale - too spammy
+                    } else {
+                        stats.shares_rejected++;
+                        node_manager.recordFailure();
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("Share REJECTED h=" + std::to_string(sol.height), tui::Color::Red);
+                        }
                     }
                 }
             }
@@ -569,7 +569,6 @@ int main(int argc, char** argv) {
                     // Update P2Pool stats
                     network_p2pool_running = net_stats.p2pool_running;
                     network_sharechain_height = net_stats.sharechain_height;
-                    network_pool_hashrate = net_stats.pool_hashrate;
                     network_pool_shares = net_stats.total_shares;
                     network_pool_blocks = net_stats.total_blocks;
                     network_shares_per_minute = net_stats.shares_per_minute;
@@ -604,15 +603,11 @@ int main(int argc, char** argv) {
                     if (new_work && new_work->height != current_work.height) {
                         work_manager.setWork(*new_work);
                         network_height = new_work->height;
-
-                        // Clear stale solutions from old height
-                        size_t cleared = work_manager.clearPendingSolutions();
-                        stats.shares_stale += cleared;
+                        // DON'T clear pending solutions - let them be submitted as stale
+                        // The node will count them for hashrate calculation
 
                         if (cfg.tui_enabled) {
-                            ui.addLogMessage("New block h=" + std::to_string(new_work->height) +
-                                           (cleared > 0 ? " (cleared " + std::to_string(cleared) + " stale)" : ""),
-                                           tui::Color::Cyan);
+                            ui.addLogMessage("New block h=" + std::to_string(new_work->height), tui::Color::Cyan);
                         }
                     }
                 }
@@ -656,7 +651,6 @@ int main(int argc, char** argv) {
         // Update P2Pool stats from network thread
         stats.p2pool_running = network_p2pool_running;
         stats.sharechain_height = network_sharechain_height;
-        stats.pool_hashrate = network_pool_hashrate;
         stats.pool_total_shares = network_pool_shares;
         stats.pool_total_blocks = network_pool_blocks;
         stats.shares_per_minute = network_shares_per_minute;

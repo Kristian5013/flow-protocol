@@ -356,14 +356,18 @@ std::optional<mining::Work> APIClient::getMiningTemplate(const std::string& addr
     return work;
 }
 
-SubmitResult APIClient::submitBlock(const mining::Solution& solution, const mining::Work& work) {
+SubmitResult APIClient::submitBlock(const mining::Solution& solution, const mining::Work& work, uint64_t solutions_found) {
     SubmitResult result;
 
     std::vector<uint8_t> block_data = work.buildBlock(solution.nonce, solution.timestamp_offset);
     std::string block_hex = bytesToHexString(block_data);
 
     std::ostringstream ss;
-    ss << "{\"hex\":\"" << block_hex << "\"}";
+    ss << "{\"hex\":\"" << block_hex << "\"";
+    if (solutions_found > 0) {
+        ss << ",\"solutions_found\":" << solutions_found;
+    }
+    ss << "}";
     std::string response = httpPost("/mining/submit", ss.str());
 
     result.accepted = response.find("\"accepted\":true") != std::string::npos;
@@ -444,12 +448,6 @@ APIClient::NetworkStats APIClient::getNetworkStats() {
         pos = p2pool_response.find("\"sharechain_height\":");
         if (pos != std::string::npos) {
             stats.sharechain_height = std::stoull(p2pool_response.substr(pos + 20));
-        }
-
-        // pool_hashrate
-        pos = p2pool_response.find("\"pool_hashrate\":");
-        if (pos != std::string::npos) {
-            stats.pool_hashrate = std::stod(p2pool_response.substr(pos + 16));
         }
 
         // total_shares

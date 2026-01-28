@@ -32,12 +32,12 @@ void setupP2PoolRoutes(RouteContext& ctx) {
             .key("running").value(p2pool->isRunning())
             .key("sharechain_height").value(static_cast<int64_t>(stats.sharechain_height))
             .key("sharechain_tip").value(hashToHex(stats.sharechain_tip))
-            .key("pool_hashrate").value(stats.pool_hashrate)
             .key("active_miners").value(static_cast<int64_t>(stats.active_miners))
             .key("total_shares").value(stats.total_shares)
             .key("total_blocks").value(stats.total_blocks)
             .key("shares_per_minute").value(stats.shares_per_minute)
             .key("peer_count").value(static_cast<int64_t>(stats.peer_count))
+            .key("total_hashrate").value(stats.total_hashrate)
             .endObject();
         res.success(json.build());
     });
