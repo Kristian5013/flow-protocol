@@ -356,7 +356,7 @@ std::optional<mining::Work> APIClient::getMiningTemplate(const std::string& addr
     return work;
 }
 
-SubmitResult APIClient::submitBlock(const mining::Solution& solution, const mining::Work& work, uint64_t solutions_found) {
+SubmitResult APIClient::submitBlock(const mining::Solution& solution, const mining::Work& work, uint64_t solutions_found, bool share_only) {
     SubmitResult result;
 
     std::vector<uint8_t> block_data = work.buildBlock(solution.nonce, solution.timestamp_offset);
@@ -366,6 +366,9 @@ SubmitResult APIClient::submitBlock(const mining::Solution& solution, const mini
     ss << "{\"hex\":\"" << block_hex << "\"";
     if (solutions_found > 0) {
         ss << ",\"solutions_found\":" << solutions_found;
+    }
+    if (share_only) {
+        ss << ",\"share_only\":true";
     }
     ss << "}";
     std::string response = httpPost("/mining/submit", ss.str());

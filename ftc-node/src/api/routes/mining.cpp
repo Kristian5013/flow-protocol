@@ -247,6 +247,9 @@ void setupMiningRoutes(RouteContext& ctx) {
         // Parse optional solutions_found (total solutions found by miner)
         uint64_t solutions_found = parser.getUint("solutions_found");
 
+        // Parse optional share_only flag (for stale blocks - count for hashrate but don't process as block)
+        bool share_only = parser.getBool("share_only");
+
         std::vector<uint8_t> raw_block;
         raw_block.reserve(hex.size() / 2);
         for (size_t i = 0; i + 1 < hex.size(); i += 2) {
@@ -374,7 +377,8 @@ void setupMiningRoutes(RouteContext& ctx) {
             }
 
             // Check if also meets block difficulty (harder target for actual blocks)
-            if (meetsTarget(block_hash, block_bits)) {
+            // Don't process as block if share_only=true (stale blocks - only count for hashrate)
+            if (meetsTarget(block_hash, block_bits) && !share_only) {
                 is_block = true;
             }
         } else {

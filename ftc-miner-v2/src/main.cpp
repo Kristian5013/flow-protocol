@@ -500,14 +500,21 @@ int main(int argc, char** argv) {
                 mining::Work current_work = work_manager.getWork();
                 bool is_stale = (sol.height != current_work.height);
 
+                // Check if this solution is a BLOCK (meets block target, not just share target)
+                bool is_block_solution = mining::Keccak256::meetsTarget(sol.hash, sol.work.target);
+
                 // Get total solutions found by all GPUs (for accurate hashrate reporting)
                 uint64_t total_solutions = 0;
                 for (const auto& gpu : gpus) {
                     total_solutions += gpu.accepted;
                 }
 
-                // Submit ALL shares to node (even stale) for accurate hashrate tracking
-                auto result = client->submitBlock(sol, sol.work, total_solutions);
+                // CRITICAL: Submit stale BLOCKS with share_only=true to prevent chain reorgs
+                // but still count them for accurate hashrate calculation
+                bool share_only = (is_stale && is_block_solution);
+
+                // Submit solution to node
+                auto result = client->submitBlock(sol, sol.work, total_solutions, share_only);
                 if (result.accepted) {
                     stats.shares_accepted++;
                     node_manager.recordSuccess(0);

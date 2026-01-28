@@ -27,7 +27,8 @@ public:
 
     // Submit found block/share (builds full block from work + solution)
     // solutions_found: total solutions found by miner (for accurate hashrate calculation)
-    SubmitResult submitBlock(const mining::Solution& solution, const mining::Work& work, uint64_t solutions_found = 0);
+    // share_only: if true, don't process as block even if it meets block difficulty (for stale blocks)
+    SubmitResult submitBlock(const mining::Solution& solution, const mining::Work& work, uint64_t solutions_found = 0, bool share_only = false);
 
     // Get node status
     int64_t getBlockHeight();
