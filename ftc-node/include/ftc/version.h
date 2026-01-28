@@ -3,11 +3,11 @@
 // Version
 #define FTC_VERSION_MAJOR 1
 #define FTC_VERSION_MINOR 0
-#define FTC_VERSION_PATCH 2
+#define FTC_VERSION_PATCH 3
 
-#define FTC_VERSION "1.0.2"
-#define FTC_VERSION_STRING "FTC Node v1.0.2"
-#define FTC_USER_AGENT "/FTCNode:1.0.2/"
+#define FTC_VERSION "1.0.3"
+#define FTC_VERSION_STRING "FTC Node v1.0.3"
+#define FTC_USER_AGENT "/FTCNode:1.0.3/"
 
 // Protocol
 #define FTC_PROTOCOL_VERSION 1
