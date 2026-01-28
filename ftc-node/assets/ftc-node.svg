@@ -1,35 +1,99 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#F7931A"/>
-      <stop offset="100%" style="stop-color:#E8820A"/>
+    <!-- Main gradient - deep blue to cyan (flow/water theme) -->
+    <linearGradient id="coinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0A84FF"/>
+      <stop offset="50%" style="stop-color:#00D4AA"/>
+      <stop offset="100%" style="stop-color:#00F5D4"/>
     </linearGradient>
+
+    <!-- Inner glow -->
+    <radialGradient id="innerGlow" cx="30%" cy="30%" r="70%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#FFFFFF;stop-opacity:0"/>
+    </radialGradient>
+
+    <!-- Shadow filter -->
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.3"/>
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#0A84FF" flood-opacity="0.4"/>
+    </filter>
+
+    <!-- Symbol glow -->
+    <filter id="textGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
     </filter>
   </defs>
 
-  <!-- Background circle (Bitcoin style) -->
-  <circle cx="256" cy="256" r="240" fill="url(#bgGrad)" filter="url(#shadow)"/>
+  <!-- Outer ring (coin edge) -->
+  <circle cx="256" cy="256" r="248" fill="#1a1a2e" filter="url(#shadow)"/>
 
-  <!-- Inner ring for depth -->
-  <circle cx="256" cy="256" r="220" fill="none" stroke="#E8820A" stroke-width="2" opacity="0.5"/>
+  <!-- Main coin face -->
+  <circle cx="256" cy="256" r="232" fill="url(#coinGrad)"/>
 
-  <!-- Rotated F symbol group (Bitcoin is tilted ~14 degrees) -->
-  <g transform="rotate(-12, 256, 256)">
-    <!-- Main F vertical bar -->
-    <rect x="180" y="100" width="48" height="312" rx="24" fill="white"/>
+  <!-- Inner glow overlay -->
+  <circle cx="256" cy="256" r="232" fill="url(#innerGlow)"/>
 
-    <!-- F top horizontal bar -->
-    <rect x="180" y="100" width="160" height="48" rx="24" fill="white"/>
+  <!-- Decorative inner ring -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="white" stroke-width="3" opacity="0.3"/>
 
-    <!-- F middle horizontal bar -->
-    <rect x="180" y="210" width="120" height="44" rx="22" fill="white"/>
+  <!-- Flow lines (representing data flow / P2P) -->
+  <g opacity="0.15" stroke="white" stroke-width="2" fill="none">
+    <path d="M 120 180 Q 200 140 280 180 Q 360 220 400 180"/>
+    <path d="M 100 256 Q 180 216 256 256 Q 334 296 412 256"/>
+    <path d="M 120 332 Q 200 372 280 332 Q 360 292 400 332"/>
+  </g>
 
-    <!-- Top extension (like Bitcoin's vertical lines) -->
-    <rect x="290" y="60" width="36" height="70" rx="18" fill="white"/>
+  <!-- FTC Symbol - Modern stylized F with flow elements -->
+  <g filter="url(#textGlow)">
+    <!-- Main F shape -->
+    <path d="
+      M 175 130
+      L 175 382
+      Q 175 400 193 400
+      L 207 400
+      Q 225 400 225 382
+      L 225 280
+      L 295 280
+      Q 313 280 313 262
+      L 313 248
+      Q 313 230 295 230
+      L 225 230
+      L 225 180
+      L 320 180
+      Q 338 180 338 162
+      L 338 148
+      Q 338 130 320 130
+      L 193 130
+      Q 175 130 175 148
+      Z
+    " fill="white"/>
 
-    <!-- Bottom extension -->
-    <rect x="200" y="380" width="36" height="70" rx="18" fill="white"/>
+    <!-- Top accent bar (like Bitcoin's vertical lines) -->
+    <rect x="295" y="95" width="28" height="60" rx="14" fill="white"/>
+
+    <!-- Bottom accent bar -->
+    <rect x="185" y="370" width="28" height="50" rx="14" fill="white"/>
+
+    <!-- Flow arrow (representing continuous flow) -->
+    <path d="
+      M 330 230
+      L 360 256
+      L 330 282
+      L 330 267
+      L 295 267
+      L 295 245
+      L 330 245
+      Z
+    " fill="white" opacity="0.9"/>
+  </g>
+
+  <!-- Subtle tech grid pattern -->
+  <g opacity="0.05" stroke="white" stroke-width="1">
+    <line x1="256" y1="80" x2="256" y2="432"/>
+    <line x1="80" y1="256" x2="432" y2="256"/>
   </g>
 </svg>

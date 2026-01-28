@@ -222,16 +222,22 @@ int main(int argc, char** argv) {
     gpu_miner.setWorkManager(&work_manager);
 
     gpu_miner.setSolutionCallback([&](const mining::Solution& sol) {
-        // Just log - submission is handled by main loop via work_manager
-        if (cfg.tui_enabled) {
-            ui.addLogMessage("*** BLOCK FOUND! *** Height: " + std::to_string(sol.height) +
-                           " Nonce: " + std::to_string(sol.nonce), tui::Color::Yellow);
-        } else {
-            std::cout << "\n*** BLOCK FOUND! ***\n";
-            std::cout << "Height: " << sol.height << "\n";
-            std::cout << "Nonce: " << sol.nonce << "\n";
-            std::cout << "Hash: " << mining::Keccak256::toHex(sol.hash) << "\n\n";
+        // Check if this meets block target (actual block) or just share target
+        bool is_block = mining::Keccak256::meetsTarget(sol.hash, sol.work.target);
+
+        if (is_block) {
+            // Actual block found!
+            if (cfg.tui_enabled) {
+                ui.addLogMessage("*** BLOCK FOUND! *** Height: " + std::to_string(sol.height) +
+                               " Nonce: " + std::to_string(sol.nonce), tui::Color::Yellow);
+            } else {
+                std::cout << "\n*** BLOCK FOUND! ***\n";
+                std::cout << "Height: " << sol.height << "\n";
+                std::cout << "Nonce: " << sol.nonce << "\n";
+                std::cout << "Hash: " << mining::Keccak256::toHex(sol.hash) << "\n\n";
+            }
         }
+        // Shares are logged by submission thread ("Share accepted")
     });
 
     // GPU device list

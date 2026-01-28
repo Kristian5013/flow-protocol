@@ -9,6 +9,8 @@ namespace tui {
 MinerUI::MinerUI()
     : width_(120)
     , height_(40)
+    , prev_width_(0)
+    , prev_height_(0)
     , initialized_(false)
     , hashrate_sparkline_(40)
     , anim_frame_(0)
@@ -60,6 +62,14 @@ void MinerUI::render() {
 
     // Get terminal size (may have changed)
     Terminal::getSize(width_, height_);
+
+    // Detect resize - clear screen to prevent artifacts
+    bool resized = (width_ != prev_width_ || height_ != prev_height_);
+    if (resized) {
+        std::cout << "\033[H\033[2J";  // Clear entire screen on resize
+        prev_width_ = width_;
+        prev_height_ = height_;
+    }
 
     // Ensure minimum terminal size
     if (width_ < 80 || height_ < 30) {

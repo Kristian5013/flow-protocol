@@ -115,6 +115,8 @@ private:
 
     int width_;
     int height_;
+    int prev_width_;
+    int prev_height_;
     bool initialized_;
 
     MiningStats stats_;
