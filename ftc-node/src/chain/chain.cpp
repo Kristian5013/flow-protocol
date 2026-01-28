@@ -750,8 +750,8 @@ bool Chain::activateBestChain(std::vector<BlockEvent>& events, const BlockIndex*
 }
 
 bool Chain::connectBlock(const Block& block, BlockIndex* index, std::vector<BlockEvent>& events) {
-    LOG_DEBUG("Connecting block {} at height {}",
-              crypto::Keccak256::toHex(index->hash).substr(0, 16), index->height);
+    LOG_NOTICE("BLOCK CONNECTED: height={} hash={} timestamp={}",
+              index->height, crypto::Keccak256::toHex(index->hash).substr(0, 16), block.header.timestamp);
 
     // Update status
     index->status = index->status | BlockStatus::ON_MAIN_CHAIN;
@@ -794,7 +794,7 @@ bool Chain::connectBlock(const Block& block, BlockIndex* index, std::vector<Bloc
 }
 
 bool Chain::disconnectBlock(const Block& block, BlockIndex* index, std::vector<BlockEvent>& events) {
-    LOG_DEBUG("Disconnecting block {} at height {}",
+    LOG_NOTICE("REORG: Disconnecting block {} at height {}",
               crypto::Keccak256::toHex(index->hash).substr(0, 16), index->height);
 
     // Update status

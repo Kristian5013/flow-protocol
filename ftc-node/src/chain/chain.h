@@ -225,6 +225,9 @@ public:
     // Genesis
     Block createGenesisBlock() const;
 
+    // Median time past (for timestamp validation)
+    int64_t getMedianTimePast(const BlockIndex* index) const;
+
 private:
     // Configuration
     Config config_;
@@ -253,9 +256,6 @@ private:
     // Skip list for fast ancestor lookup
     void buildSkipList(BlockIndex* index);
     int getSkipHeight(int height) const;
-
-    // Median time calculation
-    int64_t getMedianTimePast(const BlockIndex* index) const;
 
     // Storage
     bool loadBlockIndex();

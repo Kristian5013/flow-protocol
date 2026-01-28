@@ -8,6 +8,7 @@
 #include "chain/block.h"
 #include "chain/transaction.h"
 #include "p2pool/sharechain.h"
+#include "util/logging.h"
 #include <sstream>
 #include <iomanip>
 #include <ctime>
@@ -75,7 +76,11 @@ void setupMiningRoutes(RouteContext& ctx) {
             }
         }
 
-        uint32_t timestamp = static_cast<uint32_t>(std::time(nullptr));
+        // Timestamp must be > median time past (MTP) to be valid
+        // This is critical when blocks are found faster than 1 per second
+        int64_t mtp = chain->getMedianTimePast(tip);
+        uint32_t now = static_cast<uint32_t>(std::time(nullptr));
+        uint32_t timestamp = static_cast<uint32_t>(std::max(static_cast<int64_t>(now), mtp + 1));
 
         // Build coinbase transaction
         chain::Transaction coinbase;
@@ -380,9 +385,13 @@ void setupMiningRoutes(RouteContext& ctx) {
 
         if (is_block) {
             // Process as main chain block
+            LOG_NOTICE("Block submission: height={} timestamp={} prev={}",
+                      tip->height + 1, block.header.timestamp,
+                      hashToHex(block.header.prev_hash).substr(0, 16));
             auto result = chain->processBlock(block);
 
             if (result == chain::ValidationResult::VALID) {
+                LOG_NOTICE("BLOCK ACCEPTED at height {}", tip->height + 1);
                 if (mempool) {
                     mempool->removeForBlock(block.transactions);
                 }
@@ -413,6 +422,7 @@ void setupMiningRoutes(RouteContext& ctx) {
                     case chain::ValidationResult::BLOCK_MISSING_PREV: reason = "Orphan block"; break;
                     default: reason = "Unknown error"; break;
                 }
+                LOG_WARN("BLOCK REJECTED at height {}: {}", tip->height + 1, reason);
                 res.error(HttpStatus::BAD_REQUEST, reason);
             }
         } else if (share_accepted) {

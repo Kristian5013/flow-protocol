@@ -518,6 +518,10 @@ int main(int argc, char** argv) {
                             ui.addLogMessage("BLOCK FOUND! h=" + std::to_string(sol.height), tui::Color::Green);
                         }
 
+                        // CRITICAL: Clear pending solutions to prevent submitting competing blocks
+                        // at the same height which causes chain reorgs and height jumping
+                        work_manager.clearPendingSolutions();
+
                         // Fetch new work immediately
                         auto fresh_work = client->getMiningTemplate(cfg.wallet_address);
                         if (fresh_work) {
@@ -526,8 +530,6 @@ int main(int argc, char** argv) {
                             if (cfg.tui_enabled) {
                                 ui.addLogMessage("New work: h=" + std::to_string(fresh_work->height), tui::Color::Cyan);
                             }
-                            // DON'T clear pending solutions - let them be submitted as stale
-                            // The node will count them for hashrate calculation
                         }
                     } else {
                         if (cfg.tui_enabled) {
@@ -601,10 +603,11 @@ int main(int argc, char** argv) {
                     mining::Work current_work = work_manager.getWork();
                     auto new_work = client->getMiningTemplate(cfg.wallet_address);
                     if (new_work && new_work->height != current_work.height) {
+                        // Clear pending solutions to prevent submitting competing blocks
+                        work_manager.clearPendingSolutions();
+
                         work_manager.setWork(*new_work);
                         network_height = new_work->height;
-                        // DON'T clear pending solutions - let them be submitted as stale
-                        // The node will count them for hashrate calculation
 
                         if (cfg.tui_enabled) {
                             ui.addLogMessage("New block h=" + std::to_string(new_work->height), tui::Color::Cyan);
