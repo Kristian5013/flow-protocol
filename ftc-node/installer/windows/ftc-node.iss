@@ -3,7 +3,7 @@
 ; Kristian Pilatovich 20091227
 
 #define AppName "FTC Node"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.2"
 #define AppPublisher "Flow Token Chain"
 #define AppURL "https://github.com/user/ftc-node"
 #define AppExeName "ftc-node.exe"
