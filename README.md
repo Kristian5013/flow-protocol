@@ -1,7 +1,7 @@
 # FTC (Flow Token Chain)
 
 <p align="center">
-  <img src="ftc-node/assets/ftc-node.svg" alt="FTC Logo" width="200" height="200"/>
+  <img src="ftc-node/assets/ftc-node-256.png" alt="FTC Logo" width="200" height="200"/>
 </p>
 
 <p align="center">
