@@ -359,63 +359,90 @@ bool Server::start() {
         return true;
     }
 
-    // Create IPv6 socket (IPv6 only)
-    listen_socket_ = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
-    if (listen_socket_ == INVALID_SOCKET) {
-        return false;
-    }
-
-    // Allow address reuse
     int opt = 1;
 #ifdef _WIN32
-    setsockopt(listen_socket_, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
-#else
-    setsockopt(listen_socket_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-#endif
-
-    // IPv6 only (no IPv4-mapped addresses)
-    int ipv6only = 1;
-#ifdef _WIN32
-    setsockopt(listen_socket_, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&ipv6only, sizeof(ipv6only));
-#else
-    setsockopt(listen_socket_, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6only, sizeof(ipv6only));
-#endif
-
-    sockaddr_in6 addr{};
-    addr.sin6_family = AF_INET6;
-    addr.sin6_port = htons(config_.port);
-
-    // Parse IPv6 bind address from config
-    if (inet_pton(AF_INET6, config_.host.c_str(), &addr.sin6_addr) != 1) {
-        addr.sin6_addr = in6addr_loopback;  // Default to ::1 (localhost)
-    }
-
-    if (bind(listen_socket_, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-#ifdef _WIN32
-        LOG_ERROR("API bind failed on [{}]:{} - error {}", config_.host, config_.port, WSAGetLastError());
-#else
-        LOG_ERROR("API bind failed on [{}]:{}", config_.host, config_.port);
-#endif
-        closesocket(listen_socket_);
-        listen_socket_ = INVALID_SOCKET;
-        return false;
-    }
-
-    if (listen(listen_socket_, SOMAXCONN) == SOCKET_ERROR) {
-        LOG_ERROR("API listen failed");
-        closesocket(listen_socket_);
-        listen_socket_ = INVALID_SOCKET;
-        return false;
-    }
-
-    // Set non-blocking
-#ifdef _WIN32
     unsigned long mode = 1;
-    ioctlsocket(listen_socket_, FIONBIO, &mode);
-#else
-    int flags = fcntl(listen_socket_, F_GETFL, 0);
-    fcntl(listen_socket_, F_SETFL, flags | O_NONBLOCK);
 #endif
+
+    // Create IPv4 socket
+    listen_socket_ipv4_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listen_socket_ipv4_ != INVALID_SOCKET) {
+#ifdef _WIN32
+        setsockopt(listen_socket_ipv4_, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+#else
+        setsockopt(listen_socket_ipv4_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
+
+        sockaddr_in addr4{};
+        addr4.sin_family = AF_INET;
+        addr4.sin_port = htons(config_.port);
+        addr4.sin_addr.s_addr = INADDR_ANY;  // Bind to all IPv4 interfaces
+
+        if (bind(listen_socket_ipv4_, (sockaddr*)&addr4, sizeof(addr4)) == SOCKET_ERROR) {
+            LOG_WARN("API IPv4 bind failed on port {}", config_.port);
+            closesocket(listen_socket_ipv4_);
+            listen_socket_ipv4_ = INVALID_SOCKET;
+        } else if (listen(listen_socket_ipv4_, SOMAXCONN) == SOCKET_ERROR) {
+            LOG_WARN("API IPv4 listen failed");
+            closesocket(listen_socket_ipv4_);
+            listen_socket_ipv4_ = INVALID_SOCKET;
+        } else {
+#ifdef _WIN32
+            ioctlsocket(listen_socket_ipv4_, FIONBIO, &mode);
+#else
+            int flags = fcntl(listen_socket_ipv4_, F_GETFL, 0);
+            fcntl(listen_socket_ipv4_, F_SETFL, flags | O_NONBLOCK);
+#endif
+            LOG_INFO("API listening on IPv4 port {}", config_.port);
+        }
+    }
+
+    // Create IPv6 socket
+    listen_socket_ipv6_ = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (listen_socket_ipv6_ != INVALID_SOCKET) {
+#ifdef _WIN32
+        setsockopt(listen_socket_ipv6_, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+#else
+        setsockopt(listen_socket_ipv6_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
+
+        // IPv6 only (no IPv4-mapped addresses - we have separate IPv4 socket)
+        int ipv6only = 1;
+#ifdef _WIN32
+        setsockopt(listen_socket_ipv6_, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&ipv6only, sizeof(ipv6only));
+#else
+        setsockopt(listen_socket_ipv6_, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6only, sizeof(ipv6only));
+#endif
+
+        sockaddr_in6 addr6{};
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons(config_.port);
+        addr6.sin6_addr = in6addr_any;  // Bind to all IPv6 interfaces
+
+        if (bind(listen_socket_ipv6_, (sockaddr*)&addr6, sizeof(addr6)) == SOCKET_ERROR) {
+            LOG_WARN("API IPv6 bind failed on port {}", config_.port);
+            closesocket(listen_socket_ipv6_);
+            listen_socket_ipv6_ = INVALID_SOCKET;
+        } else if (listen(listen_socket_ipv6_, SOMAXCONN) == SOCKET_ERROR) {
+            LOG_WARN("API IPv6 listen failed");
+            closesocket(listen_socket_ipv6_);
+            listen_socket_ipv6_ = INVALID_SOCKET;
+        } else {
+#ifdef _WIN32
+            ioctlsocket(listen_socket_ipv6_, FIONBIO, &mode);
+#else
+            int flags = fcntl(listen_socket_ipv6_, F_GETFL, 0);
+            fcntl(listen_socket_ipv6_, F_SETFL, flags | O_NONBLOCK);
+#endif
+            LOG_INFO("API listening on IPv6 port {}", config_.port);
+        }
+    }
+
+    // At least one socket must be listening
+    if (listen_socket_ipv4_ == INVALID_SOCKET && listen_socket_ipv6_ == INVALID_SOCKET) {
+        LOG_ERROR("API failed to bind on any protocol");
+        return false;
+    }
 
     // Setup default API routes
     setupRoutes();
@@ -437,10 +464,14 @@ void Server::stop() {
     stopping_ = true;
     running_ = false;
 
-    // Close listen socket
-    if (listen_socket_ != INVALID_SOCKET) {
-        closesocket(listen_socket_);
-        listen_socket_ = INVALID_SOCKET;
+    // Close listen sockets
+    if (listen_socket_ipv4_ != INVALID_SOCKET) {
+        closesocket(listen_socket_ipv4_);
+        listen_socket_ipv4_ = INVALID_SOCKET;
+    }
+    if (listen_socket_ipv6_ != INVALID_SOCKET) {
+        closesocket(listen_socket_ipv6_);
+        listen_socket_ipv6_ = INVALID_SOCKET;
     }
 
     // Wait for server thread
@@ -527,49 +558,59 @@ void Server::serverThread() {
 }
 
 void Server::acceptConnections() {
-    if (listen_socket_ == INVALID_SOCKET) {
-        return;
-    }
+    // Helper lambda to add connection
+    auto addConnection = [this](socket_t client_socket, const std::string& remote_addr) {
+        // Check connection limit
+        {
+            std::lock_guard<std::mutex> lock(conn_mutex_);
+            if (connections_.size() >= config_.max_connections) {
+                closesocket(client_socket);
+                return;
+            }
+        }
 
-    // IPv6 socket
-    sockaddr_in6 client_addr{};
-    socklen_t addr_len = sizeof(client_addr);
+        // Set non-blocking
+#ifdef _WIN32
+        unsigned long mode = 1;
+        ioctlsocket(client_socket, FIONBIO, &mode);
+#else
+        int flags = fcntl(client_socket, F_GETFL, 0);
+        fcntl(client_socket, F_SETFL, flags | O_NONBLOCK);
+#endif
 
-    socket_t client_socket = accept(listen_socket_, (sockaddr*)&client_addr, &addr_len);
-    if (client_socket == INVALID_SOCKET) {
-        return;  // No pending connection or error
-    }
+        // Create connection
+        HttpConnection conn;
+        conn.socket = client_socket;
+        conn.last_activity = std::chrono::steady_clock::now();
+        conn.remote_addr = remote_addr;
 
-    // Check connection limit
-    {
         std::lock_guard<std::mutex> lock(conn_mutex_);
-        if (connections_.size() >= config_.max_connections) {
-            closesocket(client_socket);
-            return;
+        connections_[client_socket] = std::move(conn);
+    };
+
+    // Accept from IPv4 socket
+    if (listen_socket_ipv4_ != INVALID_SOCKET) {
+        sockaddr_in client_addr4{};
+        socklen_t addr_len4 = sizeof(client_addr4);
+        socket_t client_socket = accept(listen_socket_ipv4_, (sockaddr*)&client_addr4, &addr_len4);
+        if (client_socket != INVALID_SOCKET) {
+            char addr_str[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_addr4.sin_addr, addr_str, sizeof(addr_str));
+            addConnection(client_socket, addr_str);
         }
     }
 
-    // Set non-blocking
-#ifdef _WIN32
-    unsigned long mode = 1;
-    ioctlsocket(client_socket, FIONBIO, &mode);
-#else
-    int flags = fcntl(client_socket, F_GETFL, 0);
-    fcntl(client_socket, F_SETFL, flags | O_NONBLOCK);
-#endif
-
-    // Create connection
-    HttpConnection conn;
-    conn.socket = client_socket;
-    conn.last_activity = std::chrono::steady_clock::now();
-
-    // Get remote IPv6 address
-    char addr_str[INET6_ADDRSTRLEN];
-    inet_ntop(AF_INET6, &client_addr.sin6_addr, addr_str, sizeof(addr_str));
-    conn.remote_addr = addr_str;
-
-    std::lock_guard<std::mutex> lock(conn_mutex_);
-    connections_[client_socket] = std::move(conn);
+    // Accept from IPv6 socket
+    if (listen_socket_ipv6_ != INVALID_SOCKET) {
+        sockaddr_in6 client_addr6{};
+        socklen_t addr_len6 = sizeof(client_addr6);
+        socket_t client_socket = accept(listen_socket_ipv6_, (sockaddr*)&client_addr6, &addr_len6);
+        if (client_socket != INVALID_SOCKET) {
+            char addr_str[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &client_addr6.sin6_addr, addr_str, sizeof(addr_str));
+            addConnection(client_socket, addr_str);
+        }
+    }
 }
 
 void Server::processConnections() {

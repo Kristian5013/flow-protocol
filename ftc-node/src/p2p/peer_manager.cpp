@@ -85,15 +85,30 @@ bool PeerManager::start() {
     // Detect local IPs to avoid self-connection
     detectLocalIPs();
 
-    // Start listener
-    if (!listener_.bind(config_.listen_port, true)) {
-        LOG_ERROR("Failed to bind to port {}", config_.listen_port);
-        return false;
+    // Start IPv4 listener
+    if (!listener_ipv4_.bind(config_.listen_port, false)) {
+        LOG_WARN("Failed to bind IPv4 to port {} - continuing with IPv6 only", config_.listen_port);
+    } else if (!listener_ipv4_.listen()) {
+        LOG_WARN("Failed to start IPv4 listening - continuing with IPv6 only");
+        listener_ipv4_.close();
     }
 
-    if (!listener_.listen()) {
-        LOG_ERROR("Failed to start listening");
-        return false;
+    // Start IPv6 listener
+    if (!listener_ipv6_.bind(config_.listen_port, true)) {
+        LOG_WARN("Failed to bind IPv6 to port {}", config_.listen_port);
+        // If both failed, return error
+        if (!listener_ipv4_.isListening()) {
+            LOG_ERROR("Failed to bind to port {} on any protocol", config_.listen_port);
+            return false;
+        }
+    } else if (!listener_ipv6_.listen()) {
+        LOG_WARN("Failed to start IPv6 listening");
+        listener_ipv6_.close();
+        // If both failed, return error
+        if (!listener_ipv4_.isListening()) {
+            LOG_ERROR("Failed to start listening on any protocol");
+            return false;
+        }
     }
 
     running_ = true;
@@ -113,8 +128,9 @@ void PeerManager::stop() {
     LOG_INFO("Stopping peer manager...");
     stopping_ = true;
 
-    // Close listener
-    listener_.close();
+    // Close listeners
+    listener_ipv4_.close();
+    listener_ipv6_.close();
 
     // Disconnect all peers
     disconnectAll("shutdown");
@@ -136,32 +152,46 @@ void PeerManager::stop() {
 void PeerManager::networkThread() {
     LOG_DEBUG("Network thread started");
 
+    // Helper lambda to process accepted connection
+    auto processInbound = [this](std::shared_ptr<Connection> conn) {
+        // Check inbound limit
+        if (getInboundCount() >= static_cast<size_t>(config_.max_inbound)) {
+            LOG_DEBUG("Inbound limit reached, rejecting {}", conn->getAddress().toString());
+            conn->disconnect("inbound limit");
+            return;
+        }
+
+        // Check ban
+        if (isBanned(conn->getAddress())) {
+            LOG_DEBUG("Rejecting banned address {}", conn->getAddress().toString());
+            conn->disconnect("banned");
+            return;
+        }
+
+        // Check self-connection (hairpin NAT)
+        if (isLocalIP(conn->getAddress().ip)) {
+            LOG_DEBUG("Rejecting self-connection from {}", conn->getAddress().toString());
+            conn->disconnect("self-connection");
+            return;
+        }
+
+        onNewConnection(conn);
+    };
+
     try {
         while (!stopping_) {
-            // Accept new connections
-            while (auto conn = listener_.accept()) {
-                // Check inbound limit
-                if (getInboundCount() >= static_cast<size_t>(config_.max_inbound)) {
-                    LOG_DEBUG("Inbound limit reached, rejecting {}", conn->getAddress().toString());
-                    conn->disconnect("inbound limit");
-                    continue;
+            // Accept new IPv4 connections
+            if (listener_ipv4_.isListening()) {
+                while (auto conn = listener_ipv4_.accept()) {
+                    processInbound(conn);
                 }
+            }
 
-                // Check ban
-                if (isBanned(conn->getAddress())) {
-                    LOG_DEBUG("Rejecting banned address {}", conn->getAddress().toString());
-                    conn->disconnect("banned");
-                    continue;
+            // Accept new IPv6 connections
+            if (listener_ipv6_.isListening()) {
+                while (auto conn = listener_ipv6_.accept()) {
+                    processInbound(conn);
                 }
-
-                // Check self-connection (hairpin NAT)
-                if (isLocalIP(conn->getAddress().ip)) {
-                    LOG_DEBUG("Rejecting self-connection from {}", conn->getAddress().toString());
-                    conn->disconnect("self-connection");
-                    continue;
-                }
-
-                onNewConnection(conn);
             }
 
             // Process I/O

@@ -324,8 +324,9 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> stopping_{false};
 
-    // Networking
-    Listener listener_;
+    // Networking (dual-stack: separate IPv4 and IPv6 listeners)
+    Listener listener_ipv4_;
+    Listener listener_ipv6_;
     SocketSet socket_set_;
 
     // Peers

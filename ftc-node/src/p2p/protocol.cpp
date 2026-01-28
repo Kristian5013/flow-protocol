@@ -179,12 +179,19 @@ NetAddr::NetAddr(const uint8_t* ipv6, uint16_t port_, uint64_t services_)
 
 std::string NetAddr::toString() const {
     std::ostringstream oss;
-    oss << "[";
-    for (int i = 0; i < 16; i += 2) {
-        if (i > 0) oss << ":";
-        oss << std::hex << ((ip[i] << 8) | ip[i + 1]);
+    if (isIPv4()) {
+        // IPv4 format: x.x.x.x:port
+        oss << (int)ip[12] << "." << (int)ip[13] << "." << (int)ip[14] << "." << (int)ip[15];
+        oss << ":" << port;
+    } else {
+        // IPv6 format: [xxxx::xxxx]:port
+        oss << "[";
+        for (int i = 0; i < 16; i += 2) {
+            if (i > 0) oss << ":";
+            oss << std::hex << ((ip[i] << 8) | ip[i + 1]);
+        }
+        oss << std::dec << "]:" << port;
     }
-    oss << std::dec << "]:" << port;
     return oss.str();
 }
 
@@ -229,6 +236,17 @@ bool NetAddr::isRFC4193() const {
     return (ip[0] & 0xfe) == 0xfc;
 }
 
+bool NetAddr::isIPv4() const {
+    // IPv4-mapped IPv6: ::ffff:x.x.x.x
+    // First 10 bytes are 0, next 2 bytes are 0xff
+    static const uint8_t ipv4_mapped_prefix[12] = {0,0,0,0, 0,0,0,0, 0,0,0xff,0xff};
+    return std::memcmp(ip, ipv4_mapped_prefix, 12) == 0;
+}
+
+bool NetAddr::isIPv6() const {
+    return !isIPv4();
+}
+
 bool NetAddr::isRoutable() const {
     if (isLocal()) return false;
     if (isRFC4193()) return false;
@@ -254,6 +272,32 @@ NetAddr NetAddr::fromIPv6(const uint8_t* ipv6, uint16_t port) {
     return addr;
 }
 
+NetAddr NetAddr::fromIPv4(const uint8_t* ip4, uint16_t port) {
+    NetAddr addr;
+    // IPv4-mapped IPv6: ::ffff:x.x.x.x
+    std::memset(addr.ip, 0, 10);
+    addr.ip[10] = 0xff;
+    addr.ip[11] = 0xff;
+    std::memcpy(addr.ip + 12, ip4, 4);
+    addr.port = port;
+    return addr;
+}
+
+NetAddr NetAddr::fromIPv4(uint32_t ip4, uint16_t port) {
+    NetAddr addr;
+    // IPv4-mapped IPv6: ::ffff:x.x.x.x
+    std::memset(addr.ip, 0, 10);
+    addr.ip[10] = 0xff;
+    addr.ip[11] = 0xff;
+    // Network byte order (big endian)
+    addr.ip[12] = (ip4 >> 24) & 0xff;
+    addr.ip[13] = (ip4 >> 16) & 0xff;
+    addr.ip[14] = (ip4 >> 8) & 0xff;
+    addr.ip[15] = ip4 & 0xff;
+    addr.port = port;
+    return addr;
+}
+
 NetAddr NetAddr::fromString(const std::string& str) {
     NetAddr addr;
     std::memset(&addr, 0, sizeof(addr));
@@ -270,6 +314,21 @@ NetAddr NetAddr::fromString(const std::string& str) {
             struct in6_addr ipv6;
             if (inet_pton(AF_INET6, ip_part.c_str(), &ipv6) == 1) {
                 std::memcpy(addr.ip, &ipv6, 16);
+            }
+        }
+    } else {
+        // IPv4 format: x.x.x.x:port
+        size_t colonPos = str.rfind(':');
+        if (colonPos != std::string::npos) {
+            std::string ip_part = str.substr(0, colonPos);
+            addr.port = static_cast<uint16_t>(std::stoi(str.substr(colonPos + 1)));
+            struct in_addr ipv4;
+            if (inet_pton(AF_INET, ip_part.c_str(), &ipv4) == 1) {
+                // Convert to IPv4-mapped IPv6
+                std::memset(addr.ip, 0, 10);
+                addr.ip[10] = 0xff;
+                addr.ip[11] = 0xff;
+                std::memcpy(addr.ip + 12, &ipv4, 4);
             }
         }
     }

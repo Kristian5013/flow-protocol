@@ -61,8 +61,11 @@ Connection::~Connection() {
 }
 
 std::shared_ptr<Connection> Connection::connect(const NetAddr& addr, ConnectCallback on_connect) {
-    // Create IPv6 socket (IPv6-only network)
-    socket_t sock = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    // Determine address family (IPv4 or IPv6)
+    bool is_ipv4 = addr.isIPv4();
+    int af = is_ipv4 ? AF_INET : AF_INET6;
+
+    socket_t sock = socket(af, SOCK_STREAM, IPPROTO_TCP);
 
     if (sock == INVALID_SOCK) {
         LOG_ERROR("Failed to create socket: {}", SOCKET_ERROR_CODE);
@@ -70,9 +73,11 @@ std::shared_ptr<Connection> Connection::connect(const NetAddr& addr, ConnectCall
         return nullptr;
     }
 
-    // IPv6 only
-    int v6only = 1;
-    setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&v6only, sizeof(v6only));
+    // IPv6 only flag (only for IPv6 sockets)
+    if (!is_ipv4) {
+        int v6only = 1;
+        setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&v6only, sizeof(v6only));
+    }
 
     auto conn = std::shared_ptr<Connection>(
         new Connection(sock, addr, ConnectionDir::OUTBOUND)
@@ -85,13 +90,25 @@ std::shared_ptr<Connection> Connection::connect(const NetAddr& addr, ConnectCall
         return nullptr;
     }
 
-    // Initiate connection (always IPv6)
-    struct sockaddr_in6 sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin6_family = AF_INET6;
-    sa.sin6_port = htons(addr.port);
-    memcpy(&sa.sin6_addr, addr.ip, 16);
-    int result = ::connect(sock, (struct sockaddr*)&sa, sizeof(sa));
+    int result;
+    if (is_ipv4) {
+        // IPv4 connection
+        struct sockaddr_in sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(addr.port);
+        // IPv4-mapped bytes are at offset 12-15
+        memcpy(&sa.sin_addr, addr.ip + 12, 4);
+        result = ::connect(sock, (struct sockaddr*)&sa, sizeof(sa));
+    } else {
+        // IPv6 connection
+        struct sockaddr_in6 sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sin6_family = AF_INET6;
+        sa.sin6_port = htons(addr.port);
+        memcpy(&sa.sin6_addr, addr.ip, 16);
+        result = ::connect(sock, (struct sockaddr*)&sa, sizeof(sa));
+    }
 
     if (result == 0) {
         conn->state_ = ConnectionState::CONNECTED;
@@ -545,39 +562,68 @@ Listener::~Listener() {
     close();
 }
 
-bool Listener::bind(uint16_t port, bool /* ipv6 parameter ignored - always IPv6 */) {
-    ipv6_ = true;  // Always IPv6
+bool Listener::bind(uint16_t port, bool ipv6) {
+    ipv6_ = ipv6;
     port_ = port;
 
-    // IPv6-only socket
-    sock_ = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (ipv6) {
+        // IPv6 socket
+        sock_ = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 
-    if (sock_ == INVALID_SOCK) {
-        LOG_ERROR("Failed to create listener socket: {}", SOCKET_ERROR_CODE);
-        return false;
-    }
+        if (sock_ == INVALID_SOCK) {
+            LOG_ERROR("Failed to create IPv6 listener socket: {}", SOCKET_ERROR_CODE);
+            return false;
+        }
 
-    // Allow address reuse
-    int flag = 1;
-    setsockopt(sock_, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(flag));
+        // Allow address reuse
+        int flag = 1;
+        setsockopt(sock_, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(flag));
 
-    // IPv6 only (no IPv4-mapped addresses)
-    int v6only = 1;
-    setsockopt(sock_, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&v6only, sizeof(v6only));
+        // IPv6 only (no IPv4-mapped addresses - we have separate IPv4 listener)
+        int v6only = 1;
+        setsockopt(sock_, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&v6only, sizeof(v6only));
 
-    // Bind to IPv6 any address
-    struct sockaddr_in6 sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin6_family = AF_INET6;
-    sa.sin6_port = htons(port);
-    sa.sin6_addr = in6addr_any;
+        // Bind to IPv6 any address
+        struct sockaddr_in6 sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sin6_family = AF_INET6;
+        sa.sin6_port = htons(port);
+        sa.sin6_addr = in6addr_any;
 
-    int result = ::bind(sock_, (struct sockaddr*)&sa, sizeof(sa));
+        int result = ::bind(sock_, (struct sockaddr*)&sa, sizeof(sa));
 
-    if (result != 0) {
-        LOG_ERROR("Failed to bind to port {}: {}", port, SOCKET_ERROR_CODE);
-        close();
-        return false;
+        if (result != 0) {
+            LOG_ERROR("Failed to bind IPv6 to port {}: {}", port, SOCKET_ERROR_CODE);
+            close();
+            return false;
+        }
+    } else {
+        // IPv4 socket
+        sock_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+        if (sock_ == INVALID_SOCK) {
+            LOG_ERROR("Failed to create IPv4 listener socket: {}", SOCKET_ERROR_CODE);
+            return false;
+        }
+
+        // Allow address reuse
+        int flag = 1;
+        setsockopt(sock_, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(flag));
+
+        // Bind to IPv4 any address
+        struct sockaddr_in sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(port);
+        sa.sin_addr.s_addr = INADDR_ANY;
+
+        int result = ::bind(sock_, (struct sockaddr*)&sa, sizeof(sa));
+
+        if (result != 0) {
+            LOG_ERROR("Failed to bind IPv4 to port {}: {}", port, SOCKET_ERROR_CODE);
+            close();
+            return false;
+        }
     }
 
     return true;
@@ -601,28 +647,49 @@ bool Listener::listen(int backlog) {
 #endif
 
     listening_ = true;
-    LOG_INFO("Listening on port {}", port_);
+    LOG_INFO("Listening on {} port {}", ipv6_ ? "IPv6" : "IPv4", port_);
     return true;
 }
 
 std::shared_ptr<Connection> Listener::accept() {
     if (!listening_) return nullptr;
 
-    struct sockaddr_in6 client_addr;
-    socklen_t addr_len = sizeof(client_addr);
+    NetAddr addr;
+    socket_t client_sock;
 
-    socket_t client_sock = ::accept(sock_, (struct sockaddr*)&client_addr, &addr_len);
+    if (ipv6_) {
+        // IPv6 accept
+        struct sockaddr_in6 client_addr;
+        socklen_t addr_len = sizeof(client_addr);
 
-    if (client_sock == INVALID_SOCK) {
-        int err = SOCKET_ERROR_CODE;
-        if (err != WOULD_BLOCK) {
-            LOG_DEBUG("Accept error: {}", err);
+        client_sock = ::accept(sock_, (struct sockaddr*)&client_addr, &addr_len);
+
+        if (client_sock == INVALID_SOCK) {
+            int err = SOCKET_ERROR_CODE;
+            if (err != WOULD_BLOCK) {
+                LOG_DEBUG("Accept error (IPv6): {}", err);
+            }
+            return nullptr;
         }
-        return nullptr;
-    }
 
-    // Extract IPv6 address
-    NetAddr addr = NetAddr::fromIPv6((uint8_t*)&client_addr.sin6_addr, ntohs(client_addr.sin6_port));
+        addr = NetAddr::fromIPv6((uint8_t*)&client_addr.sin6_addr, ntohs(client_addr.sin6_port));
+    } else {
+        // IPv4 accept
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+
+        client_sock = ::accept(sock_, (struct sockaddr*)&client_addr, &addr_len);
+
+        if (client_sock == INVALID_SOCK) {
+            int err = SOCKET_ERROR_CODE;
+            if (err != WOULD_BLOCK) {
+                LOG_DEBUG("Accept error (IPv4): {}", err);
+            }
+            return nullptr;
+        }
+
+        addr = NetAddr::fromIPv4((uint8_t*)&client_addr.sin_addr, ntohs(client_addr.sin_port));
+    }
 
     return Connection::fromSocket(client_sock, addr);
 }

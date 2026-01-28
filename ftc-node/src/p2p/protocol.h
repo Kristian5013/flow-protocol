@@ -132,7 +132,7 @@ struct InvItem {
 
 struct NetAddr {
     uint64_t services = SERVICE_FULL_NODE;
-    uint8_t ip[16] = {0};     // IPv6 only
+    uint8_t ip[16] = {0};     // IPv6 or IPv4-mapped IPv6 (::ffff:x.x.x.x)
     uint16_t port = 0;
     uint32_t timestamp = 0;   // Unix timestamp when last seen
 
@@ -143,13 +143,17 @@ struct NetAddr {
     bool isRoutable() const;
     bool isLocal() const;
     bool isRFC4193() const;     // Private IPv6 (fc00::/7)
+    bool isIPv4() const;        // Is IPv4-mapped address (::ffff:x.x.x.x)
+    bool isIPv6() const;        // Is native IPv6 (not IPv4-mapped)
 
     // String conversion
     std::string toString() const;
 
     // Factory methods
     static NetAddr fromIPv6(const uint8_t* ip, uint16_t port);
-    static NetAddr fromString(const std::string& str);  // [ipv6]:port format
+    static NetAddr fromIPv4(const uint8_t* ip4, uint16_t port);  // Creates IPv4-mapped address
+    static NetAddr fromIPv4(uint32_t ip4, uint16_t port);        // Creates IPv4-mapped address
+    static NetAddr fromString(const std::string& str);  // [ipv6]:port or ipv4:port format
 
     // Serialization
     std::vector<uint8_t> serialize(bool with_timestamp = true) const;

@@ -264,6 +264,8 @@ public:
     socket_t getSocket() const { return sock_; }
     uint16_t getPort() const { return port_; }
     bool isListening() const { return listening_; }
+    bool isIPv6() const { return ipv6_; }
+    bool isIPv4() const { return !ipv6_; }
 
 private:
     socket_t sock_ = INVALID_SOCK;

@@ -262,7 +262,8 @@ private:
     // State
     std::atomic<bool> running_{false};
     std::atomic<bool> stopping_{false};
-    socket_t listen_socket_ = INVALID_SOCKET;
+    socket_t listen_socket_ipv4_ = INVALID_SOCKET;
+    socket_t listen_socket_ipv6_ = INVALID_SOCKET;
 
     // Routes
     std::vector<Route> routes_;
