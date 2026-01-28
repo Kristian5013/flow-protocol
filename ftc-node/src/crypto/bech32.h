@@ -28,6 +28,9 @@ std::string addressFromPubKeyHash(const uint8_t* hash20, bool testnet = false);
 // Extract public key hash from address
 std::optional<std::vector<uint8_t>> pubKeyHashFromAddress(const std::string& address);
 
+// Convert between bit widths (for internal use and handlers)
+std::vector<uint8_t> convertBits(const std::vector<uint8_t>& data, int fromBits, int toBits, bool pad);
+
 } // namespace bech32
 } // namespace crypto
 } // namespace ftc

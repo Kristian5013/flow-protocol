@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <chrono>
 
 namespace tui {
 
@@ -143,6 +144,41 @@ private:
     Color normal_color_;
     Color warning_color_;
     Color critical_color_;
+};
+
+// Hashrate averaging with proper moving averages
+class HashrateAverager {
+public:
+    HashrateAverager();
+
+    // Add a new hashrate sample (call every second or so)
+    void addSample(double hashrate);
+
+    // Get current hashrate (most recent sample)
+    double getCurrent() const;
+
+    // Get moving averages
+    double getAverage1m() const;   // 1-minute average
+    double getAverage5m() const;   // 5-minute average
+    double getAverage15m() const;  // 15-minute average
+
+    // Get peak hashrate
+    double getPeak() const { return peak_hashrate_; }
+
+    // Reset all samples
+    void reset();
+
+private:
+    struct Sample {
+        double hashrate;
+        std::chrono::steady_clock::time_point timestamp;
+    };
+
+    std::vector<Sample> samples_;
+    double peak_hashrate_;
+    static constexpr size_t MAX_SAMPLES = 900;  // 15 minutes at 1 sample/sec
+
+    double calculateAverage(int seconds) const;
 };
 
 // Helper functions

@@ -57,7 +57,7 @@ static bool verifyChecksum(const std::string& hrp, const std::vector<uint8_t>& d
     return polymod(values) == 1;
 }
 
-static std::vector<uint8_t> convertBits(const std::vector<uint8_t>& data, int fromBits, int toBits, bool pad) {
+std::vector<uint8_t> convertBits(const std::vector<uint8_t>& data, int fromBits, int toBits, bool pad) {
     std::vector<uint8_t> ret;
     int acc = 0;
     int bits = 0;

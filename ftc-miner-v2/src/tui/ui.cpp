@@ -6,14 +6,6 @@
 
 namespace tui {
 
-const std::vector<std::string> MinerUI::LOGO = {
-    R"(  _____ _____ ____    __  __ _                 )",
-    R"( |  ___|_   _/ ___|  |  \/  (_)_ __   ___ _ __ )",
-    R"( | |_    | || |      | |\/| | | '_ \ / _ \ '__|)",
-    R"( |  _|   | || |___   | |  | | | | | |  __/ |   )",
-    R"( |_|     |_| \____|  |_|  |_|_|_| |_|\___|_|   )"
-};
-
 MinerUI::MinerUI()
     : width_(120)
     , height_(40)
@@ -69,6 +61,17 @@ void MinerUI::render() {
     // Get terminal size (may have changed)
     Terminal::getSize(width_, height_);
 
+    // Ensure minimum terminal size
+    if (width_ < 80 || height_ < 30) {
+        std::cout << "\033[H\033[2J";  // Clear and home
+        std::cout << "Terminal too small. Minimum 80x30 required.\n";
+        std::cout << "Current: " << width_ << "x" << height_ << std::endl;
+        return;
+    }
+
+    // Move cursor to home (no clear - prevents flicker)
+    std::cout << "\033[H";
+
     std::lock_guard<std::mutex> lock(data_mutex_);
 
     // Update uptime
@@ -90,51 +93,36 @@ void MinerUI::render() {
 }
 
 void MinerUI::renderHeader() {
-    // Logo with gradient colors
-    int logo_start_x = (width_ - static_cast<int>(LOGO[0].size())) / 2;
-
-    for (size_t i = 0; i < LOGO.size(); ++i) {
-        Terminal::moveTo(logo_start_x, static_cast<int>(i) + 1);
-
-        // Gradient from cyan to blue
-        int r = 0;
-        int g = static_cast<int>(255 - i * 30);
-        int b = 255;
-        std::cout << Terminal::fgRGB(r, g, b) << LOGO[i] << Terminal::reset();
-    }
-
-    // Version and status line
-    Terminal::moveTo(2, 7);
-    std::cout << Terminal::fg(Color::BrightBlack)
-              << "v2.0.0 │ Keccak-256 │ AI Auto-tune"
+    // Simple text header (no ASCII art)
+    Terminal::moveTo(2, 1);
+    std::cout << Terminal::style(Style::Bold) << Terminal::fg(Color::Cyan)
+              << "FTC Miner v2.0.0" << Terminal::reset()
+              << Terminal::fg(Color::BrightBlack)
+              << " | Keccak-256 | P2Pool Mining"
               << Terminal::reset();
 
-    // Connection status
-    Terminal::moveTo(width_ - 30, 7);
+    // Connection status on right
+    Terminal::moveTo(width_ - 15, 1);
     if (stats_.connected) {
-        std::cout << Terminal::fg(Color::Green) << Terminal::SYM_BULLET
-                  << " Connected" << Terminal::reset();
+        std::cout << Terminal::fg(Color::Green) << "[Connected]" << Terminal::reset();
     } else {
-        std::cout << Terminal::fg(Color::Red) << Terminal::SYM_BULLET
-                  << " Disconnected" << Terminal::reset();
+        std::cout << Terminal::fg(Color::Red) << "[Offline]" << Terminal::reset();
     }
+    std::cout << "\033[K";  // Clear to end of line
 
     // Separator
-    Terminal::moveTo(1, 8);
+    Terminal::moveTo(1, 2);
     std::cout << Terminal::fg(Color::BrightBlack);
-    for (int i = 0; i < width_; ++i) std::cout << "─";
-    std::cout << Terminal::reset();
+    for (int i = 0; i < width_ - 1; ++i) std::cout << "-";
+    std::cout << "\033[K" << Terminal::reset();
 }
 
 void MinerUI::renderStats() {
-    int y = 10;
+    int y = 4;
 
-    // Stats box
-    Box statsBox(2, y, width_ - 3, 7, Box::Style::Single);
-    statsBox.setTitle("Mining Statistics");
-    statsBox.setTitleColor(Color::Cyan);
-    statsBox.setBorderColor(Color::BrightBlack);
-    statsBox.render();
+    // Stats header
+    Terminal::moveTo(2, y);
+    std::cout << Terminal::fg(Color::Cyan) << "Mining Statistics" << "\033[K" << Terminal::reset();
 
     // Row 1: Hashrate
     Terminal::moveTo(4, y + 1);
@@ -148,7 +136,7 @@ void MinerUI::renderStats() {
               << "15m: " << formatHashrate(stats_.avg_hashrate_15m)
               << "\033[K" << Terminal::reset();
 
-    // Row 2: Shares
+    // Row 2: Shares and blocks
     Terminal::moveTo(4, y + 2);
     std::cout << Terminal::fg(Color::White) << "Shares:   "
               << Terminal::fg(Color::Green) << stats_.shares_accepted << " accepted"
@@ -156,38 +144,45 @@ void MinerUI::renderStats() {
               << Terminal::fg(Color::Red) << stats_.shares_rejected << " rejected"
               << Terminal::fg(Color::BrightBlack) << "  │  "
               << Terminal::fg(Color::Yellow) << stats_.shares_stale << " stale"
-              << "\033[K" << Terminal::reset();
-
-    // Row 3: Blocks and Pool
-    Terminal::moveTo(4, y + 3);
-    std::cout << Terminal::fg(Color::White) << "Blocks:   "
-              << Terminal::fg(Color::Yellow) << stats_.blocks_found
               << Terminal::fg(Color::BrightBlack) << "  │  "
-              << Terminal::fg(Color::White) << "Pool: "
-              << Terminal::fg(Color::Cyan) << truncate(stats_.pool_url, 40)
+              << Terminal::fg(Color::White) << "Blocks: "
+              << Terminal::fg(Color::Yellow) << stats_.blocks_found
               << "\033[K" << Terminal::reset();
 
-    // Row 4: Network info
+    // Row 3: Pool info (miners, your share, est. daily)
+    Terminal::moveTo(4, y + 3);
+    double your_pct = 100.0;
+    if (stats_.active_miners > 1 && stats_.pool_hashrate > 0) {
+        your_pct = (stats_.total_hashrate / stats_.pool_hashrate) * 100.0;
+        if (your_pct > 100.0) your_pct = 100.0;
+    }
+    std::cout << Terminal::fg(Color::White) << "Pool:     "
+              << Terminal::fg(Color::Cyan) << stats_.active_miners << " miners"
+              << Terminal::fg(Color::BrightBlack) << "  │  "
+              << Terminal::fg(Color::White) << "Your share: "
+              << Terminal::fg(Color::Magenta) << formatNumber(your_pct, 1) << "%"
+              << Terminal::fg(Color::BrightBlack) << "  │  "
+              << Terminal::fg(Color::White) << "Est. daily: "
+              << Terminal::fg(Color::Yellow)
+              << formatNumber(1440.0 * (your_pct / 100.0) * 50.0, 1) << " FTC"
+              << "\033[K" << Terminal::reset();
+
+    // Row 4: Chain info
     Terminal::moveTo(4, y + 4);
-    std::cout << Terminal::fg(Color::White) << "Network:  "
+    std::cout << Terminal::fg(Color::White) << "Chain:    "
               << "Height: " << Terminal::fg(Color::Cyan) << stats_.block_height
               << Terminal::fg(Color::BrightBlack) << " │ "
               << Terminal::fg(Color::White) << "Diff: "
               << Terminal::fg(Color::Yellow) << formatNumber(stats_.difficulty, stats_.difficulty >= 100 ? 0 : 2)
               << Terminal::fg(Color::BrightBlack) << " │ "
-              << Terminal::fg(Color::White) << "Peers: "
-              << Terminal::fg(Color::Green) << stats_.peer_count
-              << Terminal::fg(Color::BrightBlack) << " │ "
-              << Terminal::fg(Color::White) << "Net: "
-              << Terminal::fg(Color::Magenta) << formatHashrate(stats_.network_hashrate)
-              << "\033[K"  // Clear to end of line
-              << Terminal::reset();
+              << Terminal::fg(Color::White) << "Nodes: "
+              << Terminal::fg(Color::Green) << stats_.node_count
+              << "\033[K" << Terminal::reset();
 
     // Row 5: Uptime
     Terminal::moveTo(4, y + 5);
     std::cout << Terminal::fg(Color::White) << "Uptime:   "
-              << Terminal::fg(Color::BrightBlack) << formatDuration(stats_.uptime_seconds)
-              << "\033[K" << Terminal::reset();
+              << Terminal::fg(Color::BrightBlack) << formatDuration(stats_.uptime_seconds);
 
     // Auto-tune status (right side)
     if (stats_.autotune_active) {
@@ -199,11 +194,12 @@ void MinerUI::renderStats() {
         status.tick();
         std::cout << status.render();
     }
+    std::cout << "\033[K" << Terminal::reset();
 }
 
 void MinerUI::renderDevices() {
-    int y = 18;
-    int boxHeight = std::max(6, static_cast<int>(devices_.size()) + 4);
+    int y = 11;  // After header (2) + stats (6) + margin
+    int boxHeight = std::max(5, static_cast<int>(devices_.size()) + 3);
 
     Box devBox(2, y, width_ - 3, boxHeight, Box::Style::Single);
     devBox.setTitle("Devices");
@@ -282,8 +278,9 @@ void MinerUI::renderDevices() {
 }
 
 void MinerUI::renderHashrateGraph() {
-    int y = 18 + std::max(6, static_cast<int>(devices_.size()) + 4) + 1;
-    int graphHeight = 5;
+    int deviceBoxHeight = std::max(5, static_cast<int>(devices_.size()) + 3);
+    int y = 11 + deviceBoxHeight + 1;  // After devices box
+    int graphHeight = 4;
 
     Box graphBox(2, y, width_ - 3, graphHeight, Box::Style::Single);
     graphBox.setTitle("Hashrate History");
@@ -297,15 +294,17 @@ void MinerUI::renderHashrateGraph() {
 
     // Min/Max labels
     Terminal::moveTo(width_ - 25, y + 1);
+    double peak = stats_.peak_hashrate > 0 ? stats_.peak_hashrate : stats_.total_hashrate;
     std::cout << Terminal::fg(Color::BrightBlack) << "Peak: "
-              << Terminal::fg(Color::Green) << formatHashrate(stats_.total_hashrate)
+              << Terminal::fg(Color::Green) << formatHashrate(peak)
               << "\033[K";
 }
 
 void MinerUI::renderLog() {
-    int deviceBoxHeight = std::max(6, static_cast<int>(devices_.size()) + 4);
-    int y = 18 + deviceBoxHeight + 6 + 1;
-    int logHeight = height_ - y - 3;
+    int deviceBoxHeight = std::max(5, static_cast<int>(devices_.size()) + 3);
+    int graphHeight = 4;
+    int y = 11 + deviceBoxHeight + graphHeight + 2;  // After all boxes
+    int logHeight = height_ - y - 2;
 
     if (logHeight < 5) return;
 

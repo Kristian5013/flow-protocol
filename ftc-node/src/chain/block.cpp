@@ -1,4 +1,5 @@
 #include "chain/block.h"
+#include "chain/genesis.h"
 #include "script/script.h"
 #include "util/hex.h"
 
@@ -369,7 +370,7 @@ Block createGenesisBlock() {
     genesis.header.version = 1;
     genesis.header.prev_hash = crypto::ZERO_HASH;
     genesis.header.timestamp = FTC_GENESIS_TIME;  // 2026-01-20 00:00:00 UTC
-    genesis.header.bits = 0x1d00ffff;  // Initial difficulty
+    genesis.header.bits = genesis::GENESIS_BITS;  // Initial difficulty (~64)
     genesis.header.nonce = 0;  // Will be mined
 
     // Coinbase transaction

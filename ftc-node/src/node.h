@@ -59,6 +59,9 @@ public:
     // Signal shutdown
     void requestShutdown();
 
+    // Check if shutdown was requested
+    bool isShutdownRequested() const { return shutdown_requested_; }
+
     // Print live status line (updates in place)
     void printStatusLine();
 
@@ -70,6 +73,7 @@ public:
     p2p::MessageHandler* getMessageHandler() { return message_handler_.get(); }
     api::Server* getAPIServer() { return api_server_.get(); }
     p2pool::P2Pool* getP2Pool() { return p2pool_.get(); }
+    dht::DHT* getDHT() { return dht_.get(); }
 
     // Get config
     const util::Config& getConfig() const { return config_; }

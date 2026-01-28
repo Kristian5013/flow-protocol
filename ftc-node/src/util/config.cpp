@@ -92,6 +92,16 @@ Config Config::parse(int argc, char** argv) {
         else if (arg == "--reindex") {
             config.reindex = true;
         }
+        else if (arg == "--web-root") {
+            if (i + 1 < argc) {
+                config.web_root = argv[++i];
+            }
+        }
+    }
+
+    // Set default web_root to data_dir/web if not specified
+    if (config.web_root.empty()) {
+        config.web_root = config.data_dir + "/web";
     }
 
     return config;
@@ -100,7 +110,13 @@ Config Config::parse(int argc, char** argv) {
 void Config::printHelp() {
     std::cout << "FTC Node " << FTC_VERSION_STRING << "\n\n";
     std::cout << "Kristian Pilatovich 20091227 - First Real P2P\n\n";
-    std::cout << "Usage: ftc-node [options]\n\n";
+    std::cout << "Usage: ftc-node [command] [options]\n\n";
+    std::cout << "Commands:\n";
+    std::cout << "  (none)                  Run in interactive mode (default)\n";
+    std::cout << "  start                   Start as background daemon\n";
+    std::cout << "  stop                    Stop running daemon\n";
+    std::cout << "  status                  Check if daemon is running\n";
+    std::cout << "\n";
     std::cout << "Options:\n";
     std::cout << "  -h, --help              Show this help message\n";
     std::cout << "  -v, --version           Show version\n";
@@ -113,14 +129,17 @@ void Config::printHelp() {
     std::cout << "  --log FILE              Log to file\n";
     std::cout << "  --mine [ADDRESS]        Enable mining to address\n";
     std::cout << "  --reindex               Rebuild UTXO set from blocks\n";
+    std::cout << "  --web-root DIR          Web dashboard files directory\n";
+    std::cout << "\n";
+    std::cout << "Examples:\n";
+    std::cout << "  ftc-node                Interactive mode with CLI\n";
+    std::cout << "  ftc-node start          Start in background\n";
+    std::cout << "  ftc-node stop           Stop background daemon\n";
+    std::cout << "  ftc-node status         Check daemon status\n";
     std::cout << "\n";
     std::cout << "Peer Discovery:\n";
     std::cout << "  BitTorrent DHT (automatic, no configuration needed)\n";
     std::cout << "  DHT port: 17321 (UDP)\n";
-    std::cout << "\n";
-    std::cout << "First run:\n";
-    std::cout << "  Just run: ftc-node\n";
-    std::cout << "  Peers are discovered automatically via DHT\n";
     std::cout << "\n";
     std::cout << "API: curl http://[::1]:17319/status\n";
     std::cout << "\n";

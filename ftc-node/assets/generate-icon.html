@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FTC Node Icon Generator</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px;
+            min-height: 100vh;
+        }
+        h1 { color: #F7931A; margin-bottom: 10px; }
+        .subtitle { color: #888; margin-bottom: 30px; }
+        .canvas-container {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        .canvas-box {
+            text-align: center;
+            background: #252540;
+            padding: 20px;
+            border-radius: 12px;
+        }
+        .canvas-box p { margin: 10px 0 0; color: #aaa; }
+        canvas { display: block; margin: 0 auto; }
+        .buttons {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        button {
+            background: #F7931A;
+            color: #fff;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        button:hover { background: #e8820a; }
+        .info {
+            margin-top: 30px;
+            background: #252540;
+            padding: 20px;
+            border-radius: 12px;
+            max-width: 600px;
+            text-align: left;
+        }
+        .info h3 { color: #F7931A; margin-top: 0; }
+        .info ol { color: #ccc; line-height: 1.8; }
+        .info a { color: #F7931A; }
+    </style>
+</head>
+<body>
+    <h1>FTC Node Icon Generator</h1>
+    <p class="subtitle">Bitcoin-style icon with "F" for Flow Token Chain</p>
+
+    <div class="canvas-container">
+        <div class="canvas-box">
+            <canvas id="icon256" width="256" height="256"></canvas>
+            <p>256x256</p>
+        </div>
+        <div class="canvas-box">
+            <canvas id="icon128" width="128" height="128"></canvas>
+            <p>128x128</p>
+        </div>
+        <div class="canvas-box">
+            <canvas id="icon64" width="64" height="64"></canvas>
+            <p>64x64</p>
+        </div>
+        <div class="canvas-box">
+            <canvas id="icon32" width="32" height="32"></canvas>
+            <p>32x32</p>
+        </div>
+    </div>
+
+    <div class="buttons">
+        <button onclick="download(256)">Download 256px PNG</button>
+        <button onclick="download(128)">Download 128px PNG</button>
+        <button onclick="download(64)">Download 64px PNG</button>
+        <button onclick="download(32)">Download 32px PNG</button>
+        <button onclick="downloadAll()">Download All</button>
+    </div>
+
+    <div class="info">
+        <h3>How to create ICO file:</h3>
+        <ol>
+            <li>Download all PNG sizes above</li>
+            <li>Go to <a href="https://icoconvert.com/" target="_blank">icoconvert.com</a> or <a href="https://convertico.com/" target="_blank">convertico.com</a></li>
+            <li>Upload the 256px PNG</li>
+            <li>Select sizes: 16, 32, 48, 64, 128, 256</li>
+            <li>Download the ICO file</li>
+            <li>Save as <code>ftc-node.ico</code> in the assets folder</li>
+        </ol>
+    </div>
+
+    <script>
+        function drawIcon(ctx, size) {
+            const scale = size / 512;
+            ctx.save();
+            ctx.scale(scale, scale);
+
+            // Background circle with gradient
+            const gradient = ctx.createLinearGradient(0, 0, 512, 512);
+            gradient.addColorStop(0, '#F7931A');
+            gradient.addColorStop(1, '#E8820A');
+
+            // Shadow
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+            ctx.shadowBlur = 20 * scale;
+            ctx.shadowOffsetY = 8 * scale;
+
+            ctx.beginPath();
+            ctx.arc(256, 256, 240, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Reset shadow
+            ctx.shadowColor = 'transparent';
+
+            // Inner subtle ring
+            ctx.beginPath();
+            ctx.arc(256, 256, 220, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // Rotate for Bitcoin-style tilt
+            ctx.translate(256, 256);
+            ctx.rotate(-12 * Math.PI / 180);
+            ctx.translate(-256, -256);
+
+            // Draw F symbol
+            ctx.fillStyle = '#FFFFFF';
+
+            // Main vertical bar of F
+            roundRect(ctx, 175, 115, 52, 285, 26);
+            ctx.fill();
+
+            // Top horizontal bar of F
+            roundRect(ctx, 175, 115, 165, 52, 26);
+            ctx.fill();
+
+            // Middle horizontal bar of F
+            roundRect(ctx, 175, 225, 130, 48, 24);
+            ctx.fill();
+
+            // Top serif extension (Bitcoin-style)
+            roundRect(ctx, 295, 70, 38, 80, 19);
+            ctx.fill();
+
+            // Bottom serif extension (Bitcoin-style)
+            roundRect(ctx, 193, 365, 38, 80, 19);
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function roundRect(ctx, x, y, width, height, radius) {
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+        }
+
+        function download(size) {
+            const canvas = document.getElementById('icon' + size);
+            const link = document.createElement('a');
+            link.download = 'ftc-node-' + size + '.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        function downloadAll() {
+            [256, 128, 64, 32].forEach((size, i) => {
+                setTimeout(() => download(size), i * 200);
+            });
+        }
+
+        // Draw all icons
+        [256, 128, 64, 32].forEach(size => {
+            const canvas = document.getElementById('icon' + size);
+            const ctx = canvas.getContext('2d');
+            drawIcon(ctx, size);
+        });
+    </script>
+</body>
+</html>

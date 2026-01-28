@@ -103,7 +103,6 @@ bool Node::initDataDir() {
         std::filesystem::create_directories(config_.data_dir);
         std::filesystem::create_directories(config_.data_dir + "/blocks");
         std::filesystem::create_directories(config_.data_dir + "/chainstate");
-        std::filesystem::create_directories(config_.data_dir + "/peers");
         std::filesystem::create_directories(config_.data_dir + "/p2pool");
         std::filesystem::create_directories(config_.data_dir + "/p2pool/sharechain");
         LOG_DEBUG("Data directory initialized: {}", config_.data_dir);
@@ -533,13 +532,14 @@ bool Node::addPeerAddress(const std::string& addr_str, const std::string& source
     return false;
 }
 
-// Note: loadPeers() and savePeers() removed - DHT handles peer discovery now
-
 bool Node::initAPI() {
     api::Server::Config api_config;
     api_config.host = config_.api_bind;  // Default: :: (all interfaces)
     api_config.port = config_.api_port;
     api_config.enable_cors = config_.api_cors;  // Enable CORS for browser wallets
+
+    // Dashboard settings
+    api_config.web_root = config_.web_root;
 
     api_server_ = std::make_unique<api::Server>(api_config);
 
@@ -874,9 +874,8 @@ bool Node::start() {
     // Start P2P network
     if (!initP2P()) return false;
 
-    // TODO: Fix checkExternalAccessibility() to use IPv6 instead of IPv4
-    // For now, skip this check as our network is IPv6-only
-    LOG_NOTICE("Skipping external accessibility check (IPv6-only network)");
+    // External accessibility check skipped - IPv6-only network uses DHT for peer discovery
+    LOG_NOTICE("IPv6-only network - using DHT for peer discovery");
 
     // NOTE: Don't call startSync() here - peers haven't completed VERSION handshake yet.
     // Sync will be triggered by onPeerConnect() when a peer with higher height is established.

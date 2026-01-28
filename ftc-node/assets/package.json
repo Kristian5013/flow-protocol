@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "canvas": "^3.2.1",
+    "png-to-ico": "^3.0.1"
+  }
+}

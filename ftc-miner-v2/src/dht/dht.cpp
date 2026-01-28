@@ -19,8 +19,8 @@ DHT::DHT(uint16_t port, bool mainnet)
     // Generate random node ID
     node_id_ = NodeId::random();
 
-    // Generate info_hash for FTC network (v3 - LWMA difficulty, NAT detection)
-    std::string network_id = mainnet ? "FTC-mainnet-v3" : "FTC-testnet-v3";
+    // Generate info_hash for FTC network (v4 - classic 2016-block difficulty)
+    std::string network_id = mainnet ? "FTC-mainnet-v4" : "FTC-testnet-v4";
     info_hash_ = NodeId::fromHash(network_id);
 
     // Initialize routing table

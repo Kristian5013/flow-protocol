@@ -1,4 +1,5 @@
 #include "chain/transaction.h"
+#include "crypto/bech32.h"
 #include "util/hex.h"
 
 #include <cstring>
@@ -218,12 +219,19 @@ std::optional<TxOutput> TxOutput::deserialize(const uint8_t* data, size_t len, s
 }
 
 std::string TxOutput::getAddress() const {
-    // Extract from P2PKH script
-    auto pubkey_hash = script::extractP2PKH(script_pubkey);
-    if (!pubkey_hash) return "";
+    // P2WPKH: OP_0 <20-byte-hash>
+    if (script_pubkey.size() == 22 &&
+        script_pubkey[0] == 0x00 && script_pubkey[1] == 0x14) {
+        return crypto::bech32::addressFromPubKeyHash(script_pubkey.data() + 2);
+    }
 
-    // TODO: Convert to bech32 address
-    return util::toHex(pubkey_hash->data(), pubkey_hash->size());
+    // P2PKH: OP_DUP OP_HASH160 <20-byte-hash> OP_EQUALVERIFY OP_CHECKSIG
+    auto pubkey_hash = script::extractP2PKH(script_pubkey);
+    if (pubkey_hash) {
+        return crypto::bech32::addressFromPubKeyHash(pubkey_hash->data());
+    }
+
+    return "";
 }
 
 // ============================================================================
@@ -475,67 +483,38 @@ std::vector<uint8_t> createP2PKH(const uint8_t* pubkey_hash20) {
 }
 
 std::vector<uint8_t> createP2PKHFromAddress(const std::string& address) {
-    // Parse bech32 address (ftc1... or tftc1...)
-    // Find the separator '1'
-    size_t sep = address.rfind('1');
-    if (sep == std::string::npos || sep < 1 || sep + 7 > address.size()) {
-        return {};  // Invalid format
-    }
+    // Use the correct crypto::bech32 implementation
+    // The previous implementation had a bug: it removed the version byte
+    // BEFORE bit conversion, which changes the bit alignment and produces
+    // a wrong pubkey hash.
 
-    std::string hrp = address.substr(0, sep);
-    std::string data_part = address.substr(sep + 1);
+    // Check for ftc1/tftc1 prefix
+    if (address.size() < 4) return {};
+    std::string prefix = address.substr(0, 4);
+    for (auto& c : prefix) c = std::tolower(c);
 
-    // Validate HRP
-    if (hrp != "ftc" && hrp != "tftc") {
-        return {};  // Unknown prefix
-    }
-
-    // Bech32 character set
-    static const char* CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-
-    // Decode data part
-    std::vector<uint8_t> data5bit;
-    for (char c : data_part) {
-        const char* p = std::strchr(CHARSET, std::tolower(c));
-        if (!p) return {};  // Invalid character
-        data5bit.push_back(static_cast<uint8_t>(p - CHARSET));
-    }
-
-    // Need at least version (1) + data (32 for 20-byte hash) + checksum (6)
-    if (data5bit.size() < 39) return {};
-
-    // First byte is witness version
-    uint8_t version = data5bit[0];
-    if (version != 0) {
-        return {};  // Only support version 0 (P2WPKH, P2WSH)
-    }
-
-    // Remove checksum (last 6 characters) and version (first 1)
-    std::vector<uint8_t> data5bit_payload(data5bit.begin() + 1, data5bit.end() - 6);
-
-    // Convert 5-bit to 8-bit
-    std::vector<uint8_t> program;
-    int acc = 0;
-    int bits = 0;
-    for (uint8_t v : data5bit_payload) {
-        acc = (acc << 5) | v;
-        bits += 5;
-        while (bits >= 8) {
-            bits -= 8;
-            program.push_back((acc >> bits) & 0xFF);
+    if (prefix != "ftc1" && prefix != "tftc") {
+        // Check for 5-char tftc1
+        if (address.size() >= 5) {
+            prefix = address.substr(0, 5);
+            for (auto& c : prefix) c = std::tolower(c);
+            if (prefix != "tftc1") return {};
+        } else {
+            return {};
         }
     }
 
-    // P2WPKH should have 20 bytes
-    if (program.size() != 20) {
-        return {};  // Invalid program length
+    // Use the canonical bech32 implementation
+    auto hash_opt = crypto::bech32::pubKeyHashFromAddress(address);
+    if (!hash_opt || hash_opt->size() != 20) {
+        return {};
     }
 
     // Build P2WPKH script: OP_0 <20 bytes>
     std::vector<uint8_t> script;
     script.push_back(OP_0);      // Witness version 0
     script.push_back(20);        // Push 20 bytes
-    script.insert(script.end(), program.begin(), program.end());
+    script.insert(script.end(), hash_opt->begin(), hash_opt->end());
 
     return script;
 }

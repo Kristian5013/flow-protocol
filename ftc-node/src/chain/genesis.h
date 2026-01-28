@@ -23,7 +23,7 @@ constexpr const char* GENESIS_MESSAGE = "Kristian Pilatovich 20091227 - First Re
 
 // Genesis block parameters
 constexpr uint32_t GENESIS_VERSION = 1;
-constexpr uint32_t GENESIS_BITS = 0x1d00ffff;  // Difficulty 1
+constexpr uint32_t GENESIS_BITS = 0x1c00ffff;  // Difficulty 256 (~10 min blocks at 1 GH/s)
 constexpr uint32_t GENESIS_NONCE = 0;          // Will be mined
 
 // Initial block reward: 50 FTC

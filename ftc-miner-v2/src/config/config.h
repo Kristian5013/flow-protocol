@@ -8,7 +8,7 @@ namespace config {
 
 struct MinerConfig {
     // Pool/Node settings
-    std::string pool_url = "http://localhost:17319";  // Local node by default
+    std::string pool_url = "http://[::1]:17319";  // Local node by default (IPv6)
     std::string wallet_address;
     std::string worker_name = "default";
     std::string password = "x";

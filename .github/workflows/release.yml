@@ -6,28 +6,21 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  VERSION: "1.0.0"
+
 jobs:
+  #=============================================================================
+  # Windows Build
+  #=============================================================================
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup CUDA
-        uses: Jimver/cuda-toolkit@v0.2.11
-        with:
-          cuda: '12.4.0'
-
       - name: Build ftc-node
         run: |
           cd ftc-node
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64
-          cmake --build . --config Release
-
-      - name: Build ftc-wallet
-        run: |
-          cd ftc-wallet
           mkdir build
           cd build
           cmake .. -G "Visual Studio 17 2022" -A x64
@@ -41,48 +34,57 @@ jobs:
           cmake .. -G "Visual Studio 17 2022" -A x64
           cmake --build . --config Release
 
-      - name: Build ftc-full
+      - name: Create portable ZIP
         run: |
-          cd ftc-full
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64
-          cmake --build . --config Release
+          mkdir ftc-node-${{ env.VERSION }}-win64
+          copy ftc-node\build\Release\ftc-node.exe ftc-node-${{ env.VERSION }}-win64\
+          copy ftc-node\assets\ftc-node.ico ftc-node-${{ env.VERSION }}-win64\
+          echo "FTC Node - Flow Token Chain" > ftc-node-${{ env.VERSION }}-win64\README.txt
+          echo "API: http://localhost:17319/status" >> ftc-node-${{ env.VERSION }}-win64\README.txt
+          Compress-Archive -Path ftc-node-${{ env.VERSION }}-win64 -DestinationPath ftc-node-${{ env.VERSION }}-win64.zip
 
-      - name: Collect binaries
+      - name: Create miner ZIP
         run: |
-          mkdir dist-windows
-          copy ftc-node\build\Release\ftc-node.exe dist-windows\
-          copy ftc-wallet\build\Release\ftc-wallet.exe dist-windows\
-          copy ftc-miner-v2\build\Release\ftc-miner.exe dist-windows\
-          copy ftc-full\build\Release\ftc-full.exe dist-windows\
+          mkdir ftc-miner-${{ env.VERSION }}-win64
+          copy ftc-miner-v2\build\Release\ftc-miner.exe ftc-miner-${{ env.VERSION }}-win64\
+          Compress-Archive -Path ftc-miner-${{ env.VERSION }}-win64 -DestinationPath ftc-miner-${{ env.VERSION }}-win64.zip
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup -y
+
+      - name: Build Windows Installer
+        run: |
+          mkdir -p release
+          copy ftc-node\build\Release\ftc-node.exe release\
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" ftc-node\installer\windows\ftc-node.iss
+        shell: powershell
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ftc-windows-x64
-          path: dist-windows/
+          name: windows-release
+          path: |
+            ftc-node-${{ env.VERSION }}-win64.zip
+            ftc-miner-${{ env.VERSION }}-win64.zip
+            ftc-node/release/ftc-node-${{ env.VERSION }}-win64-setup.exe
 
+  #=============================================================================
+  # Linux Build
+  #=============================================================================
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ocl-icd-opencl-dev
+          sudo apt-get install -y build-essential cmake libssl-dev
 
       - name: Build ftc-node
         run: |
           cd ftc-node
-          mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
-
-      - name: Build ftc-wallet
-        run: |
-          cd ftc-wallet
           mkdir build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
@@ -92,81 +94,219 @@ jobs:
           cd ftc-miner-v2
           mkdir build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc) || echo "Miner build failed (OpenCL may not be available)"
+          make -j$(nproc) || echo "Miner build skipped"
 
-      - name: Build ftc-full
+      - name: Create Linux tarball
         run: |
-          cd ftc-full
-          mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
+          mkdir ftc-node-${{ env.VERSION }}-linux-x64
+          cp ftc-node/build/ftc-node ftc-node-${{ env.VERSION }}-linux-x64/
+          cp ftc-node/installer/linux/install.sh ftc-node-${{ env.VERSION }}-linux-x64/
+          cp ftc-node/assets/ftc-node-256.png ftc-node-${{ env.VERSION }}-linux-x64/ftc-node.png 2>/dev/null || true
+          strip ftc-node-${{ env.VERSION }}-linux-x64/ftc-node
+          chmod +x ftc-node-${{ env.VERSION }}-linux-x64/ftc-node
+          chmod +x ftc-node-${{ env.VERSION }}-linux-x64/install.sh
+          # Create README
+          cat > ftc-node-${{ env.VERSION }}-linux-x64/README.txt << 'EOF'
+          FTC Node - Flow Token Chain
+          ===========================
 
-      - name: Collect binaries
+          Installation:
+            sudo ./install.sh
+
+          Or for user-only install:
+            ./install.sh --user
+
+          API: http://localhost:17319/status
+          EOF
+          tar -czvf ftc-node-${{ env.VERSION }}-linux-x64.tar.gz ftc-node-${{ env.VERSION }}-linux-x64
+
+      - name: Create miner tarball
         run: |
-          mkdir dist-linux
-          cp ftc-node/build/ftc-node dist-linux/ || true
-          cp ftc-wallet/build/ftc-wallet dist-linux/ || true
-          cp ftc-miner-v2/build/ftc-miner dist-linux/ || true
-          cp ftc-full/build/ftc-full dist-linux/ || true
-          chmod +x dist-linux/*
+          if [ -f ftc-miner-v2/build/ftc-miner ]; then
+            mkdir ftc-miner-${{ env.VERSION }}-linux-x64
+            cp ftc-miner-v2/build/ftc-miner ftc-miner-${{ env.VERSION }}-linux-x64/
+            chmod +x ftc-miner-${{ env.VERSION }}-linux-x64/ftc-miner
+            tar -czvf ftc-miner-${{ env.VERSION }}-linux-x64.tar.gz ftc-miner-${{ env.VERSION }}-linux-x64
+          fi
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ftc-linux-x64
-          path: dist-linux/
+          name: linux-release
+          path: |
+            ftc-node-${{ env.VERSION }}-linux-x64.tar.gz
+            ftc-miner-${{ env.VERSION }}-linux-x64.tar.gz
 
+  #=============================================================================
+  # macOS Build
+  #=============================================================================
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ftc-node
+        run: |
+          cd ftc-node
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Build ftc-miner
+        run: |
+          cd ftc-miner-v2
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(sysctl -n hw.ncpu) || echo "Miner build skipped"
+
+      - name: Detect architecture
+        id: arch
+        run: |
+          if [ "$(uname -m)" = "arm64" ]; then
+            echo "arch=arm64" >> $GITHUB_OUTPUT
+          else
+            echo "arch=x64" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create macOS tarball
+        run: |
+          ARCH=${{ steps.arch.outputs.arch }}
+          mkdir ftc-node-${{ env.VERSION }}-macos-${ARCH}
+          cp ftc-node/build/ftc-node ftc-node-${{ env.VERSION }}-macos-${ARCH}/
+          strip ftc-node-${{ env.VERSION }}-macos-${ARCH}/ftc-node 2>/dev/null || true
+          chmod +x ftc-node-${{ env.VERSION }}-macos-${ARCH}/ftc-node
+          echo "FTC Node - Flow Token Chain" > ftc-node-${{ env.VERSION }}-macos-${ARCH}/README.txt
+          echo "API: http://localhost:17319/status" >> ftc-node-${{ env.VERSION }}-macos-${ARCH}/README.txt
+          tar -czvf ftc-node-${{ env.VERSION }}-macos-${ARCH}.tar.gz ftc-node-${{ env.VERSION }}-macos-${ARCH}
+
+      - name: Create miner tarball
+        run: |
+          ARCH=${{ steps.arch.outputs.arch }}
+          if [ -f ftc-miner-v2/build/ftc-miner ]; then
+            mkdir ftc-miner-${{ env.VERSION }}-macos-${ARCH}
+            cp ftc-miner-v2/build/ftc-miner ftc-miner-${{ env.VERSION }}-macos-${ARCH}/
+            chmod +x ftc-miner-${{ env.VERSION }}-macos-${ARCH}/ftc-miner
+            tar -czvf ftc-miner-${{ env.VERSION }}-macos-${ARCH}.tar.gz ftc-miner-${{ env.VERSION }}-macos-${ARCH}
+          fi
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: |
+            ftc-node-${{ env.VERSION }}-macos-*.tar.gz
+            ftc-miner-${{ env.VERSION }}-macos-*.tar.gz
+
+  #=============================================================================
+  # Create Release
+  #=============================================================================
   release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download Windows artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ftc-windows-x64
-          path: windows
+          path: artifacts
 
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ftc-linux-x64
-          path: linux
-
-      - name: Create archives
+      - name: Collect release files
         run: |
-          cd windows && zip -r ../ftc-windows-x64.zip . && cd ..
-          cd linux && tar -czvf ../ftc-linux-x64.tar.gz . && cd ..
+          mkdir release
+          cp artifacts/windows-release/* release/ 2>/dev/null || true
+          cp artifacts/linux-release/* release/ 2>/dev/null || true
+          cp artifacts/macos-release/* release/ 2>/dev/null || true
+          ls -la release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            ftc-windows-x64.zip
-            ftc-linux-x64.tar.gz
+          files: release/*
           body: |
-            ## FTC Release ${{ github.ref_name }}
+            ## FTC Node ${{ github.ref_name }}
 
-            Kristian Pilatovich 20091227 - First Real P2P
+            **Flow Token Chain - Cryptocurrency Full Node**
+
+            ---
 
             ### Downloads
-            - **Windows**: `ftc-windows-x64.zip`
-            - **Linux**: `ftc-linux-x64.tar.gz`
+
+            | Platform | Portable | Installer |
+            |----------|----------|-----------|
+            | **Windows** | [ftc-node-${{ env.VERSION }}-win64.zip](../../releases/download/${{ github.ref_name }}/ftc-node-${{ env.VERSION }}-win64.zip) | [ftc-node-${{ env.VERSION }}-win64-setup.exe](../../releases/download/${{ github.ref_name }}/ftc-node-${{ env.VERSION }}-win64-setup.exe) |
+            | **Linux** | [ftc-node-${{ env.VERSION }}-linux-x64.tar.gz](../../releases/download/${{ github.ref_name }}/ftc-node-${{ env.VERSION }}-linux-x64.tar.gz) | - |
+            | **macOS** | [ftc-node-${{ env.VERSION }}-macos-arm64.tar.gz](../../releases/download/${{ github.ref_name }}/ftc-node-${{ env.VERSION }}-macos-arm64.tar.gz) | - |
+
+            ---
 
             ### Quick Start
-            ```bash
-            # Windows
-            ftc-full.exe -a ftc1q...
 
-            # Linux
-            chmod +x ftc-full
-            ./ftc-full -a ftc1q...
+            **Windows (Installer)**
+            ```
+            1. Run ftc-node-setup.exe
+            2. Follow installation wizard
+            3. Node runs in background with system tray icon
+            4. Right-click tray icon to stop
             ```
 
-            ### Components
-            - `ftc-full` - Node + Miner combined (recommended)
-            - `ftc-node` - Full node only
-            - `ftc-miner` - GPU miner only
-            - `ftc-wallet` - CLI wallet
+            **Windows (Portable)**
+            ```
+            1. Download and extract ZIP
+            2. Run ftc-node.exe
+            3. Node appears in system tray
+            ```
+
+            **Linux**
+            ```bash
+            tar -xzf ftc-node-${{ env.VERSION }}-linux-x64.tar.gz
+            cd ftc-node-${{ env.VERSION }}-linux-x64
+            sudo ./install.sh
+            sudo systemctl start ftc-node
+            ```
+
+            **macOS**
+            ```bash
+            tar -xzf ftc-node-${{ env.VERSION }}-macos-arm64.tar.gz
+            cd ftc-node-${{ env.VERSION }}-macos-arm64
+            ./ftc-node
+            ```
+
+            ---
+
+            ### API Usage
+
+            ```bash
+            # Check node status
+            curl http://localhost:17319/status
+
+            # Get blockchain info
+            curl http://localhost:17319/block/0
+
+            # Generate wallet
+            curl -X POST http://localhost:17319/wallet/new
+            ```
+
+            ### Features
+            - Background daemon with system tray (Windows)
+            - Systemd service (Linux)
+            - P2P networking with DHT peer discovery
+            - Built-in wallet (generate, send, receive)
+            - Mining pool (P2Pool) support
+            - Full REST API
+
+            ### Network Ports
+            - P2P: 17318 (TCP)
+            - API: 17319 (TCP)
+            - DHT: 17321 (UDP)
+
+            ---
+
+            Kristian Pilatovich 20091227 - First Real P2P
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

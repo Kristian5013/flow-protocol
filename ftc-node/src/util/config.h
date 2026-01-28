@@ -42,6 +42,9 @@ struct Config {
     bool api_cors = true;                // Enable CORS for remote miners
     std::string api_bind = "::";         // Bind address (:: = all IPv6 interfaces)
 
+    // Dashboard (web UI on localhost - no auth needed)
+    std::string web_root;                // Path to web dashboard files
+
     // Maintenance
     bool reindex = false;                // Rebuild UTXO set from blocks
 

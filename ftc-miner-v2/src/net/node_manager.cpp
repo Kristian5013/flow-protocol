@@ -104,20 +104,20 @@ bool NodeManager::checkNode(NodeInfo& node) {
     auto end = std::chrono::steady_clock::now();
     double latency = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Node is reachable if it responds with valid height
-    bool reachable = (stats.height > 0);
+    // Node is reachable if it responds (height >= 0 means connected, -1 means failed)
+    bool reachable = (stats.height >= 0);
 
     if (debug_output_) {
         std::cerr << "[DEBUG] Node " << node.host << ":" << node.port
                   << " reachable=" << (reachable ? "OK" : "FAILED")
-                  << " peers=" << stats.peer_count
+                  << " nodes=" << stats.node_count
                   << " height=" << stats.height
                   << " latency=" << latency << "ms" << std::endl;
     }
 
     node.last_check = end;
     node.total_requests++;
-    node.peer_count = stats.peer_count;
+    node.peer_count = stats.node_count;
     node.height = stats.height;
 
     if (reachable) {
@@ -136,8 +136,8 @@ bool NodeManager::checkNode(NodeInfo& node) {
         node.total_failures++;
     }
 
-    // Return true only if node has good peers (for priority selection)
-    return reachable && (stats.peer_count >= 2);
+    // Return true only if node has good peer connections (for priority selection)
+    return reachable && (stats.node_count >= 2);
 }
 
 void NodeManager::selectBestNode() {

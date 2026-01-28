@@ -393,6 +393,80 @@ std::string Gauge::render() const {
 }
 
 // ============================================================================
+// HashrateAverager
+// ============================================================================
+
+HashrateAverager::HashrateAverager()
+    : peak_hashrate_(0.0)
+{}
+
+void HashrateAverager::addSample(double hashrate) {
+    auto now = std::chrono::steady_clock::now();
+
+    // Track peak
+    if (hashrate > peak_hashrate_) {
+        peak_hashrate_ = hashrate;
+    }
+
+    // Add sample
+    samples_.push_back({hashrate, now});
+
+    // Remove old samples (older than 15 minutes)
+    auto cutoff = now - std::chrono::seconds(900);
+    while (!samples_.empty() && samples_.front().timestamp < cutoff) {
+        samples_.erase(samples_.begin());
+    }
+
+    // Also limit by count
+    while (samples_.size() > MAX_SAMPLES) {
+        samples_.erase(samples_.begin());
+    }
+}
+
+double HashrateAverager::getCurrent() const {
+    if (samples_.empty()) return 0.0;
+    return samples_.back().hashrate;
+}
+
+double HashrateAverager::getAverage1m() const {
+    return calculateAverage(60);
+}
+
+double HashrateAverager::getAverage5m() const {
+    return calculateAverage(300);
+}
+
+double HashrateAverager::getAverage15m() const {
+    return calculateAverage(900);
+}
+
+double HashrateAverager::calculateAverage(int seconds) const {
+    if (samples_.empty()) return 0.0;
+
+    auto now = std::chrono::steady_clock::now();
+    auto cutoff = now - std::chrono::seconds(seconds);
+
+    double sum = 0.0;
+    int count = 0;
+
+    for (auto it = samples_.rbegin(); it != samples_.rend(); ++it) {
+        if (it->timestamp >= cutoff) {
+            sum += it->hashrate;
+            count++;
+        } else {
+            break;  // Samples are ordered by time
+        }
+    }
+
+    return count > 0 ? sum / count : 0.0;
+}
+
+void HashrateAverager::reset() {
+    samples_.clear();
+    peak_hashrate_ = 0.0;
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 

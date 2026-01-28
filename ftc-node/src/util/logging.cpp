@@ -31,20 +31,7 @@ bool isEnabled(Level level) {
 void init(Level min_level, const std::string& log_file) {
     g_min_level = min_level;
 
-#ifdef _WIN32
-    // Ensure we have a console and proper handles
-    if (GetStdHandle(STD_OUTPUT_HANDLE) == INVALID_HANDLE_VALUE ||
-        GetStdHandle(STD_OUTPUT_HANDLE) == nullptr) {
-        AllocConsole();
-        freopen("CONOUT$", "w", stdout);
-        freopen("CONOUT$", "w", stderr);
-    }
-#endif
-
-    // Disable stdout buffering for immediate output
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-    std::setvbuf(stderr, nullptr, _IONBF, 0);
-
+    // For GUI app - log to file only, no console
     if (!log_file.empty()) {
         g_log_file.open(log_file, std::ios::app);
     }
@@ -91,10 +78,7 @@ void log(Level level, const std::string& msg) {
     std::string line = oss.str();
     line += "\n";
 
-    // Output to console - use printf which works reliably
-    printf("%s", line.c_str());
-    fflush(stdout);
-
+    // Logs go to file only (no console spam in interactive mode)
     if (g_log_file.is_open()) {
         g_log_file << line << std::endl;
 

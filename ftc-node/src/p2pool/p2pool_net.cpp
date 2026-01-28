@@ -999,8 +999,6 @@ bool P2Pool::submitWork(uint32_t nonce, const std::vector<uint8_t>& extra_nonce)
     Share share = current_work_;
     share.header.nonce = nonce;
 
-    // TODO: Update extra_nonce in generation transaction if needed
-
     // Check if share meets P2Pool difficulty
     if (!sharechain_->checkSharePoW(share)) {
         LOG_DEBUG("Share does not meet P2Pool difficulty target");
@@ -1094,9 +1092,42 @@ uint64_t P2Pool::getPoolHashrate() const {
     if (!sharechain_) return 0;
 
     auto stats = sharechain_->getStats();
-    // Rough estimate: shares_per_minute * share_difficulty * 2^32 / 60
-    uint64_t difficulty = sharechain_->getTip() ? sharechain_->getTip()->difficulty : 1;
-    return static_cast<uint64_t>(stats.share_rate * difficulty * 4294967296.0 / 60.0);
+    if (stats.share_rate <= 0) return 0;
+
+    // Estimate hashrate from share submission rate
+    // For share with bits, expected hashes to find = 2^256 / target
+    // Simplified: expected_hashes = 2^32 * 256^(0x1d - exp) * (0xffff / mantissa)
+    //
+    // For genesis (0x1d00ffff): expected_hashes ≈ 2^32 = 4.3 billion
+    // For easier shares (higher exp): expected_hashes decreases by 256x per exp
+
+    auto* tip = sharechain_->getTip();
+    if (!tip) return 0;
+
+    uint32_t bits = tip->bits;
+    uint32_t exp = (bits >> 24) & 0xFF;
+    uint32_t mantissa = bits & 0x00FFFFFF;
+    if (mantissa == 0) mantissa = 1;
+
+    // Base hashes for genesis difficulty (exp=0x1d, mantissa=0xffff)
+    double expected_hashes = 4294967296.0;  // 2^32
+
+    // Adjust for exponent difference from genesis (0x1d = 29)
+    int exp_diff = 0x1d - static_cast<int>(exp);
+    for (int i = 0; i < exp_diff && i < 8; i++) {
+        expected_hashes *= 256.0;  // Harder target
+    }
+    for (int i = 0; i > exp_diff && i > -8; i--) {
+        expected_hashes /= 256.0;  // Easier target
+    }
+
+    // Adjust for mantissa (0xffff / actual_mantissa)
+    expected_hashes *= static_cast<double>(0xffff) / static_cast<double>(mantissa);
+
+    // hashrate = shares_per_minute * expected_hashes_per_share / 60
+    double hashrate = stats.share_rate * expected_hashes / 60.0;
+
+    return static_cast<uint64_t>(hashrate);
 }
 
 uint32_t P2Pool::getMinerCount() const {

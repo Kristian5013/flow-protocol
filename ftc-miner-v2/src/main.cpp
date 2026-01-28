@@ -216,7 +216,6 @@ int main(int argc, char** argv) {
 
     // Initialize stats (before callback setup)
     tui::MiningStats stats;
-    stats.pool_url = "Multi-node (" + std::to_string(node_manager.getNodeCount()) + " nodes)";
     stats.start_time = std::chrono::steady_clock::now();
 
     // Configure miner
@@ -309,20 +308,24 @@ int main(int argc, char** argv) {
 
         // Get initial network stats
         auto initial_net_stats = api_client->getNetworkStats();
-        stats.peer_count = initial_net_stats.peer_count;
+        stats.node_count = initial_net_stats.node_count;
         stats.active_miners = initial_net_stats.active_miners;
 
-        // Update pool URL to show current node
-        auto* current_node = node_manager.getCurrentNode();
-        if (current_node) {
-            stats.pool_url = current_node->host + ":" + std::to_string(current_node->port);
-        }
+        // Get initial P2Pool stats
+        stats.p2pool_enabled = initial_net_stats.p2pool_enabled;
+        stats.p2pool_running = initial_net_stats.p2pool_running;
+        stats.sharechain_height = initial_net_stats.sharechain_height;
+        stats.pool_hashrate = initial_net_stats.pool_hashrate;
+        stats.pool_total_shares = initial_net_stats.total_shares;
+        stats.pool_total_blocks = initial_net_stats.total_blocks;
+        stats.shares_per_minute = initial_net_stats.shares_per_minute;
+        stats.p2pool_peers = initial_net_stats.p2pool_peers;
 
         if (cfg.tui_enabled) {
+            std::string p2pool_status = initial_net_stats.p2pool_running ? "P2Pool Active" : "P2Pool Inactive";
             ui.addLogMessage("Connected! Height: " + std::to_string(stats.block_height) +
-                            " | Peers: " + std::to_string(stats.peer_count) +
-                            " | Nodes: " + std::to_string(node_manager.getAvailableCount()) + "/" +
-                            std::to_string(node_manager.getNodeCount()), tui::Color::Green);
+                            " | Nodes: " + std::to_string(stats.node_count) +
+                            " | " + p2pool_status, tui::Color::Green);
         }
     } else {
         stats.connected = true;
@@ -430,35 +433,51 @@ int main(int argc, char** argv) {
         devices.push_back(ds);
     }
 
+    // Hashrate averager for proper 1m/5m/15m moving averages
+    tui::HashrateAverager hashrate_averager;
+    auto last_hashrate_sample = std::chrono::steady_clock::now();
+
     // Network thread for async operations
     std::atomic<bool> network_running{true};
     std::mutex network_mutex;
-    std::atomic<int> network_height{0};
-    std::atomic<int> network_peers{0};
-    std::atomic<int> network_miners{0};
+    std::atomic<int> network_height{stats.block_height};
+    std::atomic<int> network_nodes{static_cast<int>(stats.node_count)};
+    std::atomic<int> network_miners{static_cast<int>(stats.active_miners)};
+
+    // P2Pool stats (shared with network thread) - initialize from initial stats
+    std::atomic<bool> network_p2pool_running{stats.p2pool_running};
+    std::atomic<uint64_t> network_sharechain_height{stats.sharechain_height};
+    std::atomic<double> network_pool_hashrate{stats.pool_hashrate};
+    std::atomic<uint64_t> network_pool_shares{stats.pool_total_shares};
+    std::atomic<uint64_t> network_pool_blocks{stats.pool_total_blocks};
+    std::atomic<double> network_shares_per_minute{stats.shares_per_minute};
+    std::atomic<uint32_t> network_p2pool_peers{stats.p2pool_peers};
 
     std::thread network_thread([&]() {
-        auto last_work_poll = std::chrono::steady_clock::now();
         auto last_network_stats = std::chrono::steady_clock::now();
         auto last_node_health = std::chrono::steady_clock::now();
-        constexpr int WORK_POLL_MS = 50;  // Fast polling for P2Pool (50ms)
+        auto last_work_check = std::chrono::steady_clock::now();
         constexpr int NETWORK_STATS_MS = 5000;
         constexpr int NODE_HEALTH_MS = 10000;  // Check node health every 10s
+        constexpr int WORK_CHECK_MS = 500;     // Check for new blocks every 500ms
         int consecutive_failures = 0;
 
         while (network_running && !g_shutdown) {
             auto now = std::chrono::steady_clock::now();
 
-            // Poll for new work
-            auto work_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - last_work_poll).count();
+            // EVENT-DRIVEN: Wait for solutions instead of fixed polling
+            // This is ADAPTIVE - wakes up IMMEDIATELY when GPU finds a solution
+            // Timeout only triggers periodic maintenance tasks
+            bool has_solutions = work_manager.waitForSolutions(std::chrono::milliseconds(100));
 
-            if (work_elapsed >= WORK_POLL_MS && !cfg.benchmark_mode) {
-                last_work_poll = now;
+            if (cfg.benchmark_mode) {
+                continue;
+            }
 
+            // Process ONE solution at a time - check staleness JUST before submitting
+            if (has_solutions) {
                 auto* client = node_manager.getClient();
                 if (!client) {
-                    // No available node - try to find one
                     consecutive_failures++;
                     if (consecutive_failures >= 3) {
                         node_manager.refreshNodes();
@@ -468,112 +487,58 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
-                // Get current work BEFORE fetching new work (for stale check)
+                // Get ONE solution at a time
+                auto sol_opt = work_manager.getOneSolution();
+                if (!sol_opt) continue;
+                auto& sol = *sol_opt;
+
+                // Check staleness NOW (not when it was queued)
                 mining::Work current_work = work_manager.getWork();
-                // Save original height for stale check (current_work may change in loop)
-                int32_t batch_height = current_work.height;
+                if (sol.height != current_work.height) {
+                    // Stale - discard without network call
+                    stats.shares_stale++;
+                    // Don't log every stale - too spammy
+                    continue;
+                }
 
-                // Submit any pending solutions BEFORE updating work
-                auto solutions = work_manager.getPendingSolutions();
-                for (const auto& sol : solutions) {
-                    // Check against batch_height, not current_work.height (which changes after accept)
-                    if (sol.height != batch_height) {
-                        if (cfg.tui_enabled) {
-                            ui.addLogMessage("Stale block h=" + std::to_string(sol.height) +
-                                           " (work h=" + std::to_string(current_work.height) + ")", tui::Color::Yellow);
-                        } else {
-                            std::cout << "[Submit] Stale block h=" << sol.height
-                                      << " (work h=" << current_work.height << ")\n";
-                        }
-                        stats.shares_stale++;
-                        continue;
-                    }
+                // Valid solution - submit
+                auto result = client->submitBlock(sol, sol.work);
+                if (result.accepted) {
+                    stats.shares_accepted++;
+                    node_manager.recordSuccess(0);
 
-                    client = node_manager.getClient();
-                    if (!client) continue;
-
-                    if (cfg.tui_enabled) {
-                        ui.addLogMessage("Submitting block h=" + std::to_string(sol.height) + "...", tui::Color::Cyan);
-                    } else {
-                        std::cout << "[Submit] Sending block h=" << sol.height << "...\n";
-                    }
-
-                    bool accepted = client->submitBlock(sol, sol.work);
-                    if (accepted) {
+                    if (result.is_block) {
                         stats.blocks_found++;
-                        stats.shares_accepted++;
-                        node_manager.recordSuccess(0);
-
                         if (cfg.tui_enabled) {
-                            ui.addLogMessage("BLOCK ACCEPTED! h=" + std::to_string(sol.height), tui::Color::Green);
-                        } else {
-                            std::cout << "[Submit] BLOCK ACCEPTED! h=" << sol.height << "\n";
+                            ui.addLogMessage("BLOCK FOUND! h=" + std::to_string(sol.height), tui::Color::Green);
                         }
 
-                        // P2Pool: fetch new work immediately but DON'T break
-                        // Continue processing remaining solutions (they may match new height)
+                        // Fetch new work immediately
                         auto fresh_work = client->getMiningTemplate(cfg.wallet_address);
                         if (fresh_work) {
                             work_manager.setWork(*fresh_work);
-                            current_work = *fresh_work;
                             network_height = fresh_work->height;
                             if (cfg.tui_enabled) {
                                 ui.addLogMessage("New work: h=" + std::to_string(fresh_work->height), tui::Color::Cyan);
                             }
-                        } else {
-                            if (cfg.tui_enabled) {
-                                ui.addLogMessage("Failed to get fresh work!", tui::Color::Red);
+
+                            // Clear ALL pending solutions - they're for old height
+                            size_t cleared = work_manager.clearPendingSolutions();
+                            stats.shares_stale += cleared;
+                            if (cfg.tui_enabled && cleared > 0) {
+                                ui.addLogMessage("Cleared " + std::to_string(cleared) + " stale", tui::Color::Yellow);
                             }
                         }
-                        // Don't break - continue processing remaining solutions for P2Pool
                     } else {
-                        stats.shares_rejected++;
-                        node_manager.recordFailure();
                         if (cfg.tui_enabled) {
-                            ui.addLogMessage("Block REJECTED h=" + std::to_string(sol.height), tui::Color::Red);
-                        } else {
-                            std::cout << "[Submit] Block REJECTED h=" << sol.height << "\n";
-                        }
-                    }
-                }
-
-                // Now fetch new work and update if height changed
-                auto req_start = std::chrono::steady_clock::now();
-                auto new_work = client->getMiningTemplate(cfg.wallet_address);
-                auto req_end = std::chrono::steady_clock::now();
-
-                if (new_work) {
-                    // Success - record latency (only getMiningTemplate time, not block submissions)
-                    double latency = std::chrono::duration<double, std::milli>(req_end - req_start).count();
-                    node_manager.recordSuccess(latency);
-                    consecutive_failures = 0;
-
-                    // Only update work when height changes
-                    if (new_work->height != current_work.height) {
-                        work_manager.setWork(*new_work);
-                        network_height = new_work->height;
-
-                        if (cfg.tui_enabled) {
-                            ui.addLogMessage("New work: height " + std::to_string(new_work->height), tui::Color::Cyan);
+                            ui.addLogMessage("Share accepted h=" + std::to_string(sol.height), tui::Color::Green);
                         }
                     }
                 } else {
-                    // Failed - record failure and possibly switch node
+                    stats.shares_rejected++;
                     node_manager.recordFailure();
-                    consecutive_failures++;
-
-                    if (consecutive_failures >= 3) {
-                        if (cfg.tui_enabled) {
-                            ui.addLogMessage("Node not responding, switching...", tui::Color::Yellow);
-                        }
-                        if (node_manager.switchToNextNode()) {
-                            consecutive_failures = 0;
-                            // Update displayed pool URL
-                            auto* current_node = node_manager.getCurrentNode();
-                            if (current_node) {
-                                stats.pool_url = current_node->host + ":" + std::to_string(current_node->port);
-                            }
-                        }
+                    if (cfg.tui_enabled) {
+                        ui.addLogMessage("Share REJECTED h=" + std::to_string(sol.height), tui::Color::Red);
                     }
                 }
             }
@@ -586,17 +551,24 @@ int main(int argc, char** argv) {
                 auto* client = node_manager.getClient();
                 if (client) {
                     auto net_stats = client->getNetworkStats();
-                    network_peers = net_stats.peer_count;
+                    network_nodes = net_stats.node_count;
                     network_miners = net_stats.active_miners;
                     if (net_stats.height > 0) {
                         network_height = net_stats.height;
                     }
 
-                    // Periodically refresh nodes to find better options
-                    // (handled by refreshNodes in node health check loop)
-
                     // Update network hashrate
                     stats.network_hashrate = net_stats.network_hashrate;
+
+                    // Update P2Pool stats
+                    network_p2pool_running = net_stats.p2pool_running;
+                    network_sharechain_height = net_stats.sharechain_height;
+                    network_pool_hashrate = net_stats.pool_hashrate;
+                    network_pool_shares = net_stats.total_shares;
+                    network_pool_blocks = net_stats.total_blocks;
+                    network_shares_per_minute = net_stats.shares_per_minute;
+                    network_p2pool_peers = net_stats.p2pool_peers;
+
                     // Update difficulty periodically
                     uint32_t new_bits = client->getDifficulty();
                     if (new_bits > 0) {
@@ -611,20 +583,39 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // Update latency from current node
-                auto* current_node = node_manager.getCurrentNode();
-                if (current_node) {
-                    stats.latency_ms = current_node->avg_latency_ms;
-                    // Check if it's a local node
-                    const auto& h = current_node->host;
-                    stats.is_local_node = (h == "::1" || h == "127.0.0.1" || h == "localhost");
+            }
+
+            // Periodic work check - detect blocks from other miners
+            now = std::chrono::steady_clock::now();
+            auto work_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - last_work_check).count();
+            if (work_elapsed >= WORK_CHECK_MS) {
+                last_work_check = now;
+                auto* client = node_manager.getClient();
+                if (client) {
+                    mining::Work current_work = work_manager.getWork();
+                    auto new_work = client->getMiningTemplate(cfg.wallet_address);
+                    if (new_work && new_work->height != current_work.height) {
+                        work_manager.setWork(*new_work);
+                        network_height = new_work->height;
+
+                        // Clear stale solutions from old height
+                        size_t cleared = work_manager.clearPendingSolutions();
+                        stats.shares_stale += cleared;
+
+                        if (cfg.tui_enabled) {
+                            ui.addLogMessage("New block h=" + std::to_string(new_work->height) +
+                                           (cleared > 0 ? " (cleared " + std::to_string(cleared) + " stale)" : ""),
+                                           tui::Color::Cyan);
+                        }
+                    }
                 }
             }
 
             // Periodic node health check - refresh all nodes
             auto health_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - last_node_health).count();
-            if (health_elapsed >= NODE_HEALTH_MS && !cfg.benchmark_mode) {
+            if (health_elapsed >= NODE_HEALTH_MS) {
                 last_node_health = now;
                 // Check if there's a better node available
                 size_t available_before = node_manager.getAvailableCount();
@@ -637,7 +628,7 @@ int main(int argc, char** argv) {
                 }
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // No fixed sleep - waitForSolutions() handles timing adaptively
         }
     });
 
@@ -652,12 +643,32 @@ int main(int argc, char** argv) {
 
         // Update stats from GPUs (non-blocking)
         stats.total_hashrate = gpu_miner.getTotalHashrate();
-        stats.avg_hashrate_1m = stats.total_hashrate;
-        stats.avg_hashrate_5m = stats.total_hashrate;
-        stats.avg_hashrate_15m = stats.total_hashrate;
         stats.block_height = network_height;
-        stats.peer_count = network_peers;
+        stats.node_count = network_nodes;
         stats.active_miners = network_miners;
+
+        // Update P2Pool stats from network thread
+        stats.p2pool_running = network_p2pool_running;
+        stats.sharechain_height = network_sharechain_height;
+        stats.pool_hashrate = network_pool_hashrate;
+        stats.pool_total_shares = network_pool_shares;
+        stats.pool_total_blocks = network_pool_blocks;
+        stats.shares_per_minute = network_shares_per_minute;
+        stats.p2pool_peers = network_p2pool_peers;
+
+        // Sample hashrate every second for proper moving averages
+        auto sample_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_hashrate_sample).count();
+        if (sample_elapsed >= 1000) {
+            last_hashrate_sample = now;
+            hashrate_averager.addSample(stats.total_hashrate);
+        }
+
+        // Use proper moving averages
+        stats.avg_hashrate_1m = hashrate_averager.getAverage1m();
+        stats.avg_hashrate_5m = hashrate_averager.getAverage5m();
+        stats.avg_hashrate_15m = hashrate_averager.getAverage15m();
+        stats.peak_hashrate = hashrate_averager.getPeak();
 
         // Update device stats - hashrate is fast
         for (size_t i = 0; i < devices.size() && i < gpus.size(); ++i) {
@@ -719,7 +730,7 @@ int main(int argc, char** argv) {
                           << " | Net: " << tui::formatHashrate(stats.network_hashrate)
                           << " | Blocks: " << stats.blocks_found
                           << " | Height: " << stats.block_height
-                          << " | Peers: " << stats.peer_count << "\n";
+                          << " | Nodes: " << stats.node_count << "\n";
             }
         }
 

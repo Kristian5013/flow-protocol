@@ -124,8 +124,12 @@ bool WorkManager::hasWork() const {
 }
 
 void WorkManager::submitSolution(const Solution& solution) {
-    std::lock_guard<std::mutex> lock(solutions_mutex_);
-    pending_solutions_.push_back(solution);
+    {
+        std::lock_guard<std::mutex> lock(solutions_mutex_);
+        pending_solutions_.push_back(solution);
+    }
+    // Notify waiting threads IMMEDIATELY - this is the key to adaptive submission
+    solutions_cv_.notify_one();
 }
 
 std::vector<Solution> WorkManager::getPendingSolutions() {
@@ -133,6 +137,38 @@ std::vector<Solution> WorkManager::getPendingSolutions() {
     std::vector<Solution> result;
     result.swap(pending_solutions_);
     return result;
+}
+
+std::optional<Solution> WorkManager::getOneSolution() {
+    std::lock_guard<std::mutex> lock(solutions_mutex_);
+    if (pending_solutions_.empty()) {
+        return std::nullopt;
+    }
+    Solution sol = std::move(pending_solutions_.front());
+    pending_solutions_.erase(pending_solutions_.begin());
+    return sol;
+}
+
+size_t WorkManager::clearPendingSolutions() {
+    std::lock_guard<std::mutex> lock(solutions_mutex_);
+    size_t count = pending_solutions_.size();
+    pending_solutions_.clear();
+    return count;
+}
+
+bool WorkManager::waitForSolutions(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(solutions_mutex_);
+    // Wait until we have solutions OR timeout
+    // This is ADAPTIVE - wakes up IMMEDIATELY when solutions arrive
+    // No fixed polling interval - responds to actual events
+    return solutions_cv_.wait_for(lock, timeout, [this]() {
+        return !pending_solutions_.empty();
+    });
+}
+
+size_t WorkManager::getPendingCount() const {
+    std::lock_guard<std::mutex> lock(solutions_mutex_);
+    return pending_solutions_.size();
 }
 
 } // namespace mining

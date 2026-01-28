@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#F7931A"/>
+      <stop offset="100%" style="stop-color:#E8820A"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Background circle (Bitcoin style) -->
+  <circle cx="256" cy="256" r="240" fill="url(#bgGrad)" filter="url(#shadow)"/>
+
+  <!-- Inner ring for depth -->
+  <circle cx="256" cy="256" r="220" fill="none" stroke="#E8820A" stroke-width="2" opacity="0.5"/>
+
+  <!-- Rotated F symbol group (Bitcoin is tilted ~14 degrees) -->
+  <g transform="rotate(-12, 256, 256)">
+    <!-- Main F vertical bar -->
+    <rect x="180" y="100" width="48" height="312" rx="24" fill="white"/>
+
+    <!-- F top horizontal bar -->
+    <rect x="180" y="100" width="160" height="48" rx="24" fill="white"/>
+
+    <!-- F middle horizontal bar -->
+    <rect x="180" y="210" width="120" height="44" rx="22" fill="white"/>
+
+    <!-- Top extension (like Bitcoin's vertical lines) -->
+    <rect x="290" y="60" width="36" height="70" rx="18" fill="white"/>
+
+    <!-- Bottom extension -->
+    <rect x="200" y="380" width="36" height="70" rx="18" fill="white"/>
+  </g>
+</svg>

@@ -1,5 +1,6 @@
 #include "api/handlers.h"
 #include "crypto/keccak256.h"
+#include "crypto/bech32.h"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -291,37 +292,17 @@ std::vector<uint8_t> decodeAddress(const std::string& address) {
     if (address.size() >= 4 &&
         (address.substr(0, 4) == "ftc1" || address.substr(0, 4) == "FTC1")) {
 
-        auto [hrp, values] = bech32::decode(address);
-        if (hrp.empty() || values.empty()) {
+        // Use crypto::bech32 implementation which is known to work
+        auto hash_opt = crypto::bech32::pubKeyHashFromAddress(address);
+        if (!hash_opt || hash_opt->size() != 20) {
             return {};
         }
 
-        if (hrp != "ftc") {
-            return {};
-        }
-
-        // First value is witness version
-        uint8_t witness_version = values[0];
-        if (witness_version > 16) {
-            return {};
-        }
-
-        // Convert remaining 5-bit values to 8-bit
-        std::vector<uint8_t> program_values(values.begin() + 1, values.end());
-        auto program = bech32::convertBits(program_values, 5, 8, false);
-        if (program.empty()) {
-            return {};
-        }
-
-        // Build script pubkey
+        // Build P2WPKH script: OP_0 <20-byte-hash>
         std::vector<uint8_t> script;
-        if (witness_version == 0) {
-            script.push_back(0x00);  // OP_0
-        } else {
-            script.push_back(0x50 + witness_version);  // OP_1 - OP_16
-        }
-        script.push_back(static_cast<uint8_t>(program.size()));
-        script.insert(script.end(), program.begin(), program.end());
+        script.push_back(0x00);  // OP_0 (witness version 0)
+        script.push_back(0x14);  // Push 20 bytes
+        script.insert(script.end(), hash_opt->begin(), hash_opt->end());
 
         return script;
     }
@@ -336,11 +317,11 @@ bool isValidAddress(const std::string& address) {
         return false;
     }
 
-    // Check bech32 format
+    // Check bech32 format using crypto::bech32
     if (address.size() >= 4 &&
         (address.substr(0, 4) == "ftc1" || address.substr(0, 4) == "FTC1")) {
-        auto [hrp, values] = bech32::decode(address);
-        return !hrp.empty() && hrp == "ftc" && !values.empty();
+        auto hash_opt = crypto::bech32::pubKeyHashFromAddress(address);
+        return hash_opt.has_value() && hash_opt->size() == 20;
     }
 
     return false;
@@ -734,8 +715,8 @@ bool validateBlockFormat(const chain::Block& block, std::string& error) {
 bool validateAddressChecksum(const std::string& address) {
     if (address.size() >= 4 &&
         (address.substr(0, 4) == "ftc1" || address.substr(0, 4) == "FTC1")) {
-        auto [hrp, values] = bech32::decode(address);
-        return !hrp.empty();
+        auto hash_opt = crypto::bech32::pubKeyHashFromAddress(address);
+        return hash_opt.has_value();
     }
     return false;
 }

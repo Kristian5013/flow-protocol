@@ -17,6 +17,7 @@
 #include <cctype>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <optional>
@@ -1290,6 +1291,86 @@ std::vector<std::string> JsonParser::getStringArray(const std::string& key) cons
 }
 
 //-----------------------------------------------------------------------------
+// Static file serving for web dashboard
+//-----------------------------------------------------------------------------
+
+std::string Server::getMimeType(const std::string& path) {
+    // Get file extension
+    size_t dot_pos = path.rfind('.');
+    if (dot_pos == std::string::npos) {
+        return "application/octet-stream";
+    }
+
+    std::string ext = path.substr(dot_pos);
+    // Convert to lowercase
+    for (auto& c : ext) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    // MIME type mapping
+    if (ext == ".html" || ext == ".htm") return "text/html; charset=utf-8";
+    if (ext == ".css") return "text/css; charset=utf-8";
+    if (ext == ".js") return "application/javascript; charset=utf-8";
+    if (ext == ".json") return "application/json; charset=utf-8";
+    if (ext == ".png") return "image/png";
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+    if (ext == ".gif") return "image/gif";
+    if (ext == ".svg") return "image/svg+xml";
+    if (ext == ".ico") return "image/x-icon";
+    if (ext == ".woff") return "font/woff";
+    if (ext == ".woff2") return "font/woff2";
+    if (ext == ".ttf") return "font/ttf";
+    if (ext == ".txt") return "text/plain; charset=utf-8";
+    if (ext == ".xml") return "application/xml";
+
+    return "application/octet-stream";
+}
+
+bool Server::serveStaticFile(const std::string& relative_path, HttpResponse& response) {
+    if (config_.web_root.empty()) {
+        return false;  // Web dashboard disabled
+    }
+
+    // Security: prevent path traversal attacks
+    if (relative_path.find("..") != std::string::npos) {
+        response.error(HttpStatus::FORBIDDEN, "Path traversal not allowed");
+        return true;
+    }
+
+    // Build full path
+    std::string full_path = config_.web_root;
+    if (!full_path.empty() && full_path.back() != '/' && full_path.back() != '\\') {
+        full_path += '/';
+    }
+    full_path += relative_path;
+
+    // Try to open file
+    std::ifstream file(full_path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return false;  // File not found - let other handlers try
+    }
+
+    // Get file size
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    // Read file content
+    std::string content(static_cast<size_t>(size), '\0');
+    if (!file.read(&content[0], size)) {
+        response.error(HttpStatus::INTERNAL_ERROR, "Failed to read file");
+        return true;
+    }
+
+    // Set response
+    response.status = HttpStatus::OK;
+    response.headers["Content-Type"] = getMimeType(relative_path);
+    response.headers["Cache-Control"] = "public, max-age=3600";  // 1 hour cache
+    response.body = std::move(content);
+
+    return true;
+}
+
+//-----------------------------------------------------------------------------
 // setupRoutes - Register all API routes via modular route handlers
 // Kristian Pilatovich 20091227 - First Real P2P
 //-----------------------------------------------------------------------------
@@ -1306,12 +1387,12 @@ void Server::setupRoutes() {
     ctx.p2pool = p2pool_;
 
     // Register all route modules
-    routes::setupStatusRoutes(ctx);   // /, /status, /health, /genesis, /sync
-    routes::setupChainRoutes(ctx);    // /block, /tx, /mempool
-    routes::setupAddressRoutes(ctx);  // /balance, /utxo, /address/history, /peers
-    routes::setupWalletRoutes(ctx);   // /wallet/new, /wallet/send
-    routes::setupMiningRoutes(ctx);   // /mining/*
-    routes::setupP2PoolRoutes(ctx);   // /p2pool/*
+    routes::setupStatusRoutes(ctx);     // /, /status, /health, /genesis, /sync
+    routes::setupChainRoutes(ctx);      // /block, /tx, /mempool
+    routes::setupAddressRoutes(ctx);    // /balance, /utxo, /address/history, /peers
+    routes::setupWalletRoutes(ctx);     // /wallet/new, /wallet/send
+    routes::setupMiningRoutes(ctx);     // /mining/*
+    routes::setupP2PoolRoutes(ctx);     // /p2pool/*
 }
 
 } // namespace api

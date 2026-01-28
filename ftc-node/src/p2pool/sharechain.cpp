@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <cstring>
 #include <set>
 
 namespace ftc {
@@ -139,15 +140,39 @@ crypto::Hash256 ShareHeader::hash() const {
 // ============================================================================
 
 uint64_t Share::getDifficulty() const {
-    // Calculate difficulty from bits
+    // Calculate difficulty relative to genesis difficulty (0x1d00ffff)
+    // difficulty = genesis_target / current_target
+    // For bits format: difficulty = (0xffff / mantissa) * 256^(0x1d - exp)
+    //
+    // Returns 1 for genesis difficulty, <1 for easier, >1 for harder
+    // Multiplied by 2^32 to preserve precision as integer
+
     uint32_t exp = header.bits >> 24;
     uint32_t mantissa = header.bits & 0x00FFFFFF;
 
-    if (exp <= 3) {
-        return mantissa >> (8 * (3 - exp));
-    } else {
-        return static_cast<uint64_t>(mantissa) << (8 * (exp - 3));
+    if (mantissa == 0) return 1;  // Avoid division by zero
+
+    // Genesis: exp=0x1d=29, mantissa=0xffff
+    // For easier targets (higher exp), difficulty is lower
+    // For harder targets (lower exp), difficulty is higher
+
+    const uint32_t GENESIS_EXP = 0x1d;  // 29
+    const uint32_t GENESIS_MANTISSA = 0x00ffff;
+
+    // Base difficulty ratio: genesis_mantissa / current_mantissa
+    double diff_ratio = static_cast<double>(GENESIS_MANTISSA) / static_cast<double>(mantissa);
+
+    // Adjust for exponent difference: multiply by 256^(genesis_exp - current_exp)
+    int exp_diff = static_cast<int>(GENESIS_EXP) - static_cast<int>(exp);
+    for (int i = 0; i < exp_diff && i < 8; i++) {
+        diff_ratio *= 256.0;  // Harder (lower exp = smaller target)
     }
+    for (int i = 0; i > exp_diff && i > -8; i--) {
+        diff_ratio /= 256.0;  // Easier (higher exp = larger target)
+    }
+
+    // Return as integer (minimum 1)
+    return std::max(static_cast<uint64_t>(diff_ratio), static_cast<uint64_t>(1));
 }
 
 std::vector<uint8_t> Share::serialize() const {
@@ -329,6 +354,9 @@ void Sharechain::shutdown() {
         saveShareIndex();
     }
 
+    // Save statistics
+    saveStats();
+
     if (current_file_.is_open()) {
         current_file_.close();
     }
@@ -390,8 +418,73 @@ bool Sharechain::loadFromDisk() {
 
     tip_ = best_tip;
 
+    // Load statistics from separate file
+    loadStats();
+
     LOG_INFO("Loaded {} share indices from disk", index_map_.size());
     return !index_map_.empty();
+}
+
+bool Sharechain::loadStats() {
+    std::string stats_path = config_.data_dir + "/poolstats.dat";
+
+    std::ifstream file(stats_path, std::ios::binary);
+    if (!file) {
+        LOG_DEBUG("No pool stats file found, starting fresh");
+        return false;
+    }
+
+    // Version check
+    uint32_t version = 0;
+    file.read(reinterpret_cast<char*>(&version), 4);
+    if (version != 1) {
+        LOG_WARN("Unknown pool stats version: {}", version);
+        return false;
+    }
+
+    uint64_t received = 0, accepted = 0, rejected = 0, blocks = 0;
+    file.read(reinterpret_cast<char*>(&received), 8);
+    file.read(reinterpret_cast<char*>(&accepted), 8);
+    file.read(reinterpret_cast<char*>(&rejected), 8);
+    file.read(reinterpret_cast<char*>(&blocks), 8);
+
+    if (file.good()) {
+        stats_received_ = received;
+        stats_accepted_ = accepted;
+        stats_rejected_ = rejected;
+        stats_blocks_ = blocks;
+        LOG_INFO("Loaded pool stats: shares={}, blocks={}", accepted, blocks);
+        return true;
+    }
+
+    return false;
+}
+
+bool Sharechain::saveStats() {
+    std::string stats_path = config_.data_dir + "/poolstats.dat";
+
+    std::ofstream file(stats_path, std::ios::binary);
+    if (!file) {
+        LOG_ERROR("Failed to open pool stats for writing: {}", stats_path);
+        return false;
+    }
+
+    uint32_t version = 1;
+    file.write(reinterpret_cast<const char*>(&version), 4);
+
+    uint64_t received = stats_received_.load();
+    uint64_t accepted = stats_accepted_.load();
+    uint64_t rejected = stats_rejected_.load();
+    uint64_t blocks = stats_blocks_.load();
+
+    file.write(reinterpret_cast<const char*>(&received), 8);
+    file.write(reinterpret_cast<const char*>(&accepted), 8);
+    file.write(reinterpret_cast<const char*>(&rejected), 8);
+    file.write(reinterpret_cast<const char*>(&blocks), 8);
+
+    file.flush();
+    LOG_DEBUG("Saved pool stats: shares={}, blocks={}", accepted, blocks);
+    return file.good();
 }
 
 bool Sharechain::saveShareIndex() {
@@ -426,6 +519,10 @@ bool Sharechain::saveShareIndex() {
 
     file.flush();
     LOG_INFO("Saved {} share indices to disk", count);
+
+    // Also save statistics
+    saveStats();
+
     return file.good();
 }
 
@@ -722,8 +819,9 @@ bool Sharechain::checkSharePoW(const Share& share) const {
 bool Sharechain::checkProofOfWork(const crypto::Hash256& hash, uint32_t bits) {
     crypto::Hash256 target = bitsToTarget(bits);
 
-    // Compare hash <= target (little-endian comparison)
-    for (int i = 31; i >= 0; i--) {
+    // Compare hash <= target (big-endian comparison, same as Keccak256::compare)
+    // byte[0] = MSB, byte[31] = LSB
+    for (size_t i = 0; i < hash.size(); i++) {
         if (hash[i] < target[i]) return true;
         if (hash[i] > target[i]) return false;
     }
@@ -731,23 +829,34 @@ bool Sharechain::checkProofOfWork(const crypto::Hash256& hash, uint32_t bits) {
 }
 
 crypto::Hash256 Sharechain::bitsToTarget(uint32_t bits) {
-    crypto::Hash256 target;
+    crypto::Hash256 target{};
     target.fill(0);
 
-    uint32_t exp = bits >> 24;
+    // Special case: bits=0 means maximum target (easiest difficulty)
+    if (bits == 0) {
+        std::memset(target.data(), 0xFF, 32);
+        return target;
+    }
+
+    uint32_t exponent = (bits >> 24) & 0xFF;
     uint32_t mantissa = bits & 0x00FFFFFF;
 
-    if (exp <= 3) {
-        mantissa >>= 8 * (3 - exp);
-        target[0] = mantissa & 0xFF;
-        target[1] = (mantissa >> 8) & 0xFF;
-        target[2] = (mantissa >> 16) & 0xFF;
+    // Big-endian storage: byte[0] = MSB, byte[31] = LSB
+    // Must match BlockHeader::bitsToTarget() for consistent comparison
+    if (exponent <= 3) {
+        mantissa >>= 8 * (3 - exponent);
+        target[31] = mantissa & 0xFF;
+        target[30] = (mantissa >> 8) & 0xFF;
+        target[29] = (mantissa >> 16) & 0xFF;
+    } else if (exponent >= 33) {
+        // Target overflows 256 bits - set to maximum (easiest difficulty)
+        std::memset(target.data(), 0xFF, 32);
     } else {
-        int start = exp - 3;
-        if (start < 32) {
-            target[start] = mantissa & 0xFF;
-            if (start + 1 < 32) target[start + 1] = (mantissa >> 8) & 0xFF;
-            if (start + 2 < 32) target[start + 2] = (mantissa >> 16) & 0xFF;
+        int offset = 32 - exponent;
+        if (offset >= 0 && offset < 32) {
+            target[offset] = (mantissa >> 16) & 0xFF;
+            if (offset + 1 < 32) target[offset + 1] = (mantissa >> 8) & 0xFF;
+            if (offset + 2 < 32) target[offset + 2] = mantissa & 0xFF;
         }
     }
 
@@ -755,32 +864,42 @@ crypto::Hash256 Sharechain::bitsToTarget(uint32_t bits) {
 }
 
 uint32_t Sharechain::targetToBits(const crypto::Hash256& target) {
-    // Find highest non-zero byte
-    int exp = 32;
-    for (int i = 31; i >= 0; i--) {
+    // Big-endian storage: byte[0] = MSB, byte[31] = LSB
+    // Find first non-zero byte (from MSB side)
+    int first_nonzero = 0;
+    for (int i = 0; i < 32; i++) {
         if (target[i] != 0) {
-            exp = i + 1;
+            first_nonzero = i;
             break;
         }
-    }
-
-    uint32_t mantissa = 0;
-    if (exp >= 3) {
-        mantissa = target[exp - 1] | (target[exp - 2] << 8) | (target[exp - 3] << 16);
-    } else {
-        mantissa = target[0];
-        for (int i = 1; i < exp; i++) {
-            mantissa |= target[i] << (i * 8);
+        if (i == 31) {
+            // All zeros - return minimum difficulty
+            return 0x01010000;
         }
     }
 
-    // Handle negative (first bit set)
+    // Exponent is position from LSB (byte 31)
+    int exp = 32 - first_nonzero;
+
+    uint32_t mantissa = 0;
+    if (first_nonzero + 2 < 32) {
+        mantissa = (target[first_nonzero] << 16) |
+                   (target[first_nonzero + 1] << 8) |
+                   target[first_nonzero + 2];
+    } else if (first_nonzero + 1 < 32) {
+        mantissa = (target[first_nonzero] << 16) |
+                   (target[first_nonzero + 1] << 8);
+    } else {
+        mantissa = target[first_nonzero] << 16;
+    }
+
+    // Handle negative (first bit set in mantissa)
     if (mantissa & 0x00800000) {
         mantissa >>= 8;
         exp++;
     }
 
-    return (exp << 24) | (mantissa & 0x00FFFFFF);
+    return (static_cast<uint32_t>(exp) << 24) | (mantissa & 0x00FFFFFF);
 }
 
 uint32_t Sharechain::getNextShareDifficulty() const {

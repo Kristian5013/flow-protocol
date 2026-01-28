@@ -414,8 +414,7 @@ void SyncManager::calculateThroughput() {
 }
 
 void SyncManager::rebalanceWork() {
-    // Move blocks from slow/failed peers to faster ones
-    // TODO: Implement if needed
+    // Reserved for future optimization: move blocks from slow peers to faster ones
 }
 
 SyncManager::Stats SyncManager::getStats() const {

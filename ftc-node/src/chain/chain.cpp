@@ -1029,33 +1029,36 @@ uint64_t Chain::getBlockReward(int32_t height) const {
 }
 
 uint32_t Chain::getNextWorkRequired(const BlockIndex* prev, const BlockHeader* header) const {
-    // LWMA adjusts difficulty every block
-    return getLwmaNextWork(prev);
-}
+    // Classic Bitcoin-style difficulty adjustment every 2016 blocks
 
-uint32_t Chain::getLwmaNextWork(const BlockIndex* prev) const {
-    const uint32_t N = params_.lwma_window;  // Window size (60 blocks)
-    const int64_t T = params_.block_time;    // Target time (600 seconds)
-
-    // Genesis or not enough blocks - use minimum difficulty
-    if (prev == nullptr || prev->height < static_cast<int32_t>(N)) {
-        return 0x1d00ffff;
+    // Genesis block or no previous
+    if (prev == nullptr || prev->height < 0) {
+        return 0x1d00ffff;  // Minimum difficulty
     }
 
-    // Get the block N blocks ago
-    const BlockIndex* first = prev->getAncestor(prev->height - N);
+    uint32_t next_height = static_cast<uint32_t>(prev->height + 1);
+
+    // Only adjust at interval boundaries (every 2016 blocks)
+    if (next_height % params_.difficulty_adjustment_interval != 0) {
+        return prev->bits != 0 ? prev->bits : 0x1d00ffff;
+    }
+
+    // Get first block of this difficulty period
+    int32_t first_height = prev->height - (params_.difficulty_adjustment_interval - 1);
+    const BlockIndex* first = prev->getAncestor(first_height);
     if (!first) {
         return prev->bits != 0 ? prev->bits : 0x1d00ffff;
     }
 
-    // Calculate actual timespan for last N blocks
+    // Calculate actual timespan for the 2016 blocks
     int64_t actual_timespan = static_cast<int64_t>(prev->timestamp) -
                               static_cast<int64_t>(first->timestamp);
 
-    // Expected timespan
-    int64_t target_timespan = N * T;
+    // Target timespan: 2016 blocks * 600 seconds = 2 weeks
+    int64_t target_timespan = static_cast<int64_t>(params_.difficulty_adjustment_interval) *
+                              static_cast<int64_t>(params_.block_time);
 
-    // Bitcoin-style limits: max 4x adjustment in either direction
+    // Limit adjustment to 4x in either direction (Bitcoin's rule)
     if (actual_timespan < target_timespan / 4) {
         actual_timespan = target_timespan / 4;
     }
@@ -1081,7 +1084,6 @@ uint32_t Chain::getLwmaNextWork(const BlockIndex* prev) const {
     // Clamp to maximum target (minimum difficulty)
     crypto::Hash256 max_target_hash = BlockHeader::bitsToTarget(0x1d00ffff);
     uint256_t max_target;
-    // Reverse bytes: big-endian Hash256 -> little-endian uint256_t
     for (int i = 0; i < 32; i++) {
         max_target[i] = max_target_hash[31 - i];
     }
@@ -1092,7 +1094,7 @@ uint32_t Chain::getLwmaNextWork(const BlockIndex* prev) const {
 
     // Clamp to minimum target (maximum difficulty) - prevent underflow
     uint256_t min_target{};
-    min_target[0] = 0x01;  // Very small target (little-endian: LSB first)
+    min_target[0] = 0x01;
     if (compare256(target, min_target) < 0) {
         target = min_target;
     }

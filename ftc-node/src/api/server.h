@@ -182,6 +182,9 @@ public:
         std::chrono::seconds timeout{30};
         bool enable_cors = true;  // Enable CORS for remote miners
 
+        // Dashboard settings
+        std::string web_root;      // Path to web dashboard files
+
         Config() = default;
     };
 
@@ -216,6 +219,13 @@ public:
     // Statistics
     uint64_t getRequestCount() const { return request_count_; }
     uint64_t getConnectionCount() const { return connections_.size(); }
+
+    // Config access
+    const Config& getConfig() const { return config_; }
+
+    // Static file serving
+    static std::string getMimeType(const std::string& path);
+    bool serveStaticFile(const std::string& path, HttpResponse& response);
 
 private:
     // Setup default routes

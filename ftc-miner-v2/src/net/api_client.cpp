@@ -278,11 +278,22 @@ std::optional<mining::Work> APIClient::getMiningTemplate(const std::string& addr
         work.height = std::stoul(response.substr(pos + 9));
     }
 
-    // Extract bits
+    // Extract bits (block difficulty)
     pos = response.find("\"bits\":");
     if (pos != std::string::npos) {
         work.bits = std::stoul(response.substr(pos + 7));
         work.target = mining::Keccak256::bitsToTarget(work.bits);
+    }
+
+    // Extract share_bits (P2Pool share difficulty - easier)
+    pos = response.find("\"share_bits\":");
+    if (pos != std::string::npos) {
+        work.share_bits = std::stoul(response.substr(pos + 13));
+        work.share_target = mining::Keccak256::bitsToTarget(work.share_bits);
+    } else {
+        // No P2Pool - use block difficulty for shares
+        work.share_bits = work.bits;
+        work.share_target = work.target;
     }
 
     // Extract prev_hash
@@ -345,7 +356,9 @@ std::optional<mining::Work> APIClient::getMiningTemplate(const std::string& addr
     return work;
 }
 
-bool APIClient::submitBlock(const mining::Solution& solution, const mining::Work& work) {
+SubmitResult APIClient::submitBlock(const mining::Solution& solution, const mining::Work& work) {
+    SubmitResult result;
+
     std::vector<uint8_t> block_data = work.buildBlock(solution.nonce, solution.timestamp_offset);
     std::string block_hex = bytesToHexString(block_data);
 
@@ -353,13 +366,21 @@ bool APIClient::submitBlock(const mining::Solution& solution, const mining::Work
     ss << "{\"hex\":\"" << block_hex << "\"}";
     std::string response = httpPost("/mining/submit", ss.str());
 
-    bool accepted = response.find("\"accepted\":true") != std::string::npos;
-    return accepted;
+    result.accepted = response.find("\"accepted\":true") != std::string::npos;
+    result.is_block = response.find("\"is_block\":true") != std::string::npos;
+
+    return result;
 }
 
 int64_t APIClient::getBlockHeight() {
     std::string response = httpGet("/status");
-    size_t pos = response.find("\"height\":");
+    // Try chain_height first (new format)
+    size_t pos = response.find("\"chain_height\":");
+    if (pos != std::string::npos) {
+        return std::stoll(response.substr(pos + 15));
+    }
+    // Fallback to height (old format)
+    pos = response.find("\"height\":");
     if (pos != std::string::npos) {
         return std::stoll(response.substr(pos + 9));
     }
@@ -377,42 +398,82 @@ uint32_t APIClient::getDifficulty() {
 
 APIClient::NetworkStats APIClient::getNetworkStats() {
     NetworkStats stats;
+    stats.height = -1;  // -1 means "not connected"
 
-    // Get peer count, height, and network hashrate from /status endpoint
+    // Get node count, height, and network hashrate from /status endpoint
     std::string status_response = httpGet("/status");
     if (!status_response.empty()) {
         // Look for "chain_height":N
-        size_t height_pos = status_response.find("\"chain_height\":");
-        if (height_pos != std::string::npos) {
-            stats.height = std::stoi(status_response.substr(height_pos + 15));
+        size_t pos = status_response.find("\"chain_height\":");
+        if (pos != std::string::npos) {
+            stats.height = std::stoi(status_response.substr(pos + 15));
+        } else {
+            stats.height = 0;
         }
 
-        // Look for "peer_count":N
-        size_t peers_pos = status_response.find("\"peer_count\":");
-        if (peers_pos != std::string::npos) {
-            stats.peer_count = std::stoul(status_response.substr(peers_pos + 13));
+        // Look for "peer_count":N (this is FTC nodes, not DHT)
+        pos = status_response.find("\"peer_count\":");
+        if (pos != std::string::npos) {
+            stats.node_count = std::stoul(status_response.substr(pos + 13));
         }
 
         // Look for "network_hashrate":N
-        size_t hashrate_pos = status_response.find("\"network_hashrate\":");
-        if (hashrate_pos != std::string::npos) {
-            stats.network_hashrate = std::stod(status_response.substr(hashrate_pos + 19));
+        pos = status_response.find("\"network_hashrate\":");
+        if (pos != std::string::npos) {
+            stats.network_hashrate = std::stod(status_response.substr(pos + 19));
         }
     }
 
-    // Get active miners from /p2pool/status endpoint
+    // Get full P2Pool statistics from /p2pool/status endpoint
     std::string p2pool_response = httpGet("/p2pool/status");
-    if (!p2pool_response.empty()) {
-        // Look for "active_miners":N
-        size_t miners_pos = p2pool_response.find("\"active_miners\":");
-        if (miners_pos != std::string::npos) {
-            stats.active_miners = std::stoul(p2pool_response.substr(miners_pos + 16));
+    if (!p2pool_response.empty() && p2pool_response.find("\"error\"") == std::string::npos) {
+        stats.p2pool_enabled = true;
+
+        // running
+        if (p2pool_response.find("\"running\":true") != std::string::npos) {
             stats.p2pool_running = true;
         }
 
-        // Also check "running":true
-        if (p2pool_response.find("\"running\":true") != std::string::npos) {
-            stats.p2pool_running = true;
+        // active_miners
+        size_t pos = p2pool_response.find("\"active_miners\":");
+        if (pos != std::string::npos) {
+            stats.active_miners = std::stoul(p2pool_response.substr(pos + 16));
+        }
+
+        // sharechain_height
+        pos = p2pool_response.find("\"sharechain_height\":");
+        if (pos != std::string::npos) {
+            stats.sharechain_height = std::stoull(p2pool_response.substr(pos + 20));
+        }
+
+        // pool_hashrate
+        pos = p2pool_response.find("\"pool_hashrate\":");
+        if (pos != std::string::npos) {
+            stats.pool_hashrate = std::stod(p2pool_response.substr(pos + 16));
+        }
+
+        // total_shares
+        pos = p2pool_response.find("\"total_shares\":");
+        if (pos != std::string::npos) {
+            stats.total_shares = std::stoull(p2pool_response.substr(pos + 15));
+        }
+
+        // total_blocks
+        pos = p2pool_response.find("\"total_blocks\":");
+        if (pos != std::string::npos) {
+            stats.total_blocks = std::stoull(p2pool_response.substr(pos + 15));
+        }
+
+        // shares_per_minute
+        pos = p2pool_response.find("\"shares_per_minute\":");
+        if (pos != std::string::npos) {
+            stats.shares_per_minute = std::stod(p2pool_response.substr(pos + 20));
+        }
+
+        // peer_count (P2Pool peers)
+        pos = p2pool_response.find("\"peer_count\":");
+        if (pos != std::string::npos) {
+            stats.p2pool_peers = std::stoul(p2pool_response.substr(pos + 13));
         }
     }
 

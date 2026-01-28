@@ -70,8 +70,15 @@ struct Share {
     // Other transactions in the block template
     std::vector<crypto::Hash256> tx_hashes;
 
-    // Computed fields
-    crypto::Hash256 hash() const { return header.hash(); }
+    // Block hash from miner (for PoW verification)
+    // This is set when share is created from a mined block
+    crypto::Hash256 block_hash;
+
+    // Computed fields - use block_hash for PoW if set, otherwise header hash
+    crypto::Hash256 hash() const {
+        static const crypto::Hash256 zero_hash{};
+        return (block_hash != zero_hash) ? block_hash : header.hash();
+    }
     uint64_t getDifficulty() const;
 
     // Serialization
@@ -238,6 +245,8 @@ private:
     bool loadFromDisk();
     bool saveShareIndex();
     bool saveShare(const Share& share);
+    bool loadStats();
+    bool saveStats();
     bool connectShare(const Share& share, ShareIndex* prev);
     void updateTip(ShareIndex* new_tip);
 

@@ -167,7 +167,7 @@ __kernel void mine_batch(
 
     if (compare_hash(hash, target)) {
         uint idx = atomic_inc(result_count);
-        if (idx < 16) {
+        if (idx < 256) {
             results[idx] = nonce;
         }
     }
@@ -378,7 +378,7 @@ bool GPUMiner::initDevice(int device_id) {
     // Create buffers for mine_batch kernel
     ctx.header_buf = clCreateBuffer(ctx.context, CL_MEM_READ_ONLY, 76, nullptr, &err);
     ctx.target_buf = clCreateBuffer(ctx.context, CL_MEM_READ_ONLY, 32, nullptr, &err);
-    ctx.result_buf = clCreateBuffer(ctx.context, CL_MEM_WRITE_ONLY, 16 * sizeof(uint64_t), nullptr, &err);
+    ctx.result_buf = clCreateBuffer(ctx.context, CL_MEM_WRITE_ONLY, 256 * sizeof(uint64_t), nullptr, &err);
     ctx.count_buf = clCreateBuffer(ctx.context, CL_MEM_READ_WRITE, sizeof(uint32_t), nullptr, &err);
 
     if (!ctx.header_buf || !ctx.target_buf || !ctx.result_buf || !ctx.count_buf) {
@@ -536,7 +536,7 @@ void GPUMiner::miningThread(int device_id) {
         if (work_manager_->isNewWork() || header.empty()) {
             current_work = work_manager_->getWork();
             header = current_work.buildHeader();
-            target = current_work.target;
+            target = current_work.share_target;  // Use share target for P2Pool mining
             job_id = current_work.job_id;
             height = current_work.height;
 
@@ -563,7 +563,7 @@ void GPUMiner::miningThread(int device_id) {
 
             // Rebuild header with new timestamp - also update target in case difficulty changed
             current_work = work_manager_->getWork();
-            target = current_work.target;
+            target = current_work.share_target;  // Use share target for P2Pool mining
             header = current_work.buildHeader();
 
             // Modify timestamp in header (bytes 68-71, little-endian)

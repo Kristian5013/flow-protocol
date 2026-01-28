@@ -7,6 +7,7 @@
 #include "api/handlers.h"
 #include "chain/block.h"
 #include "chain/transaction.h"
+#include "p2pool/sharechain.h"
 #include <sstream>
 #include <iomanip>
 #include <ctime>
@@ -52,24 +53,25 @@ void setupMiningRoutes(RouteContext& ctx) {
             block_bits = 0x1d00ffff;
         }
 
-        // Use P2Pool share difficulty (easier than block difficulty)
-        // This allows miners to find shares more frequently
+        // Block header MUST use block_bits for valid blocks
+        // Share difficulty is communicated separately for P2Pool
         uint32_t bits = block_bits;
+        uint32_t share_bits = block_bits;  // Default: same as block
+
         if (p2pool && p2pool->isRunning()) {
             auto* sharechain = p2pool->getSharechain();
             if (sharechain) {
-                uint32_t share_bits = sharechain->getNextShareDifficulty();
+                share_bits = sharechain->getNextShareDifficulty();
+            }
 
-                // If share difficulty is too easy (sharechain starting up),
-                // use 1/8 of block difficulty as minimum
-                if (share_bits < 10 || share_bits > block_bits) {
-                    // Multiply target by 8 = add 1 to exponent (easier difficulty)
-                    uint32_t exp = (block_bits >> 24) & 0xFF;
-                    uint32_t mantissa = block_bits & 0x00FFFFFF;
-                    share_bits = ((exp + 1) << 24) | mantissa;
-                }
-
-                bits = share_bits;
+            // Validate share_bits: must be valid (>= 10) and EASIER than block difficulty
+            // In bits format: higher value = easier difficulty (higher target)
+            // So share_bits should be > block_bits (strictly easier)
+            // If invalid or not easier, use default: 256x easier than block
+            if (share_bits < 10 || share_bits <= block_bits) {
+                uint32_t exp = (block_bits >> 24) & 0xFF;
+                uint32_t mantissa = block_bits & 0x00FFFFFF;
+                share_bits = ((exp + 1) << 24) | mantissa;  // 256x easier
             }
         }
 
@@ -121,23 +123,19 @@ void setupMiningRoutes(RouteContext& ctx) {
             }
         }
 
-        // Check if P2Pool payouts are enabled
-        bool use_p2pool_payouts = false;
+        // P2Pool is the only mining mode - PPLNS payouts always used
         std::map<std::vector<uint8_t>, uint64_t> payouts;
 
-        if (p2pool && p2pool->isRunning() && !payout_address.empty()) {
+        if (p2pool && p2pool->isRunning()) {
             try {
                 payouts = p2pool->getPayouts();
-                if (!payouts.empty()) {
-                    use_p2pool_payouts = true;
-                }
             } catch (const std::exception& e) {
-                use_p2pool_payouts = false;
                 payouts.clear();
             }
         }
 
-        if (use_p2pool_payouts) {
+        if (!payouts.empty()) {
+            // Distribute reward according to PPLNS shares
             for (const auto& [script, amount] : payouts) {
                 if (amount > 0) {
                     chain::TxOutput cb_output;
@@ -147,11 +145,13 @@ void setupMiningRoutes(RouteContext& ctx) {
                 }
             }
         } else {
+            // No shares yet - pay to miner's address (bootstrap phase)
             chain::TxOutput cb_output;
             cb_output.value = total_reward;
             if (!payout_address.empty()) {
                 cb_output.script_pubkey = chain::script::createP2PKHFromAddress(payout_address);
             } else {
+                // No address provided - use OP_RETURN (unspendable)
                 cb_output.script_pubkey = {0x6a, 0x07, 'F', 'T', 'C', 'P', 'O', 'O', 'L'};
             }
             coinbase.outputs.push_back(cb_output);
@@ -194,6 +194,7 @@ void setupMiningRoutes(RouteContext& ctx) {
             .key("timestamp").value(static_cast<int64_t>(timestamp))
             .key("bits").value(static_cast<uint64_t>(bits))
             .key("block_bits").value(static_cast<uint64_t>(block_bits))
+            .key("share_bits").value(static_cast<uint64_t>(share_bits))
             .key("coinbase").value(bytesToHex(coinbase_data))
             .key("coinbase_value").value(reward + tmpl.total_fee)
             .key("block_reward").value(reward)
@@ -205,6 +206,15 @@ void setupMiningRoutes(RouteContext& ctx) {
             json.value(bytesToHex(tx.serialize()));
         }
         json.endArray();
+
+        // Add P2Pool sharechain info for proper share construction
+        if (p2pool && p2pool->isRunning()) {
+            auto* sharechain = p2pool->getSharechain();
+            if (sharechain) {
+                json.key("sharechain_tip").value(hashToHex(sharechain->getTipHash()));
+                json.key("sharechain_height").value(static_cast<int64_t>(sharechain->getHeight()));
+            }
+        }
 
         json.endObject();
         res.success(json.build());
@@ -275,30 +285,78 @@ void setupMiningRoutes(RouteContext& ctx) {
         bool is_block = false;
 
         if (p2pool && p2pool->isRunning()) {
-            // Use the bits from block header - this is what we gave the miner in template
-            uint32_t share_bits = block.header.bits;
+            // Calculate share_bits the same way as in template route
+            uint32_t share_bits = block_bits;  // Default: same as block
+            auto* sharechain = p2pool->getSharechain();
+            if (sharechain) {
+                share_bits = sharechain->getNextShareDifficulty();
+            }
 
-            // Check if meets share difficulty (the difficulty given to miner)
-            if (meetsTarget(block_hash, share_bits)) {
-                // Register share with P2Pool
+            // Validate share_bits: must be valid (>= 10) and EASIER than block difficulty
+            // In bits format: higher value = easier difficulty (higher target)
+            if (share_bits < 10 || share_bits <= block_bits) {
+                uint32_t exp = (block_bits >> 24) & 0xFF;
+                uint32_t mantissa = block_bits & 0x00FFFFFF;
+                share_bits = ((exp + 1) << 24) | mantissa;  // 256x easier
+            }
+
+            // Check if meets share difficulty (easier target for P2Pool shares)
+            if (meetsTarget(block_hash, share_bits) && sharechain) {
+                // Create actual P2Pool Share object
+                p2pool::Share share;
+                share.header.version = 1;
+                share.header.prev_share = sharechain->getTipHash();
+                share.header.timestamp = block.header.timestamp;
+                share.header.bits = share_bits;
+                share.header.nonce = block.header.nonce;
+                share.header.block_prev_hash = block.header.prev_hash;
+                share.header.block_height = static_cast<uint32_t>(tip->height + 1);
+                share.header.block_bits = block_bits;
+
+                // Calculate share merkle root from payouts
+                share.header.merkle_root = block.header.merkle_root;
+
+                // Store block hash for PoW verification (already validated)
+                share.block_hash = block_hash;
+
+                // Add payout info from coinbase
                 if (!block.transactions.empty()) {
                     auto& coinbase = block.transactions[0];
+                    share.generation_tx = coinbase;
+
+                    for (const auto& output : coinbase.outputs) {
+                        if (!output.script_pubkey.empty()) {
+                            p2pool::Share::PayoutEntry payout;
+                            payout.script_pubkey = output.script_pubkey;
+                            payout.weight = 1;  // Equal weight per share
+                            share.payouts.push_back(payout);
+                        }
+                    }
+
+                    // Register miner activity
                     if (!coinbase.outputs.empty()) {
                         p2pool->registerMinerShare(coinbase.outputs[0].script_pubkey);
-                        share_accepted = true;
                     }
+                }
+
+                // Submit share to sharechain
+                std::string error;
+                if (sharechain->processShare(share, error)) {
+                    share_accepted = true;
+                } else {
+                    // Share rejected by sharechain (e.g., orphan, duplicate)
+                    // Still count it as activity but not as accepted
                 }
             }
 
-            // Check if also meets block difficulty
+            // Check if also meets block difficulty (harder target for actual blocks)
             if (meetsTarget(block_hash, block_bits)) {
                 is_block = true;
             }
         } else {
-            // No P2Pool - check block difficulty directly
-            if (meetsTarget(block_hash, block_bits)) {
-                is_block = true;
-            }
+            // P2Pool not running - reject mining attempts
+            res.error(HttpStatus::SERVICE_UNAVAILABLE, "P2Pool not running - mining requires P2Pool");
+            return;
         }
 
         if (is_block) {
@@ -377,8 +435,8 @@ void setupMiningRoutes(RouteContext& ctx) {
             .key("difficulty_bits").value(static_cast<uint64_t>(bits))
             .key("block_reward").value(chain->getBlockReward(height + 1))
             .key("block_time_target").value(static_cast<uint64_t>(params.block_time))
-            .key("difficulty_algorithm").value("LWMA")
-            .key("lwma_window").value(static_cast<uint64_t>(params.lwma_window))
+            .key("difficulty_algorithm").value("classic-2016")
+            .key("difficulty_adjustment_interval").value(static_cast<uint64_t>(params.difficulty_adjustment_interval))
             .endObject();
         res.success(json.build());
     });

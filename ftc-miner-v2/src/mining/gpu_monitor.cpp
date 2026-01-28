@@ -86,10 +86,8 @@ bool NVMLMonitor::init() {
 #endif
 
     if (!nvml_lib_) {
-        std::cerr << "[NVML] Failed to load nvml.dll from any location\n";
         return false;
     }
-    std::cerr << "[NVML] Library loaded successfully\n";
 
     // Load function pointers
     nvmlInit_v2_ = GET_PROC(nvml_lib_, "nvmlInit_v2");
@@ -106,7 +104,6 @@ bool NVMLMonitor::init() {
     nvmlDeviceGetCurrentClocksThrottleReasons_ = GET_PROC(nvml_lib_, "nvmlDeviceGetCurrentClocksThrottleReasons");
 
     if (!nvmlInit_v2_ || !nvmlDeviceGetCount_v2_ || !nvmlDeviceGetHandleByIndex_v2_) {
-        std::cerr << "[NVML] Failed to load required functions\n";
         FREE_LIB(nvml_lib_);
         nvml_lib_ = nullptr;
         return false;
@@ -115,17 +112,14 @@ bool NVMLMonitor::init() {
     // Initialize NVML
     nvmlReturn_t ret = ((nvmlInit_v2_t)nvmlInit_v2_)();
     if (ret != NVML_SUCCESS) {
-        std::cerr << "[NVML] nvmlInit_v2 failed with code: " << ret << "\n";
         FREE_LIB(nvml_lib_);
         nvml_lib_ = nullptr;
         return false;
     }
-    std::cerr << "[NVML] Initialized successfully\n";
 
     // Get device count
     unsigned int count = 0;
     if (((nvmlDeviceGetCount_v2_t)nvmlDeviceGetCount_v2_)(&count) != NVML_SUCCESS) {
-        std::cerr << "[NVML] Failed to get device count\n";
         ((nvmlShutdown_t)nvmlShutdown_)();
         FREE_LIB(nvml_lib_);
         nvml_lib_ = nullptr;
@@ -133,7 +127,6 @@ bool NVMLMonitor::init() {
     }
 
     device_count_ = static_cast<int>(count);
-    std::cerr << "[NVML] Found " << device_count_ << " NVIDIA device(s)\n";
 
     // Get device handles
     device_handles_.resize(device_count_);
@@ -338,8 +331,6 @@ GPUMonitorManager::~GPUMonitorManager() {
 }
 
 bool GPUMonitorManager::init() {
-    std::cerr << "[GPUMonitor] Initializing GPU monitoring...\n";
-
     // Initialize all available monitors
     nvml_ = std::make_unique<NVMLMonitor>();
     adl_ = std::make_unique<ADLMonitor>();
@@ -349,19 +340,13 @@ bool GPUMonitorManager::init() {
 
     if (nvml_->init()) {
         any_available = true;
-        std::cerr << "[GPUMonitor] NVML initialized with " << nvml_->getDeviceCount() << " device(s)\n";
-        // Add NVIDIA devices to map
         for (int i = 0; i < nvml_->getDeviceCount(); ++i) {
             device_map_.push_back({nvml_.get(), i});
         }
-    } else {
-        std::cerr << "[GPUMonitor] NVML initialization failed\n";
     }
 
     if (adl_->init()) {
         any_available = true;
-        std::cerr << "[GPUMonitor] ADL initialized with " << adl_->getDeviceCount() << " device(s)\n";
-        // Add AMD devices to map
         for (int i = 0; i < adl_->getDeviceCount(); ++i) {
             device_map_.push_back({adl_.get(), i});
         }
@@ -369,8 +354,6 @@ bool GPUMonitorManager::init() {
 
     if (intel_->init()) {
         any_available = true;
-        std::cerr << "[GPUMonitor] Intel initialized with " << intel_->getDeviceCount() << " device(s)\n";
-        // Add Intel devices to map
         for (int i = 0; i < intel_->getDeviceCount(); ++i) {
             device_map_.push_back({intel_.get(), i});
         }

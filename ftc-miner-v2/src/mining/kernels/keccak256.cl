@@ -189,7 +189,7 @@ __kernel void mine_batch(
 
     if (compare_hash(hash, target)) {
         uint idx = atomic_inc(result_count);
-        if (idx < 16) {
+        if (idx < 256) {
             results[idx] = nonce;
         }
     }

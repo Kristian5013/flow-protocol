@@ -62,6 +62,15 @@ public:
     // Get our node ID
     const NodeId& getNodeId() const { return node_id_; }
 
+    // Get info hash (network identifier)
+    const NodeId& getInfoHash() const { return info_hash_; }
+
+    // Is mainnet?
+    bool isMainnet() const { return mainnet_; }
+
+    // Get port
+    uint16_t getPort() const { return port_; }
+
     // Callback when FTC peer is found
     using PeerCallback = std::function<void(const std::string& ip, uint16_t port)>;
     void setOnPeerFound(PeerCallback cb) { peer_callback_ = cb; }
@@ -80,7 +89,7 @@ private:
 
     // DHT state
     NodeId node_id_;
-    NodeId info_hash_;  // SHA1("FTC-mainnet-v3") or "FTC-testnet-v3"
+    NodeId info_hash_;  // SHA1("FTC-mainnet-v4") or "FTC-testnet-v4"
     std::unique_ptr<RoutingTable> routing_table_;
     bool mainnet_;
 

@@ -40,6 +40,7 @@ struct MiningStats {
     double avg_hashrate_1m = 0.0;
     double avg_hashrate_5m = 0.0;
     double avg_hashrate_15m = 0.0;
+    double peak_hashrate = 0.0;
 
     // Shares
     uint64_t shares_accepted = 0;
@@ -50,16 +51,23 @@ struct MiningStats {
     uint64_t blocks_found = 0;
     uint64_t block_reward = 0;
 
-    // Network
-    std::string pool_url;
+    // Network (blockchain)
     double difficulty = 1.0;           // Calculated difficulty (not raw bits)
     int32_t block_height = 0;
     bool connected = false;
-    uint32_t peer_count = 0;
-    uint32_t active_miners = 0;
-    double latency_ms = 0.0;           // Latency to current node
-    bool is_local_node = false;        // True if connected to localhost
+    uint32_t node_count = 0;           // FTC nodes (not DHT peers)
     double network_hashrate = 0.0;     // Total network hashrate (H/s)
+
+    // P2Pool statistics
+    bool p2pool_enabled = false;       // P2Pool available
+    bool p2pool_running = false;       // P2Pool active
+    uint32_t active_miners = 0;        // Miners in P2Pool
+    uint64_t sharechain_height = 0;    // P2Pool sharechain height
+    double pool_hashrate = 0.0;        // P2Pool total hashrate
+    uint64_t pool_total_shares = 0;    // Total shares in pool
+    uint64_t pool_total_blocks = 0;    // Blocks found by pool
+    double shares_per_minute = 0.0;    // Pool share rate
+    uint32_t p2pool_peers = 0;         // P2Pool network peers
 
     // Time
     std::chrono::steady_clock::time_point start_time;
@@ -127,9 +135,6 @@ private:
 
     // Log max lines
     static constexpr int MAX_LOG_LINES = 100;
-
-    // ASCII art logo
-    static const std::vector<std::string> LOGO;
 };
 
 } // namespace tui

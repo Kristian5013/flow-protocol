@@ -170,7 +170,7 @@ bool TransactionSignatureChecker::checkSchnorrSig(const std::vector<uint8_t>& si
         return false;
     }
 
-    // TODO: Implement Taproot signature verification
+    // Taproot (BIP340 Schnorr) not implemented - v1.0 supports SegWit v0 only
     return false;
 }
 
@@ -710,7 +710,8 @@ bool verifySignature(const std::vector<uint8_t>& sig,
 bool verifySchnorrSignature(const std::vector<uint8_t>& sig,
                              const std::vector<uint8_t>& pubkey,
                              const std::vector<uint8_t>& hash) {
-    // TODO: Implement BIP340 Schnorr signature verification
+    // BIP340 Schnorr not implemented - v1.0 supports ECDSA only
+    (void)sig; (void)pubkey; (void)hash;
     return false;
 }
 
@@ -1974,10 +1975,12 @@ bool Interpreter::verifyWitnessProgram(const std::vector<uint8_t>& witness_progr
             return false;
         }
     } else if (witness_version == 1 && witness_program.size() == 32) {
-        // Taproot (v1)
-        // TODO: Implement Taproot verification
-        if (error) *error = ScriptError::UNKNOWN_ERROR;
-        return false;
+        // Taproot (v1) - not implemented in v1.0, treated as unknown version
+        if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS) {
+            if (error) *error = ScriptError::UNKNOWN_ERROR;
+            return false;
+        }
+        return true;  // Unknown witness versions succeed for forward compatibility
     } else {
         // Unknown witness version - succeed for forward compatibility
         if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS) {

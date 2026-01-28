@@ -92,8 +92,13 @@ set(DHT_SOURCES
     src/dht/routing_table.cpp
 )
 
-# Main executable
-add_executable(ftc-node
+# Windows resource file (icon)
+if(WIN32)
+    set(WIN_RESOURCES src/resources.rc)
+endif()
+
+# Main executable - WIN32 for no console window (daemon only)
+add_executable(ftc-node WIN32
     src/main.cpp
     src/node.cpp
     ${CRYPTO_SOURCES}
@@ -105,6 +110,7 @@ add_executable(ftc-node
     ${API_SOURCES}
     ${UTIL_SOURCES}
     ${DHT_SOURCES}
+    ${WIN_RESOURCES}
 )
 
 target_include_directories(ftc-node PRIVATE
@@ -149,5 +155,5 @@ install(TARGETS ftc-node RUNTIME DESTINATION bin)
 
 message(STATUS "FTC Node ${PROJECT_VERSION} - Kristian Pilatovich 20091227 - First Real P2P")
 message(STATUS "  IPv6: ON (IPv6-only, no IPv4)")
-message(STATUS "  Peers: peers.dat + P2P addr exchange")
+message(STATUS "  Peers: BitTorrent DHT (no peers.dat)")
 message(STATUS "  Tests: ${FTC_BUILD_TESTS}")
