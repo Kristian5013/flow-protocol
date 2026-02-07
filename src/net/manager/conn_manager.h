@@ -37,6 +37,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace net {
@@ -174,6 +175,14 @@ public:
     /// Number of inbound peers.
     size_t inbound_count() const;
 
+    // -- Self-connection prevention ------------------------------------------
+
+    /// Mark an address as our own (detected via nonce during VERSION exchange).
+    void mark_self_address(const std::string& addr);
+
+    /// Check if an address is known to be our own.
+    bool is_self_address(const std::string& addr) const;
+
     // -- Message sending -----------------------------------------------------
 
     /// Send a message to a specific peer.
@@ -196,6 +205,10 @@ private:
 
     // Monotonically increasing peer ID allocator.
     std::atomic<uint64_t> next_peer_id_{1};
+
+    // Addresses detected as our own via nonce self-connection check.
+    std::unordered_set<std::string> self_addresses_;
+    mutable std::mutex self_addr_mutex_;
 
     // Listen socket for accepting inbound connections.
     net::Socket listen_socket_;
