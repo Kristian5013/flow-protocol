@@ -797,6 +797,20 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
         send_getheaders(peer_id);
     }
 
+    // If ALL headers were rejected (e.g. parent unknown because we are
+    // behind), send GETHEADERS to sync up.  Without this, a node that
+    // misses a few blocks will keep receiving tip announcements it cannot
+    // connect and never catch up.
+    if (accepted == 0 && count > 0) {
+        LOG_INFO(core::LogCategory::NET,
+                 "All " + std::to_string(count) +
+                 " headers rejected from peer " +
+                 std::to_string(peer_id) +
+                 ", sending GETHEADERS to sync");
+        send_getheaders(peer_id);
+        return;
+    }
+
     // If we received fewer than a full batch, headers sync is up to date.
     // Try to activate the best chain and request block data.
     if (count < MAX_HEADERS) {
