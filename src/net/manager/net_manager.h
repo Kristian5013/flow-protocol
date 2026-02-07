@@ -160,6 +160,9 @@ private:
     /// logic (timeouts, pings, etc.).
     void event_loop(std::stop_token stoken);
 
+    /// Dispatch a single PeerEvent to the appropriate handler.
+    void dispatch_event(PeerEvent& event);
+
     // -- Connection bootstrapping --------------------------------------------
 
     /// Connect to the configured initial peers (-connect, -addnode).
