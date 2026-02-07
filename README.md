@@ -43,8 +43,8 @@ The entire codebase — core libraries, cryptography, networking, consensus, wal
 
 | Domain | Location | IP |
 |---|---|---|
-| seed.flowcoin.org | Seoul, South Korea | 3.35.208.160 |
-| seed.flowprotocol.net | Virginia, USA | 44.221.81.40 |
+| seed.flowcoin.org | Virginia, USA | 44.221.81.40 |
+| seed.flowprotocol.net | Seoul, South Korea | 3.35.208.160 |
 
 ## Building from Source
 
