@@ -1,0 +1,32 @@
+[Unit]
+Description=FTC Full Node Daemon
+Documentation=https://github.com/flowcoin/flow-protocol
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ftc
+Group=ftc
+
+ExecStart=/opt/ftc/ftcd -conf=/etc/ftc/ftc.conf -datadir=/var/lib/ftc
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=60
+TimeoutStopSec=120
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/ftc
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

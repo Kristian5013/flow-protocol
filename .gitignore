@@ -1,0 +1,36 @@
+# Build
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.a
+*.o
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sensitive
+wallet.keys
+*.pem
+*.key
+*.dat
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Deploy logs
+deploy/*.log
+*.log
+
+# MSYS2 / MinGW
+*.dll
+
+# Windows special device names
+nul
