@@ -100,7 +100,8 @@ enum class DisconnectReason : uint8_t {
 
 struct PeerConfig {
     /// Maximum time (seconds) allowed for VERSION/VERACK handshake.
-    static constexpr int HANDSHAKE_TIMEOUT = 10;
+    /// Set generously to tolerate busy event loops under high block rates.
+    static constexpr int HANDSHAKE_TIMEOUT = 30;
 
     /// Interval (seconds) between outgoing PING probes.
     static constexpr int PING_INTERVAL = 120;

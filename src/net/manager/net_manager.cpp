@@ -223,6 +223,38 @@ const AddrMan& NetManager::addr_manager() const {
 // Event loop -- the heart of the actor model
 // ===========================================================================
 
+void NetManager::dispatch_event(PeerEvent& event) {
+    switch (event.type) {
+    case PeerEventType::CONNECTED:
+        LOG_INFO(core::LogCategory::NET,
+                 "Event: peer " + std::to_string(event.peer_id) +
+                 " connected (" + event.remote_addr +
+                 (event.inbound ? ", inbound)" : ", outbound)"));
+        msg_processor_->on_peer_connected(
+            event.peer_id, event.inbound);
+        break;
+
+    case PeerEventType::DISCONNECTED:
+        LOG_INFO(core::LogCategory::NET,
+                 "Event: peer " + std::to_string(event.peer_id) +
+                 " disconnected (reason: " +
+                 std::string(disconnect_reason_name(
+                     event.disconnect_reason)) + ")");
+        msg_processor_->on_peer_disconnected(event.peer_id);
+        break;
+
+    case PeerEventType::MESSAGE:
+        msg_processor_->process_message(
+            event.peer_id, event.msg);
+        break;
+
+    case PeerEventType::MISBEHAVIOR:
+        msg_processor_->on_misbehavior(
+            event.peer_id, event.misbehavior_score);
+        break;
+    }
+}
+
 void NetManager::event_loop(std::stop_token stoken) {
     LOG_INFO(core::LogCategory::NET, "Event loop thread started");
 
@@ -245,42 +277,25 @@ void NetManager::event_loop(std::stop_token stoken) {
 
         int64_t now = core::get_time();
 
-        // Process the event if we got one.
+        // Process the event if we got one, then drain any remaining
+        // queued events.  This prevents handshake timeouts caused by
+        // VERSION/VERACK messages stuck behind a burst of header or
+        // block announcements.
         if (event_opt.has_value()) {
-            PeerEvent& event = event_opt.value();
+            dispatch_event(event_opt.value());
 
-            switch (event.type) {
-            case PeerEventType::CONNECTED:
-                LOG_INFO(core::LogCategory::NET,
-                         "Event: peer " + std::to_string(event.peer_id) +
-                         " connected (" + event.remote_addr +
-                         (event.inbound ? ", inbound)" : ", outbound)"));
-                msg_processor_->on_peer_connected(
-                    event.peer_id, event.inbound);
-                break;
-
-            case PeerEventType::DISCONNECTED:
-                LOG_INFO(core::LogCategory::NET,
-                         "Event: peer " + std::to_string(event.peer_id) +
-                         " disconnected (reason: " +
-                         std::string(disconnect_reason_name(
-                             event.disconnect_reason)) + ")");
-                msg_processor_->on_peer_disconnected(event.peer_id);
-                break;
-
-            case PeerEventType::MESSAGE:
-                msg_processor_->process_message(
-                    event.peer_id, event.msg);
-                break;
-
-            case PeerEventType::MISBEHAVIOR:
-                msg_processor_->on_misbehavior(
-                    event.peer_id, event.misbehavior_score);
-                break;
+            // Drain up to MAX_BATCH_SIZE additional events without
+            // blocking, to keep the queue from backing up.
+            static constexpr int MAX_BATCH_SIZE = 128;
+            for (int i = 0; i < MAX_BATCH_SIZE; ++i) {
+                auto next = event_channel_.try_receive();
+                if (!next.has_value()) break;
+                dispatch_event(next.value());
             }
         }
 
         // Periodic tick: run approximately once per second.
+        now = core::get_time();
         if ((now - last_tick) >= 1) {
             last_tick = now;
 
