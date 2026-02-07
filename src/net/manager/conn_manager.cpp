@@ -173,6 +173,12 @@ core::Result<uint64_t> ConnManager::connect_to(const std::string& host,
         }
     }
 
+    // Skip known self-addresses (detected via nonce during prior handshakes).
+    if (is_self_address(host)) {
+        return core::Error(core::ErrorCode::NETWORK_ERROR,
+                           "Skipping self-address " + host);
+    }
+
     // Validate the host string is not empty.
     if (host.empty()) {
         return core::Error(core::ErrorCode::VALIDATION_ERROR,
@@ -311,7 +317,9 @@ size_t ConnManager::outbound_count() const {
     std::lock_guard lock(peers_mutex_);
     size_t count = 0;
     for (const auto& [_, peer] : peers_) {
-        if (!peer->inbound) {
+        if (!peer->inbound &&
+            peer->state != PeerState::DISCONNECTING &&
+            peer->state != PeerState::DISCONNECTED) {
             ++count;
         }
     }
@@ -322,7 +330,9 @@ size_t ConnManager::inbound_count() const {
     std::lock_guard lock(peers_mutex_);
     size_t count = 0;
     for (const auto& [_, peer] : peers_) {
-        if (peer->inbound) {
+        if (peer->inbound &&
+            peer->state != PeerState::DISCONNECTING &&
+            peer->state != PeerState::DISCONNECTED) {
             ++count;
         }
     }
@@ -668,6 +678,22 @@ void ConnManager::remove_peer(uint64_t peer_id) {
 
 void ConnManager::push_event(PeerEvent event) {
     event_channel_.send(std::move(event));
+}
+
+// ===========================================================================
+// Self-connection prevention
+// ===========================================================================
+
+void ConnManager::mark_self_address(const std::string& addr) {
+    std::lock_guard lock(self_addr_mutex_);
+    self_addresses_.insert(addr);
+    LOG_INFO(core::LogCategory::NET,
+             "Marked " + addr + " as self-address");
+}
+
+bool ConnManager::is_self_address(const std::string& addr) const {
+    std::lock_guard lock(self_addr_mutex_);
+    return self_addresses_.count(addr) > 0;
 }
 
 // ===========================================================================

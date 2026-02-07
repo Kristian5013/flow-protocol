@@ -171,6 +171,9 @@ private:
     /// Open outbound connections until we reach the configured maximum.
     void open_outbound_connections();
 
+    /// Reconnect to -connect= peers that are no longer connected.
+    void reconnect_configured_peers();
+
     // -- Tick constants ------------------------------------------------------
     static constexpr int64_t TICK_INTERVAL_MS = 1000;       // 1 second
     static constexpr int64_t DNS_SEED_DELAY = 11;           // seconds after start

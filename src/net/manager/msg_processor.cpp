@@ -210,6 +210,23 @@ void MsgProcessor::on_tick(int64_t now) {
         Peer* peer = conn_manager_.get_peer(peer_id);
         if (!peer) continue;
 
+        // Force-remove peers stuck in DISCONNECTING state for too long.
+        // Normally the read loop detects socket closure and pushes a
+        // DISCONNECTED event, but if that stalls, the peer lingers forever.
+        if (peer->state == PeerState::DISCONNECTING ||
+            peer->state == PeerState::DISCONNECTED) {
+            int64_t elapsed = now - peer->stats.connected_time;
+            if (elapsed > PeerConfig::HANDSHAKE_TIMEOUT) {
+                LOG_WARN(core::LogCategory::NET,
+                         "Force-removing stale peer " +
+                         std::to_string(peer_id) +
+                         " in state " +
+                         std::string(peer_state_name(peer->state)));
+                conn_manager_.remove_peer(peer_id);
+            }
+            continue;
+        }
+
         // Handshake timeout: if we've been CONNECTED or VERSION_SENT for
         // too long without completing the handshake, disconnect.
         if (peer->state == PeerState::CONNECTED ||
@@ -333,7 +350,7 @@ void MsgProcessor::handle_version(uint64_t peer_id,
                  "Failed to parse VERSION from peer " +
                  std::to_string(peer_id) + ": " +
                  result.error().message());
-        misbehaving(peer_id, 1, "malformed VERSION");
+        conn_manager_.disconnect(peer_id, DisconnectReason::PROTOCOL_ERROR);
         return;
     }
 
@@ -359,9 +376,12 @@ void MsgProcessor::handle_version(uint64_t peer_id,
     // Check for self-connection: if the peer's nonce matches our own,
     // we are talking to ourselves.
     if (ver.nonce == local_nonce_ && local_nonce_ != 0) {
+        std::string remote = peer->conn.remote_address();
         LOG_WARN(core::LogCategory::NET,
                  "Self-connection detected (nonce match) from peer " +
-                 std::to_string(peer_id) + ", disconnecting");
+                 std::to_string(peer_id) + " (" + remote +
+                 "), disconnecting");
+        conn_manager_.mark_self_address(remote);
         conn_manager_.disconnect(peer_id, DisconnectReason::PROTOCOL_ERROR);
         return;
     }

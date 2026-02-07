@@ -486,8 +486,11 @@ void NetManager::dns_seed_lookup() {
 void NetManager::open_outbound_connections() {
     if (!conn_manager_) return;
 
-    // Don't open more outbound connections if we are in -connect mode.
-    if (!config_.connect_nodes.empty()) return;
+    // In -connect mode, reconnect to configured peers if disconnected.
+    if (!config_.connect_nodes.empty()) {
+        reconnect_configured_peers();
+        return;
+    }
 
     int max_outbound = config_.conn_config.max_outbound;
     int current_outbound = static_cast<int>(conn_manager_->outbound_count());
@@ -543,6 +546,48 @@ void NetManager::open_outbound_connections() {
                       result.error().message());
             // Mark the address as failed in the address manager.
             addrman_.mark_attempt(candidate, core::get_time());
+        }
+    }
+}
+
+void NetManager::reconnect_configured_peers() {
+    // Check each configured connect= peer and reconnect if not connected.
+    for (const auto& node : config_.connect_nodes) {
+        std::string host = node;
+        uint16_t port = ConnManager::DEFAULT_PORT;
+
+        size_t colon_pos = node.rfind(':');
+        if (colon_pos != std::string::npos) {
+            size_t first_colon = node.find(':');
+            if (first_colon == colon_pos) {
+                host = node.substr(0, colon_pos);
+                port = static_cast<uint16_t>(
+                    std::stoul(node.substr(colon_pos + 1)));
+            }
+        }
+
+        // Check if we're already connected to this peer.
+        bool already_connected = false;
+        auto peer_ids = conn_manager_->get_peer_ids();
+        for (uint64_t pid : peer_ids) {
+            auto* peer = conn_manager_->get_peer(pid);
+            if (peer && !peer->inbound &&
+                peer->conn.remote_address() == host &&
+                peer->conn.remote_port() == port &&
+                peer->state != PeerState::DISCONNECTING &&
+                peer->state != PeerState::DISCONNECTED) {
+                already_connected = true;
+                break;
+            }
+        }
+
+        if (!already_connected) {
+            auto result = conn_manager_->connect_to(host, port);
+            if (result.ok()) {
+                LOG_INFO(core::LogCategory::NET,
+                         "Reconnected to configured peer " + node +
+                         " (peer " + std::to_string(result.value()) + ")");
+            }
         }
     }
 }
