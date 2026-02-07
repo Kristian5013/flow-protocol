@@ -753,7 +753,6 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
               " headers from peer " + std::to_string(peer_id));
 
     int accepted = 0;
-    bool found_bad_header = false;
 
     for (uint64_t i = 0; i < count; ++i) {
         try {
@@ -775,22 +774,15 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
                           "Header rejected from peer " +
                           std::to_string(peer_id) + ": " +
                           accept_result.error().message());
-                // A single bad header in a batch is not necessarily
-                // malicious -- it may be a header we already have.
-                // Only penalize for clearly invalid headers.
-                if (accept_result.error().code() ==
-                    core::ErrorCode::VALIDATION_ERROR) {
-                    found_bad_header = true;
-                }
+                // Do NOT penalize for rejected headers.  During reorgs
+                // and competing chain tips, a peer may legitimately
+                // send headers whose parent we do not know yet.  This
+                // is normal P2P behaviour, not misbehaviour.
             }
         } catch (const std::exception& e) {
             misbehaving(peer_id, 10, "malformed header in HEADERS");
             return;
         }
-    }
-
-    if (found_bad_header) {
-        misbehaving(peer_id, 20, "invalid header in HEADERS");
     }
 
     LOG_INFO(core::LogCategory::NET,
