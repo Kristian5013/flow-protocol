@@ -99,6 +99,33 @@ void init() {
 } // namespace color
 
 // ---------------------------------------------------------------------------
+// Global RPC credentials and Base64 for HTTP Basic Auth
+// ---------------------------------------------------------------------------
+static std::string g_rpc_user;
+static std::string g_rpc_pass;
+
+static std::string base64_encode(const std::string& input) {
+    static const char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((input.size() + 2) / 3) * 4);
+    int val = 0, valb = -6;
+    for (unsigned char c : input) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(table[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6)
+        out.push_back(table[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4)
+        out.push_back('=');
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Global cancel flag for Ctrl+C
 // ---------------------------------------------------------------------------
 static std::atomic<bool> g_stop{false};
@@ -295,9 +322,16 @@ static std::string http_post(const std::string& host, uint16_t port,
     freeaddrinfo(result);
 
     // Build HTTP request
+    std::string auth_header;
+    if (!g_rpc_user.empty()) {
+        auth_header = "Authorization: Basic " +
+            base64_encode(g_rpc_user + ":" + g_rpc_pass) + "\r\n";
+    }
+
     std::string request =
         "POST / HTTP/1.1\r\n"
-        "Host: " + host + "\r\n"
+        "Host: " + host + "\r\n" +
+        auth_header +
         "Content-Type: application/json\r\n"
         "Content-Length: " + std::to_string(body.size()) + "\r\n"
         "Connection: close\r\n"
@@ -392,11 +426,13 @@ int main(int argc, char* argv[]) {
                   << "  --address=ADDR     Mining reward address (required)\n"
                   << "  --rpc-host=HOST    RPC server host (default: 127.0.0.1)\n"
                   << "  --rpc-port=PORT    RPC server port (default: 9332)\n"
+                  << "  --rpc-user=USER    RPC username (default: ftcuser)\n"
+                  << "  --rpc-pass=PASS    RPC password (default: ftcpass)\n"
                   << "  --threads=N        Mining threads (default: 1)\n"
                   << "  --no-color         Disable colored output\n"
                   << "  --help             Show this help\n\n"
                   << "Example:\n"
-                  << "  ftc-miner --address=1A73WPJ... --rpc-host=3.35.208.160 --threads=4\n";
+                  << "  ftc-miner --address=1A73WPJ... --rpc-host=seed.flowprotocol.net --threads=4\n";
         return 0;
     }
 
@@ -408,6 +444,8 @@ int main(int argc, char* argv[]) {
     std::string rpc_host = get_arg(argc, argv, "rpc-host", "127.0.0.1");
     uint16_t rpc_port    = static_cast<uint16_t>(
         std::atoi(get_arg(argc, argv, "rpc-port", "9332").c_str()));
+    g_rpc_user           = get_arg(argc, argv, "rpc-user", "ftcuser");
+    g_rpc_pass           = get_arg(argc, argv, "rpc-pass", "ftcpass");
     int num_threads      = std::atoi(get_arg(argc, argv, "threads", "1").c_str());
 
     if (address.empty()) {

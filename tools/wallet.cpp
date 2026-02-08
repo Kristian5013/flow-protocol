@@ -81,6 +81,34 @@ static constexpr int64_t MIN_FEE = 1000;           // 0.00001000 FTC
 static constexpr int64_t COIN = 100'000'000;        // 1 FTC in satoshis
 static constexpr int COINBASE_MATURITY = 100;
 
+// Global RPC credentials (set from command-line args).
+static std::string g_rpc_user;
+static std::string g_rpc_pass;
+
+// ---------------------------------------------------------------------------
+// Base64 encoding for HTTP Basic Auth
+// ---------------------------------------------------------------------------
+static std::string base64_encode(const std::string& input) {
+    static const char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((input.size() + 2) / 3) * 4);
+    int val = 0, valb = -6;
+    for (unsigned char c : input) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(table[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6)
+        out.push_back(table[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4)
+        out.push_back('=');
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Wallet key entry
 // ---------------------------------------------------------------------------
@@ -133,9 +161,16 @@ static std::string http_post(const std::string& host, uint16_t port,
     }
     freeaddrinfo(result);
 
+    std::string auth_header;
+    if (!g_rpc_user.empty()) {
+        auth_header = "Authorization: Basic " +
+            base64_encode(g_rpc_user + ":" + g_rpc_pass) + "\r\n";
+    }
+
     std::string request =
         "POST / HTTP/1.1\r\n"
-        "Host: " + host + "\r\n"
+        "Host: " + host + "\r\n" +
+        auth_header +
         "Content-Type: application/json\r\n"
         "Content-Length: " + std::to_string(body.size()) + "\r\n"
         "Connection: close\r\n"
@@ -722,17 +757,21 @@ int main(int argc, char* argv[]) {
                   << "Options:\n"
                   << "  --rpc-host=HOST     Node RPC host (default: 127.0.0.1)\n"
                   << "  --rpc-port=PORT     Node RPC port (default: 9332)\n"
+                  << "  --rpc-user=USER     RPC username (default: ftcuser)\n"
+                  << "  --rpc-pass=PASS     RPC password (default: ftcpass)\n"
                   << "  --wallet=FILE       Wallet file (default: wallet.keys)\n\n"
                   << "Examples:\n"
                   << "  ftc-wallet newaddress\n"
-                  << "  ftc-wallet --rpc-host=3.35.208.160 balance\n"
-                  << "  ftc-wallet --rpc-host=3.35.208.160 send 1A73... 0.001\n";
+                  << "  ftc-wallet --rpc-host=seed.flowprotocol.net balance\n"
+                  << "  ftc-wallet --rpc-host=seed.flowprotocol.net send 1A73... 0.001\n";
         return 0;
     }
 
     std::string rpc_host    = get_arg(argc, argv, "rpc-host", "127.0.0.1");
     uint16_t rpc_port       = static_cast<uint16_t>(
         std::atoi(get_arg(argc, argv, "rpc-port", "9332").c_str()));
+    g_rpc_user              = get_arg(argc, argv, "rpc-user", "ftcuser");
+    g_rpc_pass              = get_arg(argc, argv, "rpc-pass", "ftcpass");
     std::string wallet_file = get_arg(argc, argv, "wallet", "wallet.keys");
 
     std::string command = get_command(argc, argv);
