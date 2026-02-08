@@ -449,7 +449,7 @@ static std::vector<Utxo> fetch_utxos(
     descriptors += "]";
 
     std::string resp = rpc_call(host, port, "scantxoutset",
-                                "[\"start\"," + descriptors + "]");
+                                "[\"start\"," + descriptors + ",true]");
     if (resp.empty()) {
         std::cerr << "Error: cannot connect to node at "
                   << host << ":" << port << std::endl;
