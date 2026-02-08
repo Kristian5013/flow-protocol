@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <circle cx="256" cy="256" r="256" fill="#F7931A"/>
+  <g transform="rotate(14, 256, 256)" fill="#FFF">
+    <!-- F body: vertical bar + top bar + middle crossbar -->
+    <path d="M 215,124 H 354 Q 364,124 364,134 V 162 Q 364,172 354,172 H 253 V 238 H 320 Q 330,238 330,248 V 274 Q 330,284 320,284 H 253 V 376 Q 253,386 243,386 H 215 Q 205,386 205,376 V 134 Q 205,124 215,124 Z"/>
+    <!-- Accent strokes above (Bitcoin ₿-style) -->
+    <rect x="208" y="78" width="14" height="56" rx="7"/>
+    <rect x="236" y="78" width="14" height="56" rx="7"/>
+    <!-- Accent strokes below -->
+    <rect x="208" y="376" width="14" height="56" rx="7"/>
+    <rect x="236" y="376" width="14" height="56" rx="7"/>
+  </g>
+</svg>
