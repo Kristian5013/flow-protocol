@@ -24,10 +24,12 @@
 #include "primitives/address.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -81,9 +83,25 @@ double estimate_network_hashps(const chain::Chain& chain,
     return total_work / static_cast<double>(time_diff);
 }
 
-// Cached block template for getwork/submitwork external mining flow.
+// Cached block templates for getwork/submitwork external mining flow.
+// Keyed by work_id so multiple miners can work concurrently without
+// overwriting each other's templates.
 std::mutex g_work_mutex;
-std::optional<miner::BlockTemplate> g_cached_work;
+std::atomic<int64_t> g_next_work_id{1};
+std::unordered_map<int64_t, miner::BlockTemplate> g_cached_work;
+static constexpr size_t MAX_CACHED_TEMPLATES = 64;
+
+// Evict oldest templates when the cache is full.
+void evict_stale_work() {
+    while (g_cached_work.size() > MAX_CACHED_TEMPLATES) {
+        // Find the lowest work_id (oldest)
+        int64_t oldest = g_cached_work.begin()->first;
+        for (auto& [id, _] : g_cached_work) {
+            if (id < oldest) oldest = id;
+        }
+        g_cached_work.erase(oldest);
+    }
+}
 
 } // anonymous namespace
 
@@ -429,19 +447,23 @@ RpcResponse rpc_getwork(const RpcRequest& req,
 
     int height = tmpl.height;
 
-    // Cache the template for submitwork
+    // Assign a unique work_id and cache the template for submitwork
+    int64_t work_id = g_next_work_id.fetch_add(1);
     {
         std::lock_guard<std::mutex> lock(g_work_mutex);
-        g_cached_work = std::move(tmpl);
+        evict_stale_work();
+        g_cached_work[work_id] = std::move(tmpl);
     }
 
     JsonValue result(JsonValue::Object{});
     result["header"] = JsonValue(header_hex);
     result["target"] = JsonValue(target_hex);
     result["height"] = JsonValue(static_cast<int64_t>(height));
+    result["work_id"] = JsonValue(work_id);
 
     LOG_INFO(core::LogCategory::RPC,
-             "getwork: height=" + std::to_string(height));
+             "getwork: height=" + std::to_string(height) +
+             " work_id=" + std::to_string(work_id));
 
     return make_result(std::move(result), req.id);
 }
@@ -455,17 +477,38 @@ RpcResponse rpc_submitwork(const RpcRequest& req,
                             mempool::Mempool& mempool,
                             net::NetManager* net_manager) {
     int64_t nonce = param_int(req.params, 0, 0);
+    int64_t work_id = param_int(req.params, 1, 0);
 
     std::unique_lock<std::mutex> lock(g_work_mutex);
 
-    if (!g_cached_work) {
+    if (g_cached_work.empty()) {
         return make_error(RpcError::MISC_ERROR,
                           "No work available. Call getwork first.", req.id);
     }
 
-    // Move the template out of cache
-    auto tmpl = std::move(*g_cached_work);
-    g_cached_work.reset();
+    // Look up the template by work_id, or use the most recent one if
+    // work_id is 0 (backward compatibility with older miners).
+    miner::BlockTemplate tmpl;
+    if (work_id > 0) {
+        auto it = g_cached_work.find(work_id);
+        if (it == g_cached_work.end()) {
+            lock.unlock();
+            return make_error(RpcError::MISC_ERROR,
+                              "Work ID " + std::to_string(work_id) +
+                              " not found (stale or already submitted). "
+                              "Call getwork again.", req.id);
+        }
+        tmpl = std::move(it->second);
+        g_cached_work.erase(it);
+    } else {
+        // Backward compat: use the highest (most recent) work_id
+        auto it = g_cached_work.begin();
+        for (auto jt = g_cached_work.begin(); jt != g_cached_work.end(); ++jt) {
+            if (jt->first > it->first) it = jt;
+        }
+        tmpl = std::move(it->second);
+        g_cached_work.erase(it);
+    }
     lock.unlock();
 
     tmpl.header.nonce = static_cast<uint32_t>(nonce);
@@ -571,9 +614,10 @@ void register_mining_rpcs(RpcServer& server,
              net::NetManager* nm = net_manager_ptr ? *net_manager_ptr : nullptr;
              return rpc_submitwork(r, chainstate, mempool, nm);
          },
-         "submitwork nonce\n"
+         "submitwork nonce [work_id]\n"
          "Submit a solved nonce from an external miner.\n"
-         "Call getwork first to obtain the work.",
+         "Call getwork first to obtain the work.\n"
+         "work_id is returned by getwork and identifies the template.",
          "mining"},
     });
 }
