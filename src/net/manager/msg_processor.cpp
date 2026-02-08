@@ -1460,7 +1460,18 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 
     // If best_header IS on the active chain and we already have all data,
     // there is nothing to download.
-    if (active_chain.tip() == best_header) return;
+    if (active_chain.tip() == best_header) {
+        LOG_DEBUG(core::LogCategory::NET,
+                  "request_blocks: tip == best_header at h=" +
+                  std::to_string(best_header->height) + ", nothing to do");
+        return;
+    }
+
+    LOG_INFO(core::LogCategory::NET,
+             "request_blocks: best_header h=" +
+             std::to_string(best_header->height) +
+             " tip h=" + std::to_string(active_chain.height()) +
+             " caller=" + std::to_string(peer_id));
 
     // Find where best_header's chain diverges from our active chain.
     // For the common case (same chain) fork == tip, so start_height ==
@@ -1562,10 +1573,10 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
                  " from peer " + std::to_string(best_peer) +
                  (downloading_fork ? " (fork download)" : ""));
     } else {
-        LOG_DEBUG(core::LogCategory::NET,
-                  "request_blocks: nothing to request"
-                  " (in_flight=" +
-                  std::to_string(blocks_in_flight_.size()) + ")");
+        LOG_INFO(core::LogCategory::NET,
+                 "request_blocks: nothing to request"
+                 " (in_flight=" +
+                 std::to_string(blocks_in_flight_.size()) + ")");
     }
 }
 
