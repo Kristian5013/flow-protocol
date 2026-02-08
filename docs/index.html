@@ -347,32 +347,9 @@ curl -u ftcuser:ftcpass \
 </footer>
 
 <script>
-// RPC proxy endpoints - these are called via CORS-enabled proxy or directly
-// Since browsers can't call RPC with auth directly, we use a lightweight approach:
-// The stats are fetched via a small proxy that the seed nodes expose on a public endpoint.
-// For now, we'll use direct RPC calls with Basic auth (works if CORS is enabled).
+const API_URL = 'https://api.flowprotocol.net/stats';
 
-const NODES = [
-  { name: 'seoul', host: '3.35.208.160', rpcPort: 9332 },
-  { name: 'virginia', host: '44.221.81.40', rpcPort: 9332 }
-];
-const RPC_USER = 'ftcuser';
-const RPC_PASS = 'ftcpass';
-
-async function rpcCall(host, port, method, params = []) {
-  const url = `http://${host}:${port}/`;
-  const body = JSON.stringify({ jsonrpc: '1.0', id: 1, method, params });
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': 'Basic ' + btoa(`${RPC_USER}:${RPC_PASS}`)
-  };
-  const resp = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(8000) });
-  const data = await resp.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.result;
-}
-
-function formatNumber(n) {
+function formatHashrate(n) {
   if (n >= 1e12) return (n / 1e12).toFixed(2) + ' TH/s';
   if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GH/s';
   if (n >= 1e6) return (n / 1e6).toFixed(2) + ' MH/s';
@@ -385,84 +362,83 @@ function shortHash(h) {
   return h.substring(0, 12) + '...';
 }
 
-async function updateNodeCard(node) {
+function updateNodeCard(node) {
   const statusEl = document.getElementById(`${node.name}-status`);
   const heightEl = document.getElementById(`${node.name}-height`);
   const hashEl = document.getElementById(`${node.name}-hash`);
   const peersEl = document.getElementById(`${node.name}-peers`);
 
-  try {
-    const [info, peers] = await Promise.all([
-      rpcCall(node.host, node.rpcPort, 'getblockchaininfo'),
-      rpcCall(node.host, node.rpcPort, 'getpeerinfo')
-    ]);
+  if (node.online) {
     statusEl.textContent = 'Online';
     statusEl.className = 'node-status online';
-    heightEl.textContent = info.blocks.toLocaleString();
-    hashEl.textContent = shortHash(info.bestblockhash);
-    peersEl.textContent = peers.length;
-    return { info, peerCount: peers.length };
-  } catch (e) {
+    heightEl.textContent = node.info.blocks.toLocaleString();
+    hashEl.textContent = shortHash(node.info.bestblockhash);
+    peersEl.textContent = node.peers;
+  } else {
     statusEl.textContent = 'Offline';
     statusEl.className = 'node-status offline';
     heightEl.textContent = '-';
     hashEl.textContent = '-';
     peersEl.textContent = '-';
-    return null;
   }
 }
 
 async function updateStats() {
-  const results = await Promise.all(NODES.map(n => updateNodeCard(n)));
-  const live = results.filter(r => r !== null);
-
   const dot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
 
-  if (live.length === 0) {
+  try {
+    const resp = await fetch(API_URL, { signal: AbortSignal.timeout(12000) });
+    const data = await resp.json();
+    const nodes = data.nodes || [];
+
+    nodes.forEach(updateNodeCard);
+
+    const live = nodes.filter(n => n.online);
+
+    if (live.length === 0) {
+      dot.className = 'dot err';
+      statusText.textContent = 'Unable to connect to network';
+      return;
+    }
+
+    dot.className = 'dot ok';
+    const synced = live.length >= 2 &&
+      live[0].info.bestblockhash === live[1].info.bestblockhash;
+    statusText.textContent = synced
+      ? `${live.length} nodes online, in sync`
+      : `${live.length} node(s) online`;
+
+    const best = live.reduce((a, b) =>
+      (a.info.blocks > b.info.blocks ? a : b));
+    const info = best.info;
+
+    document.getElementById('s-height').textContent = info.blocks.toLocaleString();
+    document.getElementById('s-height').classList.remove('loading');
+
+    document.getElementById('s-difficulty').textContent = info.difficulty.toFixed(6);
+    document.getElementById('s-difficulty').classList.remove('loading');
+
+    const hashrate = (info.difficulty * 8192) / 600;
+    document.getElementById('s-hashrate').textContent = formatHashrate(hashrate);
+    document.getElementById('s-hashrate').classList.remove('loading');
+
+    const supply = Math.min(info.blocks * 50, 21000000);
+    document.getElementById('s-supply').textContent = supply.toLocaleString() + ' FTC';
+    document.getElementById('s-supply').classList.remove('loading');
+
+    document.getElementById('s-blocktime').textContent = '~10 min';
+    document.getElementById('s-blocktime').classList.remove('loading');
+
+    const totalPeers = live.reduce((sum, r) => sum + r.peers, 0);
+    document.getElementById('s-peers').textContent = totalPeers;
+    document.getElementById('s-peers').classList.remove('loading');
+  } catch (e) {
     dot.className = 'dot err';
     statusText.textContent = 'Unable to connect to network';
-    return;
   }
-
-  dot.className = 'dot ok';
-  const synced = live.length >= 2 && live[0].info.bestblockhash === live[1].info.bestblockhash;
-  statusText.textContent = synced
-    ? `${live.length} nodes online, in sync`
-    : `${live.length} node(s) online`;
-
-  // Use the best (highest) node for stats
-  const best = live.reduce((a, b) => (a.info.blocks > b.info.blocks ? a : b));
-  const info = best.info;
-
-  document.getElementById('s-height').textContent = info.blocks.toLocaleString();
-  document.getElementById('s-height').classList.remove('loading');
-
-  document.getElementById('s-difficulty').textContent = info.difficulty.toFixed(6);
-  document.getElementById('s-difficulty').classList.remove('loading');
-
-  // Estimate hashrate from difficulty: hashrate = difficulty * 2^13 / 600
-  // For Equihash (200,9): target_time = 600s
-  const hashrate = (info.difficulty * 8192) / 600;
-  document.getElementById('s-hashrate').textContent = formatNumber(hashrate);
-  document.getElementById('s-hashrate').classList.remove('loading');
-
-  // Supply = 50 * blocks (before first halving at 210,000)
-  const supply = Math.min(info.blocks * 50, 21000000);
-  document.getElementById('s-supply').textContent = supply.toLocaleString() + ' FTC';
-  document.getElementById('s-supply').classList.remove('loading');
-
-  // Avg block time from median time
-  document.getElementById('s-blocktime').textContent = '~10 min';
-  document.getElementById('s-blocktime').classList.remove('loading');
-
-  // Total peers
-  const totalPeers = live.reduce((sum, r) => sum + r.peerCount, 0);
-  document.getElementById('s-peers').textContent = totalPeers;
-  document.getElementById('s-peers').classList.remove('loading');
 }
 
-// Initial load + refresh every 30s
 updateStats();
 setInterval(updateStats, 30000);
 </script>
