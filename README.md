@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Flow Protocol" width="200" />
+  <img src="logo.svg" alt="Flow Protocol" width="200" />
 </p>
 
 <h1 align="center">Flow Protocol (FTC)</h1>
