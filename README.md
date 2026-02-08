@@ -13,6 +13,7 @@
   <a href="https://flowcoin.org">flowcoin.org</a> &bull;
   <a href="https://flowprotocol.net">flowprotocol.net</a> &bull;
   <a href="https://t.me/flow_protocol_main">Telegram</a> &bull;
+  <a href="https://discord.gg/vTWHwxrYdB">Discord</a> &bull;
   <a href="https://github.com/Kristian5013/flow-protocol">GitHub</a>
 </p>
 
@@ -957,4 +958,5 @@ Distributed under the MIT software license. See [COPYING](COPYING) for more info
 - Website: [flowcoin.org](https://flowcoin.org)
 - Website: [flowprotocol.net](https://flowprotocol.net)
 - Telegram: [t.me/flow_protocol_main](https://t.me/flow_protocol_main)
+- Discord: [discord.gg/vTWHwxrYdB](https://discord.gg/vTWHwxrYdB)
 - GitHub: [github.com/Kristian5013/flow-protocol](https://github.com/Kristian5013/flow-protocol)
