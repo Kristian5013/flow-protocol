@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <utility>
 
 namespace net {
@@ -483,63 +484,90 @@ void ConnManager::listen_loop(std::stop_token stoken) {
 }
 
 void ConnManager::handle_accept(net::Socket socket) {
-    // Check inbound slot availability.
-    if (static_cast<int>(inbound_count()) >= config_.max_inbound) {
-        LOG_WARN(core::LogCategory::NET,
-                 "Rejecting inbound connection: max inbound reached (" +
-                 std::to_string(config_.max_inbound) + ")");
-        socket.close();
-        return;
-    }
-
-    // Check total connection limit.
-    if (static_cast<int>(peer_count()) >= DEFAULT_MAX_TOTAL) {
-        LOG_WARN(core::LogCategory::NET,
-                 "Rejecting inbound connection: max total reached (" +
-                 std::to_string(DEFAULT_MAX_TOTAL) + ")");
-        socket.close();
-        return;
-    }
-
     std::string remote_addr = socket.remote_address();
     uint16_t remote_port = socket.remote_port();
     std::string remote = remote_addr + ":" + std::to_string(remote_port);
 
-    // IP whitelist: if configured, only allow connections from seed nodes.
-    if (!config_.allowed_ips.empty() &&
-        config_.allowed_ips.find(remote_addr) == config_.allowed_ips.end()) {
-        LOG_DEBUG(core::LogCategory::NET,
-                  "Rejecting inbound connection from " + remote +
-                  ": IP not in allowed list");
+    // 1) Rate limiting: max N new inbound connections per minute.
+    {
+        std::lock_guard lock(rate_mutex_);
+        int64_t now = core::get_time();
+        // Prune timestamps older than the window.
+        std::erase_if(inbound_timestamps_, [&](int64_t ts) {
+            return (now - ts) > RATE_LIMIT_WINDOW;
+        });
+        if (static_cast<int>(inbound_timestamps_.size()) >=
+            MAX_INBOUND_PER_MINUTE) {
+            LOG_DEBUG(core::LogCategory::NET,
+                      "Rejecting inbound from " + remote +
+                      ": rate limit exceeded (" +
+                      std::to_string(MAX_INBOUND_PER_MINUTE) + "/min)");
+            socket.close();
+            return;
+        }
+        inbound_timestamps_.push_back(now);
+    }
+
+    // 2) Per-IP limit: max 1 inbound connection per IP (like Bitcoin Core).
+    {
+        std::lock_guard lock(peers_mutex_);
+        for (const auto& [_, peer] : peers_) {
+            if (peer->inbound &&
+                peer->conn.remote_address() == remote_addr) {
+                LOG_DEBUG(core::LogCategory::NET,
+                          "Rejecting inbound from " + remote +
+                          ": already connected from this IP");
+                socket.close();
+                return;
+            }
+        }
+    }
+
+    // 3) Check inbound slot availability.  If full, try to evict the
+    //    worst inbound peer (highest banscore, then oldest with least
+    //    bytes transferred) to make room — like Bitcoin Core eviction.
+    if (static_cast<int>(inbound_count()) >= config_.max_inbound) {
+        uint64_t evict_id = 0;
+        {
+            std::lock_guard lock(peers_mutex_);
+            int worst_score = -1;
+            int64_t worst_bytes = std::numeric_limits<int64_t>::max();
+            for (const auto& [id, peer] : peers_) {
+                if (!peer->inbound) continue;
+                int score = peer->stats.misbehavior_score;
+                int64_t bytes = peer->stats.bytes_recv + peer->stats.bytes_sent;
+                if (score > worst_score ||
+                    (score == worst_score && bytes < worst_bytes)) {
+                    worst_score = score;
+                    worst_bytes = bytes;
+                    evict_id = id;
+                }
+            }
+        }
+        if (evict_id != 0) {
+            LOG_INFO(core::LogCategory::NET,
+                     "Evicting inbound peer " + std::to_string(evict_id) +
+                     " to make room for " + remote);
+            disconnect(evict_id, DisconnectReason::TOO_MANY_CONNECTIONS);
+        } else {
+            LOG_WARN(core::LogCategory::NET,
+                     "Rejecting inbound from " + remote +
+                     ": max inbound reached, no eviction candidate");
+            socket.close();
+            return;
+        }
+    }
+
+    // 4) Check total connection limit.
+    if (static_cast<int>(peer_count()) >= DEFAULT_MAX_TOTAL) {
+        LOG_WARN(core::LogCategory::NET,
+                 "Rejecting inbound from " + remote + ": max total reached");
         socket.close();
         return;
     }
 
     LOG_INFO(core::LogCategory::NET,
              "Accepted inbound connection from " + remote);
-
-    // Check for duplicate inbound connections from the same IP address.
-    // Allow at most 3 inbound connections from the same IP to limit
-    // resource consumption by a single host.
-    {
-        std::lock_guard lock(peers_mutex_);
-        int same_ip_count = 0;
-        static constexpr int MAX_INBOUND_PER_IP = 3;
-        for (const auto& [_, peer] : peers_) {
-            if (peer->inbound &&
-                peer->conn.remote_address() == remote_addr) {
-                ++same_ip_count;
-            }
-        }
-        if (same_ip_count >= MAX_INBOUND_PER_IP) {
-            LOG_WARN(core::LogCategory::NET,
-                     "Rejecting inbound connection from " + remote +
-                     ": too many connections from this IP (" +
-                     std::to_string(same_ip_count) + ")");
-            socket.close();
-            return;
-        }
-    }
 
     // Set socket options.
     socket.set_nodelay(true);

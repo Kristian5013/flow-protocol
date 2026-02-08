@@ -121,10 +121,6 @@ public:
         int max_outbound = DEFAULT_MAX_OUTBOUND;
         int max_inbound = DEFAULT_MAX_INBOUND;
         bool listen = true;
-
-        // IP whitelist: if non-empty, only accept inbound connections from
-        // these IP addresses.  Populated from hardcoded seed nodes.
-        std::unordered_set<std::string> allowed_ips;
     };
 
     explicit ConnManager(Config config,
@@ -213,6 +209,12 @@ private:
     // Addresses detected as our own via nonce self-connection check.
     std::unordered_set<std::string> self_addresses_;
     mutable std::mutex self_addr_mutex_;
+
+    // Inbound connection rate limiting: max 5 new connections per 60 seconds.
+    static constexpr int MAX_INBOUND_PER_MINUTE = 5;
+    static constexpr int RATE_LIMIT_WINDOW = 60;  // seconds
+    std::vector<int64_t> inbound_timestamps_;
+    std::mutex rate_mutex_;
 
     // Listen socket for accepting inbound connections.
     net::Socket listen_socket_;
