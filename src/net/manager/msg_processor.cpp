@@ -936,8 +936,15 @@ void MsgProcessor::handle_block(uint64_t peer_id,
         relay_block(block_hash);
     }
 
-    // Request more blocks if we have pending headers.
-    if (!blocks_in_flight_.empty() || sync_peer_id_ == peer_id) {
+    // Request more blocks if we have pending headers or if
+    // best_header is ahead of our active tip (fork to download).
+    auto* best_hdr = chainstate_.best_header();
+    auto* tip = chainstate_.active_chain().tip();
+    bool more_to_download = best_hdr && tip &&
+        best_hdr->chain_work > tip->chain_work;
+
+    if (!blocks_in_flight_.empty() || sync_peer_id_ == peer_id ||
+        more_to_download) {
         request_blocks(peer_id);
     }
 }
@@ -1287,6 +1294,7 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
               " items");
 
     // Remove any in-flight block requests that this peer can't serve.
+    bool had_block_notfound = false;
     for (const auto& item : msg.items) {
         if (item.type == net::protocol::InvType::BLOCK ||
             item.type == net::protocol::InvType::WITNESS_BLOCK) {
@@ -1295,6 +1303,30 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
                 it->second == peer_id) {
                 blocks_in_flight_.erase(item.hash);
                 block_request_peer_.erase(it);
+                had_block_notfound = true;
+            }
+        }
+    }
+
+    // If blocks were removed from in-flight, retry with a different peer.
+    // This handles the case where we asked the wrong peer for fork blocks.
+    if (had_block_notfound) {
+        auto* best_hdr = chainstate_.best_header();
+        auto* tip = chainstate_.active_chain().tip();
+        if (best_hdr && tip && best_hdr != tip &&
+            best_hdr->chain_work > tip->chain_work) {
+            // Find a peer who might have these blocks (different from
+            // the peer that just responded NOTFOUND).
+            auto all_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : all_peers) {
+                if (pid == peer_id) continue;
+                Peer* p = conn_manager_.get_peer(pid);
+                if (!p || !peer_state_is_operational(p->state)) continue;
+                LOG_INFO(core::LogCategory::NET,
+                         "NOTFOUND retry: requesting blocks from peer " +
+                         std::to_string(pid));
+                request_blocks(pid);
+                break;
             }
         }
     }
@@ -1426,6 +1458,10 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 
     if (!best_header) return;
 
+    // If best_header IS on the active chain and we already have all data,
+    // there is nothing to download.
+    if (active_chain.tip() == best_header) return;
+
     // Find where best_header's chain diverges from our active chain.
     // For the common case (same chain) fork == tip, so start_height ==
     // tip + 1 as before.  For a competing fork, we start downloading
@@ -1436,29 +1472,45 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     }
     int start_height = fork ? (fork->height + 1) : 0;
 
-    // Pick the best peer to request blocks from.  The caller's peer_id
-    // might be a node on a different fork that doesn't have these blocks.
-    // Prefer the peer with the highest start_height (most likely to have
-    // the blocks), preferring outbound connections.
+    LOG_DEBUG(core::LogCategory::NET,
+              "request_blocks: best_header h=" +
+              std::to_string(best_header->height) +
+              " active_tip h=" +
+              std::to_string(active_chain.height()) +
+              " fork h=" + std::to_string(fork ? fork->height : -1) +
+              " start_height=" + std::to_string(start_height) +
+              " caller_peer=" + std::to_string(peer_id));
+
+    // Pick the best peer to request blocks from.
+    // When best_header is on a competing fork, prefer the peer who
+    // sent us the fork headers (peer_id) since they are most likely to
+    // have the block data.  Only override if another peer reports a
+    // higher chain and the caller peer doesn't claim to have blocks.
     uint64_t best_peer = peer_id;
-    int best_height = 0;
-    bool best_is_outbound = false;
 
-    auto peer_ids = conn_manager_.get_peer_ids();
-    for (uint64_t pid : peer_ids) {
-        Peer* p = conn_manager_.get_peer(pid);
-        if (!p || !peer_state_is_operational(p->state)) continue;
+    // Check if we're downloading a fork chain (best_header differs
+    // from active chain).  In that case, the caller peer IS the one
+    // with the fork blocks — don't let start_height-based selection
+    // override it.
+    bool downloading_fork = (start_height <= active_chain.height());
 
-        bool is_outbound = !p->inbound;
-        int sh = p->start_height;
-
-        // Prefer peers whose start_height >= best_header height (they
-        // have the full chain), then prefer outbound, then highest height.
-        if (sh > best_height ||
-            (sh == best_height && is_outbound && !best_is_outbound)) {
-            best_height = sh;
-            best_peer = pid;
-            best_is_outbound = is_outbound;
+    if (!downloading_fork) {
+        // Linear extension of same chain — pick the peer with the
+        // highest start_height (most likely to have the blocks).
+        int best_height = 0;
+        bool best_is_outbound = false;
+        auto peer_ids = conn_manager_.get_peer_ids();
+        for (uint64_t pid : peer_ids) {
+            Peer* p = conn_manager_.get_peer(pid);
+            if (!p || !peer_state_is_operational(p->state)) continue;
+            bool is_outbound = !p->inbound;
+            int sh = p->start_height;
+            if (sh > best_height ||
+                (sh == best_height && is_outbound && !best_is_outbound)) {
+                best_height = sh;
+                best_peer = pid;
+                best_is_outbound = is_outbound;
+            }
         }
     }
 
@@ -1472,7 +1524,12 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
          ++h) {
         // Walk the best header chain to find the block at height h.
         auto* index = best_header->get_ancestor(h);
-        if (!index) break;
+        if (!index) {
+            LOG_WARN(core::LogCategory::NET,
+                     "request_blocks: get_ancestor returned null at h=" +
+                     std::to_string(h));
+            break;
+        }
 
         if (!index->has_data() &&
             blocks_in_flight_.count(index->block_hash) == 0) {
@@ -1502,7 +1559,13 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
                  std::to_string(getdata.items.size()) +
                  " blocks starting at height " +
                  std::to_string(start_height) +
-                 " from peer " + std::to_string(best_peer));
+                 " from peer " + std::to_string(best_peer) +
+                 (downloading_fork ? " (fork download)" : ""));
+    } else {
+        LOG_DEBUG(core::LogCategory::NET,
+                  "request_blocks: nothing to request"
+                  " (in_flight=" +
+                  std::to_string(blocks_in_flight_.size()) + ")");
     }
 }
 
