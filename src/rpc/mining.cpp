@@ -488,6 +488,9 @@ RpcResponse rpc_submitwork(const RpcRequest& req,
 
     // Look up the template by work_id, or use the most recent one if
     // work_id is 0 (backward compatibility with older miners).
+    // Templates are NOT erased on use — they persist until evicted by
+    // new getwork calls.  This prevents one miner's submitwork from
+    // stealing another miner's template.
     miner::BlockTemplate tmpl;
     if (work_id > 0) {
         auto it = g_cached_work.find(work_id);
@@ -498,16 +501,14 @@ RpcResponse rpc_submitwork(const RpcRequest& req,
                               " not found (stale or already submitted). "
                               "Call getwork again.", req.id);
         }
-        tmpl = std::move(it->second);
-        g_cached_work.erase(it);
+        tmpl = it->second;  // copy, don't erase
     } else {
         // Backward compat: use the highest (most recent) work_id
         auto it = g_cached_work.begin();
         for (auto jt = g_cached_work.begin(); jt != g_cached_work.end(); ++jt) {
             if (jt->first > it->first) it = jt;
         }
-        tmpl = std::move(it->second);
-        g_cached_work.erase(it);
+        tmpl = it->second;  // copy, don't erase
     }
     lock.unlock();
 
