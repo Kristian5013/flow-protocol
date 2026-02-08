@@ -267,6 +267,15 @@ void RpcServer::accept_loop(std::stop_token stoken) {
         try {
             HttpRequest http_req = read_http_request(static_cast<uintptr_t>(client));
 
+            // Handle CORS preflight (before auth — browsers don't send
+            // credentials on preflight requests).
+            if (http_req.method == "OPTIONS") {
+                send_http_response(static_cast<uintptr_t>(client),
+                                   204, "No Content", "");
+                close_socket(static_cast<uintptr_t>(client));
+                continue;
+            }
+
             // Check auth if configured
             if (!config_.rpc_user.empty() || !config_.rpc_password.empty()) {
                 if (!verify_auth(http_req.auth_header,
@@ -506,6 +515,9 @@ void RpcServer::send_http_response(uintptr_t sock, int status_code,
     response += "\r\n";
     response += "Connection: close\r\n";
     response += "Server: FTC-RPC/1.0\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Access-Control-Allow-Methods: POST, OPTIONS\r\n";
+    response += "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
     response += "\r\n";
     response += body;
 
