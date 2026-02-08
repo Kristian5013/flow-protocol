@@ -304,6 +304,37 @@ void MsgProcessor::on_tick(int64_t now) {
     }
 
     // ------------------------------------------------------------------
+    // 2b. Periodic header probe — discover competing chains.
+    // ------------------------------------------------------------------
+    // Mining nodes constantly update last_tip_update_ with their own
+    // blocks, so stale-tip detection never fires.  To ensure we always
+    // learn about longer chains from peers, periodically send GETHEADERS
+    // to a random operational peer.
+    if ((now - last_header_probe_) >= HEADER_PROBE_INTERVAL) {
+        last_header_probe_ = now;
+
+        auto peer_ids = conn_manager_.get_peer_ids();
+        // Collect operational peers (excluding current sync peer).
+        std::vector<uint64_t> candidates;
+        for (uint64_t pid : peer_ids) {
+            Peer* peer = conn_manager_.get_peer(pid);
+            if (!peer) continue;
+            if (!peer_state_is_operational(peer->state)) continue;
+            if (pid == sync_peer_id_) continue;
+            candidates.push_back(pid);
+        }
+        if (!candidates.empty()) {
+            // Pick one at random.
+            uint64_t probe_peer =
+                candidates[static_cast<size_t>(now) % candidates.size()];
+            send_getheaders(probe_peer);
+            LOG_DEBUG(core::LogCategory::NET,
+                      "Periodic header probe sent to peer " +
+                      std::to_string(probe_peer));
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 3. Block download timeout.
     // ------------------------------------------------------------------
     if (!blocks_in_flight_.empty()) {
@@ -1284,13 +1315,16 @@ void MsgProcessor::maybe_start_sync() {
         }
     }
 
-    // Select the best outbound peer for syncing.  Prefer the peer with the
-    // highest reported start_height, but accept ANY operational outbound
-    // peer as fallback -- the peer may have received blocks after the
-    // VERSION exchange and we won't know until we send GETHEADERS.
+    // Select the best peer for syncing.  Prefer outbound peers with the
+    // highest reported start_height.  If no suitable outbound peer exists,
+    // fall back to the best inbound peer -- this is critical for nodes
+    // running with -connect where the outbound connection may drop while
+    // the remote connects inbound.
     uint64_t best_peer = 0;
     int32_t best_height = 0;
     uint64_t any_peer = 0;
+    uint64_t best_inbound = 0;
+    int32_t best_inbound_height = 0;
 
     auto peer_ids = conn_manager_.get_peer_ids();
     for (uint64_t pid : peer_ids) {
@@ -1305,13 +1339,21 @@ void MsgProcessor::maybe_start_sync() {
             best_height = peer->start_height;
             best_peer = pid;
         }
+        if (peer->inbound && peer->start_height > best_inbound_height) {
+            best_inbound_height = peer->start_height;
+            best_inbound = pid;
+        }
     }
 
     int our_height = chainstate_.active_chain().height();
 
-    // Prefer a peer that claims to have more blocks.
+    // Prefer an outbound peer that claims to have more blocks.
     if (best_peer != 0 && best_height > our_height) {
-        // Use best_peer.
+        // Use best outbound peer.
+    } else if (best_inbound != 0 && best_inbound_height > our_height) {
+        // Fallback: inbound peer with higher chain.
+        best_peer = best_inbound;
+        best_height = best_inbound_height;
     } else if (any_peer != 0) {
         // No peer claims higher height, but send GETHEADERS anyway
         // to discover blocks mined after the VERSION handshake.
@@ -1384,8 +1426,15 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 
     if (!best_header) return;
 
-    auto* tip = active_chain.tip();
-    int start_height = tip ? (tip->height + 1) : 0;
+    // Find where best_header's chain diverges from our active chain.
+    // For the common case (same chain) fork == tip, so start_height ==
+    // tip + 1 as before.  For a competing fork, we start downloading
+    // from the fork point so the full alternate chain can be obtained.
+    auto* fork = best_header;
+    while (fork && fork->height > 0 && !active_chain.contains(fork)) {
+        fork = fork->prev;
+    }
+    int start_height = fork ? (fork->height + 1) : 0;
 
     // Walk from start_height to best_header, requesting blocks we don't have.
     std::vector<net::protocol::InvItem> to_request;

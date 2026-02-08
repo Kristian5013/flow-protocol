@@ -122,7 +122,9 @@ private:
     static constexpr int64_t STALE_TIP_CHECK_INTERVAL = 30;     // seconds
     static constexpr int64_t STALE_TIP_THRESHOLD = 30 * 60;     // 30 minutes
     static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 60;       // seconds per block
+    static constexpr int64_t HEADER_PROBE_INTERVAL = 60;       // seconds
     int64_t last_stale_check_ = 0;
+    int64_t last_header_probe_ = 0;
 
     // -- Message handlers ----------------------------------------------------
     // Each handler receives the peer ID and the raw payload bytes (after

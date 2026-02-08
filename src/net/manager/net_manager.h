@@ -180,7 +180,7 @@ private:
     // -- Tick constants ------------------------------------------------------
     static constexpr int64_t TICK_INTERVAL_MS = 1000;       // 1 second
     static constexpr int64_t DNS_SEED_DELAY = 11;           // seconds after start
-    static constexpr int64_t OUTBOUND_RETRY_INTERVAL = 30;  // seconds
+    static constexpr int64_t OUTBOUND_RETRY_INTERVAL = 5;   // seconds
 };
 
 } // namespace net

@@ -121,6 +121,10 @@ public:
         int max_outbound = DEFAULT_MAX_OUTBOUND;
         int max_inbound = DEFAULT_MAX_INBOUND;
         bool listen = true;
+
+        // IP whitelist: if non-empty, only accept inbound connections from
+        // these IP addresses.  Populated from hardcoded seed nodes.
+        std::unordered_set<std::string> allowed_ips;
     };
 
     explicit ConnManager(Config config,
