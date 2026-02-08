@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow Protocol (FTC) — Decentralized Cryptocurrency</title>
+<meta name="description" content="Flow Protocol is a Layer-1 blockchain built from scratch in C++20. Equihash PoW, 10-min blocks, 21M fixed supply.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><circle cx='256' cy='256' r='256' fill='%23F7931A'/><g transform='rotate(14,256,256)' fill='%23FFF'><path d='M215,124H354Q364,124,364,134V162Q364,172,354,172H253V238H320Q330,238,330,248V274Q330,284,320,284H253V376Q253,386,243,386H215Q205,386,205,376V134Q205,124,215,124Z'/><rect x='208' y='78' width='14' height='56' rx='7'/><rect x='236' y='78' width='14' height='56' rx='7'/><rect x='208' y='376' width='14' height='56' rx='7'/><rect x='236' y='376' width='14' height='56' rx='7'/></g></svg>">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--border:#30363d;--text:#e6edf3;--text2:#8b949e;--orange:#F7931A;--orange2:#e8850f;--green:#3fb950;--red:#f85149}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+a{color:var(--orange);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:1100px;margin:0 auto;padding:0 24px}
+
+/* NAV */
+nav{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 0;position:sticky;top:0;z-index:100}
+nav .container{display:flex;align-items:center;justify-content:space-between}
+.nav-logo{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700;color:var(--text)}
+.nav-logo img{width:28px;height:28px}
+.nav-links{display:flex;gap:24px;align-items:center}
+.nav-links a{color:var(--text2);font-size:14px;font-weight:500}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+.nav-links a.active{color:var(--orange)}
+
+/* HERO */
+.hero{text-align:center;padding:80px 0 60px}
+.hero-logo{width:120px;height:120px;margin-bottom:24px}
+.hero h1{font-size:42px;font-weight:800;margin-bottom:12px}
+.hero h1 span{color:var(--orange)}
+.hero p{font-size:18px;color:var(--text2);max-width:600px;margin:0 auto 32px}
+.hero-buttons{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;border:none;cursor:pointer;transition:all .2s}
+.btn-primary{background:var(--orange);color:#fff}
+.btn-primary:hover{background:var(--orange2);text-decoration:none;color:#fff}
+.btn-secondary{background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{border-color:var(--text2);text-decoration:none}
+
+/* STATS BAR */
+.stats-bar{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:60px}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;text-align:center}
+.stat-item .stat-value{font-size:24px;font-weight:700;color:var(--orange)}
+.stat-item .stat-label{font-size:13px;color:var(--text2);margin-top:2px}
+.stat-item .stat-value.loading{color:var(--text2);font-size:16px}
+.stats-status{text-align:center;margin-top:12px;font-size:12px;color:var(--text2)}
+.stats-status .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.stats-status .dot.ok{background:var(--green)}
+.stats-status .dot.err{background:var(--red)}
+
+/* SECTIONS */
+section{padding:60px 0}
+section h2{font-size:28px;font-weight:700;margin-bottom:8px}
+section .subtitle{color:var(--text2);margin-bottom:32px;font-size:16px}
+
+/* DOWNLOAD */
+.download-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.dl-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:24px;text-align:center;transition:border-color .2s}
+.dl-card:hover{border-color:var(--orange)}
+.dl-card .os{font-size:16px;font-weight:600;margin-bottom:4px}
+.dl-card .arch{font-size:13px;color:var(--text2);margin-bottom:16px}
+.dl-card .btn{width:100%;justify-content:center}
+.dl-card .hash{font-size:11px;color:var(--text2);margin-top:10px;word-break:break-all;font-family:'SFMono-Regular',Consolas,monospace}
+
+/* NODE STATUS */
+.nodes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.node-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px}
+.node-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.node-name{font-weight:600;font-size:16px}
+.node-status{font-size:13px;padding:3px 10px;border-radius:20px}
+.node-status.online{background:rgba(63,185,80,.15);color:var(--green)}
+.node-status.offline{background:rgba(248,81,73,.15);color:var(--red)}
+.node-info{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.node-info dt{font-size:12px;color:var(--text2)}
+.node-info dd{font-size:14px;font-weight:500;font-family:'SFMono-Regular',Consolas,monospace}
+
+/* GUIDE */
+.guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.guide-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:24px}
+.guide-card h3{font-size:17px;margin-bottom:8px}
+.guide-card p{font-size:14px;color:var(--text2);margin-bottom:16px}
+pre{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;font-size:13px;line-height:1.5;font-family:'SFMono-Regular',Consolas,monospace}
+code{font-family:'SFMono-Regular',Consolas,monospace;font-size:13px}
+
+/* SPECS */
+.specs-table{width:100%;border-collapse:collapse}
+.specs-table td{padding:10px 16px;border-bottom:1px solid var(--border);font-size:14px}
+.specs-table td:first-child{color:var(--text2);width:200px}
+.specs-table td:last-child{font-weight:500}
+
+/* FOOTER */
+footer{border-top:1px solid var(--border);padding:32px 0;margin-top:40px}
+footer .container{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px}
+.footer-links{display:flex;gap:20px}
+.footer-links a{color:var(--text2);font-size:14px}
+.footer-copy{color:var(--text2);font-size:13px}
+
+/* MOBILE */
+@media(max-width:640px){
+  .hero h1{font-size:28px}
+  .hero p{font-size:15px}
+  .nav-links{gap:14px}
+  .nav-links a{font-size:13px}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .node-info{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <a href="#" class="nav-logo">
+      <img src="https://raw.githubusercontent.com/Kristian5013/flow-protocol/main/logo.svg" alt="FTC">
+      Flow Protocol
+    </a>
+    <div class="nav-links">
+      <a href="#stats" class="active">Stats</a>
+      <a href="#download">Download</a>
+      <a href="#nodes">Nodes</a>
+      <a href="#guide">Guide</a>
+      <a href="#specs">Specs</a>
+      <a href="https://github.com/Kristian5013/flow-protocol" target="_blank">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="container">
+    <img src="https://raw.githubusercontent.com/Kristian5013/flow-protocol/main/logo.svg" alt="Flow Protocol" class="hero-logo">
+    <h1>Flow <span>Protocol</span></h1>
+    <p>Layer-1 blockchain built from scratch in C++20. Equihash proof-of-work, 10-minute blocks, 21 million FTC fixed supply.</p>
+    <div class="hero-buttons">
+      <a href="#download" class="btn btn-primary">Download v0.1.0</a>
+      <a href="https://github.com/Kristian5013/flow-protocol" class="btn btn-secondary" target="_blank">Source Code</a>
+      <a href="https://discord.gg/vTWHwxrYdB" class="btn btn-secondary" target="_blank">Discord</a>
+    </div>
+  </div>
+</div>
+
+<!-- LIVE STATS -->
+<div class="container">
+  <div class="stats-bar" id="stats">
+    <div class="stats-grid">
+      <div class="stat-item">
+        <div class="stat-value loading" id="s-height">...</div>
+        <div class="stat-label">Block Height</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value loading" id="s-difficulty">...</div>
+        <div class="stat-label">Difficulty</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value loading" id="s-hashrate">...</div>
+        <div class="stat-label">Network Hashrate</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value loading" id="s-supply">...</div>
+        <div class="stat-label">Circulating Supply</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value loading" id="s-blocktime">...</div>
+        <div class="stat-label">Avg Block Time</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value loading" id="s-peers">...</div>
+        <div class="stat-label">Connected Peers</div>
+      </div>
+    </div>
+    <div class="stats-status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">Connecting to network...</span>
+    </div>
+  </div>
+</div>
+
+<!-- DOWNLOAD -->
+<section id="download">
+  <div class="container">
+    <h2>Download</h2>
+    <p class="subtitle">Latest release: v0.1.0-alpha &mdash; Full node + miner + wallet CLI</p>
+    <div class="download-cards">
+      <div class="dl-card">
+        <div class="os">Linux x86_64</div>
+        <div class="arch">Ubuntu 20.04+ / Debian 11+</div>
+        <a href="https://github.com/Kristian5013/flow-protocol/releases/download/v0.1.0-alpha/ftc-v0.1.0-linux-x86_64.tar.gz" class="btn btn-primary">Download .tar.gz</a>
+        <div class="hash">Contains: ftcd, ftc-miner, ftc-wallet</div>
+      </div>
+      <div class="dl-card">
+        <div class="os">Windows x86_64</div>
+        <div class="arch">Windows 10+ (MSYS2 ucrt64)</div>
+        <a href="https://github.com/Kristian5013/flow-protocol/releases/download/v0.1.0-alpha/ftc-v0.1.0-windows-x86_64.tar.gz" class="btn btn-primary">Download .tar.gz</a>
+        <div class="hash">Contains: ftcd.exe, ftc-miner.exe, ftc-wallet.exe</div>
+      </div>
+      <div class="dl-card">
+        <div class="os">Build from Source</div>
+        <div class="arch">Any platform with C++20 + CMake + OpenSSL</div>
+        <a href="https://github.com/Kristian5013/flow-protocol" class="btn btn-secondary" target="_blank">GitHub Repository</a>
+        <div class="hash">81,000+ lines of original C++20 code</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- NODE STATUS -->
+<section id="nodes">
+  <div class="container">
+    <h2>Seed Nodes</h2>
+    <p class="subtitle">Live status of official seed nodes</p>
+    <div class="nodes-grid">
+      <div class="node-card" id="node-seoul">
+        <div class="node-header">
+          <span class="node-name">Seoul (AP Northeast)</span>
+          <span class="node-status" id="seoul-status">checking...</span>
+        </div>
+        <dl class="node-info">
+          <dt>Address</dt><dd>3.35.208.160:9333</dd>
+          <dt>Height</dt><dd id="seoul-height">-</dd>
+          <dt>Best Block</dt><dd id="seoul-hash">-</dd>
+          <dt>Peers</dt><dd id="seoul-peers">-</dd>
+        </dl>
+      </div>
+      <div class="node-card" id="node-virginia">
+        <div class="node-header">
+          <span class="node-name">Virginia (US East)</span>
+          <span class="node-status" id="virginia-status">checking...</span>
+        </div>
+        <dl class="node-info">
+          <dt>Address</dt><dd>44.221.81.40:9333</dd>
+          <dt>Height</dt><dd id="virginia-height">-</dd>
+          <dt>Best Block</dt><dd id="virginia-hash">-</dd>
+          <dt>Peers</dt><dd id="virginia-peers">-</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- QUICK START GUIDE -->
+<section id="guide">
+  <div class="container">
+    <h2>Quick Start</h2>
+    <p class="subtitle">Get your node running in minutes</p>
+    <div class="guide-grid">
+      <div class="guide-card">
+        <h3>1. Run a Full Node</h3>
+        <p>Download the binary and create a config file:</p>
+<pre># Create config directory
+mkdir -p ~/.ftc
+
+# Create config file
+cat &gt; ~/.ftc/ftc.conf &lt;&lt;EOF
+rpcuser=ftcuser
+rpcpassword=ftcpass
+rpcport=9332
+port=9333
+connect=3.35.208.160
+connect=44.221.81.40
+EOF
+
+# Start the node
+./ftcd</pre>
+      </div>
+      <div class="guide-card">
+        <h3>2. Start Mining</h3>
+        <p>Point the miner at your local node or a seed node:</p>
+<pre># Mine to your own node
+./ftc-miner \
+  --rpc-url=127.0.0.1 \
+  --rpc-port=9332 \
+  --rpc-user=ftcuser \
+  --rpc-pass=ftcpass \
+  --address=YOUR_FTC_ADDRESS \
+  --threads=4
+
+# Generate a new address
+./ftc-wallet --generate</pre>
+      </div>
+      <div class="guide-card">
+        <h3>3. Build from Source</h3>
+        <p>Requirements: C++20 compiler, CMake 3.20+, OpenSSL 3.x</p>
+<pre># Clone
+git clone https://github.com/Kristian5013/flow-protocol
+cd flow-protocol
+
+# Build (Linux)
+mkdir build &amp;&amp; cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . -j$(nproc)
+
+# Run tests (184 tests, 791 checks)
+./test/ftc_tests</pre>
+      </div>
+      <div class="guide-card">
+        <h3>4. RPC API</h3>
+        <p>Query the node via JSON-RPC:</p>
+<pre># Get blockchain info
+curl -u ftcuser:ftcpass \
+  -d '{"jsonrpc":"1.0","id":1,
+       "method":"getblockchaininfo",
+       "params":[]}' \
+  http://127.0.0.1:9332/
+
+# Other methods:
+# getblock, getblockhash,
+# getpeerinfo, getmempoolinfo,
+# getwork, submitwork,
+# getnewaddress, getbalance,
+# sendtoaddress, listtransactions</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SPECS -->
+<section id="specs">
+  <div class="container">
+    <h2>Technical Specifications</h2>
+    <p class="subtitle">Core protocol parameters</p>
+    <table class="specs-table">
+      <tr><td>Algorithm</td><td>Equihash (200, 9)</td></tr>
+      <tr><td>Block Time</td><td>10 minutes (600 seconds)</td></tr>
+      <tr><td>Max Supply</td><td>21,000,000 FTC</td></tr>
+      <tr><td>Initial Block Reward</td><td>50 FTC</td></tr>
+      <tr><td>Halving Interval</td><td>Every 210,000 blocks (~4 years)</td></tr>
+      <tr><td>Difficulty Adjustment</td><td>Every 2016 blocks (~2 weeks)</td></tr>
+      <tr><td>P2P Port</td><td>9333</td></tr>
+      <tr><td>RPC Port</td><td>9332</td></tr>
+      <tr><td>Address Prefix</td><td>F (Base58Check)</td></tr>
+      <tr><td>Consensus</td><td>SegWit, BIP34, BIP65, BIP66 (from genesis)</td></tr>
+      <tr><td>Codebase</td><td>81,000+ lines of original C++20</td></tr>
+      <tr><td>Dependencies</td><td>OpenSSL only (zero Bitcoin Core code)</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <span class="footer-copy">Flow Protocol (FTC) &mdash; MIT License</span>
+    <div class="footer-links">
+      <a href="https://github.com/Kristian5013/flow-protocol" target="_blank">GitHub</a>
+      <a href="https://t.me/flow_protocol_main" target="_blank">Telegram</a>
+      <a href="https://discord.gg/vTWHwxrYdB" target="_blank">Discord</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// RPC proxy endpoints - these are called via CORS-enabled proxy or directly
+// Since browsers can't call RPC with auth directly, we use a lightweight approach:
+// The stats are fetched via a small proxy that the seed nodes expose on a public endpoint.
+// For now, we'll use direct RPC calls with Basic auth (works if CORS is enabled).
+
+const NODES = [
+  { name: 'seoul', host: '3.35.208.160', rpcPort: 9332 },
+  { name: 'virginia', host: '44.221.81.40', rpcPort: 9332 }
+];
+const RPC_USER = 'ftcuser';
+const RPC_PASS = 'ftcpass';
+
+async function rpcCall(host, port, method, params = []) {
+  const url = `http://${host}:${port}/`;
+  const body = JSON.stringify({ jsonrpc: '1.0', id: 1, method, params });
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': 'Basic ' + btoa(`${RPC_USER}:${RPC_PASS}`)
+  };
+  const resp = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(8000) });
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.result;
+}
+
+function formatNumber(n) {
+  if (n >= 1e12) return (n / 1e12).toFixed(2) + ' TH/s';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GH/s';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + ' MH/s';
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + ' KH/s';
+  return n.toFixed(2) + ' H/s';
+}
+
+function shortHash(h) {
+  if (!h) return '-';
+  return h.substring(0, 12) + '...';
+}
+
+async function updateNodeCard(node) {
+  const statusEl = document.getElementById(`${node.name}-status`);
+  const heightEl = document.getElementById(`${node.name}-height`);
+  const hashEl = document.getElementById(`${node.name}-hash`);
+  const peersEl = document.getElementById(`${node.name}-peers`);
+
+  try {
+    const [info, peers] = await Promise.all([
+      rpcCall(node.host, node.rpcPort, 'getblockchaininfo'),
+      rpcCall(node.host, node.rpcPort, 'getpeerinfo')
+    ]);
+    statusEl.textContent = 'Online';
+    statusEl.className = 'node-status online';
+    heightEl.textContent = info.blocks.toLocaleString();
+    hashEl.textContent = shortHash(info.bestblockhash);
+    peersEl.textContent = peers.length;
+    return { info, peerCount: peers.length };
+  } catch (e) {
+    statusEl.textContent = 'Offline';
+    statusEl.className = 'node-status offline';
+    heightEl.textContent = '-';
+    hashEl.textContent = '-';
+    peersEl.textContent = '-';
+    return null;
+  }
+}
+
+async function updateStats() {
+  const results = await Promise.all(NODES.map(n => updateNodeCard(n)));
+  const live = results.filter(r => r !== null);
+
+  const dot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+
+  if (live.length === 0) {
+    dot.className = 'dot err';
+    statusText.textContent = 'Unable to connect to network';
+    return;
+  }
+
+  dot.className = 'dot ok';
+  const synced = live.length >= 2 && live[0].info.bestblockhash === live[1].info.bestblockhash;
+  statusText.textContent = synced
+    ? `${live.length} nodes online, in sync`
+    : `${live.length} node(s) online`;
+
+  // Use the best (highest) node for stats
+  const best = live.reduce((a, b) => (a.info.blocks > b.info.blocks ? a : b));
+  const info = best.info;
+
+  document.getElementById('s-height').textContent = info.blocks.toLocaleString();
+  document.getElementById('s-height').classList.remove('loading');
+
+  document.getElementById('s-difficulty').textContent = info.difficulty.toFixed(6);
+  document.getElementById('s-difficulty').classList.remove('loading');
+
+  // Estimate hashrate from difficulty: hashrate = difficulty * 2^13 / 600
+  // For Equihash (200,9): target_time = 600s
+  const hashrate = (info.difficulty * 8192) / 600;
+  document.getElementById('s-hashrate').textContent = formatNumber(hashrate);
+  document.getElementById('s-hashrate').classList.remove('loading');
+
+  // Supply = 50 * blocks (before first halving at 210,000)
+  const supply = Math.min(info.blocks * 50, 21000000);
+  document.getElementById('s-supply').textContent = supply.toLocaleString() + ' FTC';
+  document.getElementById('s-supply').classList.remove('loading');
+
+  // Avg block time from median time
+  document.getElementById('s-blocktime').textContent = '~10 min';
+  document.getElementById('s-blocktime').classList.remove('loading');
+
+  // Total peers
+  const totalPeers = live.reduce((sum, r) => sum + r.peerCount, 0);
+  document.getElementById('s-peers').textContent = totalPeers;
+  document.getElementById('s-peers').classList.remove('loading');
+}
+
+// Initial load + refresh every 30s
+updateStats();
+setInterval(updateStats, 30000);
+</script>
+
+</body>
+</html>
