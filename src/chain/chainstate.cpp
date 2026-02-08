@@ -143,6 +143,10 @@ core::Result<void> ChainstateManager::init() {
         }
 
         // Pass 3: Compute chain_tx (cumulative tx count) in height order.
+        // IMPORTANT: Only propagate chain_tx through blocks that have full
+        // data on disk AND whose parent also has a valid chain_tx.  This
+        // ensures that chain_tx > 0 means "every block from genesis to here
+        // has data available" -- which find_best_candidate() relies on.
         std::vector<BlockIndex*> by_height;
         by_height.reserve(block_index_.size());
         for (auto& [hash, idx] : block_index_) {
@@ -153,10 +157,19 @@ core::Result<void> ChainstateManager::init() {
                       return a->height < b->height;
                   });
         for (BlockIndex* bi : by_height) {
+            if (!bi->has_data()) {
+                bi->chain_tx = 0;
+                continue;
+            }
             if (bi->height == 0) {
-                bi->chain_tx = bi->tx_count;
-            } else if (bi->prev != nullptr) {
+                // Genesis always has data; tx_count may be 0 if genesis
+                // was added via add_to_block_index (header only) rather
+                // than accept_block.  Use at least 1 so chain_tx > 0.
+                bi->chain_tx = std::max(bi->tx_count, 1);
+            } else if (bi->prev != nullptr && bi->prev->chain_tx > 0) {
                 bi->chain_tx = bi->prev->chain_tx + bi->tx_count;
+            } else {
+                bi->chain_tx = 0;
             }
         }
 
@@ -174,6 +187,8 @@ core::Result<void> ChainstateManager::init() {
         BlockIndex* genesis = add_to_block_index(params_.genesis_block);
         genesis->raise_validity(BlockIndex::BLOCK_VALID_SCRIPTS);
         genesis->status |= BlockIndex::BLOCK_HAVE_DATA;
+        genesis->tx_count = 1;  // genesis always has 1 coinbase tx
+        genesis->chain_tx = 1;
     }
 
     // --- Determine best header and active chain tip -----------------------
@@ -467,11 +482,27 @@ core::Result<bool> ChainstateManager::accept_block(
     index->status |= BlockIndex::BLOCK_HAVE_DATA;
     index->tx_count = static_cast<int>(txs.size());
 
-    // Propagate cumulative transaction count.
-    if (index->prev != nullptr) {
+    // Propagate cumulative transaction count.  Only propagate if the
+    // parent has a valid chain_tx (meaning the entire chain from genesis
+    // to the parent has data).  This prevents find_best_candidate() from
+    // selecting blocks whose reorg path includes data-less gaps.
+    if (index->prev == nullptr) {
+        // Genesis block.
+        index->chain_tx = std::max(index->tx_count, 1);
+    } else if (index->prev->chain_tx > 0) {
+        index->chain_tx = index->prev->chain_tx + index->tx_count;
+    } else if (index->prev->height == 0 && index->prev->has_data()) {
+        // Parent is genesis with chain_tx = 0 (legacy DB). Fix it up.
+        index->prev->chain_tx = std::max(index->prev->tx_count, 1);
         index->chain_tx = index->prev->chain_tx + index->tx_count;
     } else {
-        index->chain_tx = index->tx_count;
+        index->chain_tx = 0;  // gap in chain data
+    }
+
+    // Forward-propagate: if this block fills a gap, update descendants
+    // that have data but were waiting for their parent's chain_tx.
+    if (index->chain_tx > 0) {
+        propagate_chain_tx(index);
     }
 
     index->raise_validity(BlockIndex::BLOCK_VALID_TRANSACTIONS);
@@ -520,6 +551,19 @@ core::Result<bool> ChainstateManager::activate_best_chain() {
             std::to_string(path.to_disconnect.size()) +
             " blocks exceeds safety limit of " +
             std::to_string(MAX_REORG_DEPTH));
+    }
+
+    // Pre-flight: verify ALL blocks in the connect path have data on disk.
+    // This prevents a partial reorg where we disconnect old blocks but
+    // cannot connect the new ones (leaving the chain in a broken state).
+    for (BlockIndex* bi : path.to_connect) {
+        if (!bi->has_data()) {
+            LOG_WARN(core::LogCategory::CHAIN,
+                     "Reorg aborted: block data not available at height " +
+                     std::to_string(bi->height) +
+                     " (need blocks from peer)");
+            return false;
+        }
     }
 
     // --- Disconnect phase -------------------------------------------------
@@ -944,6 +988,46 @@ BlockIndex* ChainstateManager::find_best_candidate() const {
     }
 
     return best;
+}
+
+// ===========================================================================
+// propagate_chain_tx
+// ===========================================================================
+// When a block's chain_tx becomes valid (> 0), some of its descendants
+// in the block index may already have data on disk but were unable to
+// set chain_tx because their parent lacked it.  This method walks the
+// block index looking for such descendants and propagates chain_tx
+// forward so they become eligible for find_best_candidate().
+// ===========================================================================
+
+void ChainstateManager::propagate_chain_tx(BlockIndex* index) {
+    // Simple BFS: collect children that have data but chain_tx == 0.
+    std::vector<BlockIndex*> queue;
+
+    // Find direct children of `index` in the block index.
+    for (auto& [hash, child_ptr] : block_index_) {
+        BlockIndex* child = child_ptr.get();
+        if (child->prev == index && child->has_data() &&
+            child->chain_tx <= 0) {
+            child->chain_tx = index->chain_tx + child->tx_count;
+            queue.push_back(child);
+        }
+    }
+
+    // BFS forward through descendants.
+    while (!queue.empty()) {
+        BlockIndex* current = queue.back();
+        queue.pop_back();
+
+        for (auto& [hash, child_ptr] : block_index_) {
+            BlockIndex* child = child_ptr.get();
+            if (child->prev == current && child->has_data() &&
+                child->chain_tx <= 0) {
+                child->chain_tx = current->chain_tx + child->tx_count;
+                queue.push_back(child);
+            }
+        }
+    }
 }
 
 // ===========================================================================

@@ -218,6 +218,11 @@ private:
     /// block data available on disk.
     BlockIndex* find_best_candidate() const;
 
+    /// When a block is accepted and fills a data gap, propagate chain_tx
+    /// forward to any descendants that already have data but were missing
+    /// a valid parent chain_tx.
+    void propagate_chain_tx(BlockIndex* index);
+
     /// Validate internal block index consistency (debug builds).
     void check_block_index();
 };

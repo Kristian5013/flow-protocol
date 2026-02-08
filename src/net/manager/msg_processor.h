@@ -121,7 +121,7 @@ private:
     // -- Stale tip tracking --------------------------------------------------
     static constexpr int64_t STALE_TIP_CHECK_INTERVAL = 30;     // seconds
     static constexpr int64_t STALE_TIP_THRESHOLD = 30 * 60;     // 30 minutes
-    static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 60;       // seconds per block
+    static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 20;       // seconds per block
     static constexpr int64_t HEADER_PROBE_INTERVAL = 60;       // seconds
     int64_t last_stale_check_ = 0;
     int64_t last_header_probe_ = 0;
