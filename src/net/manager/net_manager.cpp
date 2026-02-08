@@ -53,6 +53,32 @@ core::Result<void> NetManager::start() {
 
     LOG_INFO(core::LogCategory::NET, "Starting network subsystem...");
 
+    // Populate the IP whitelist from hardcoded seed nodes.
+    // This ensures only known seed nodes can connect inbound.
+    for (const auto& node : get_seed_nodes()) {
+        // Strip ":port" suffix to get the bare IP address.
+        std::string ip = node;
+        size_t colon = node.rfind(':');
+        if (colon != std::string::npos) {
+            // Make sure it's not an IPv6 address (multiple colons).
+            size_t first_colon = node.find(':');
+            if (first_colon == colon) {
+                ip = node.substr(0, colon);
+            }
+        }
+        config_.conn_config.allowed_ips.insert(ip);
+    }
+
+    if (!config_.conn_config.allowed_ips.empty()) {
+        std::string ip_list;
+        for (const auto& ip : config_.conn_config.allowed_ips) {
+            if (!ip_list.empty()) ip_list += ", ";
+            ip_list += ip;
+        }
+        LOG_INFO(core::LogCategory::NET,
+                 "IP whitelist active: " + ip_list);
+    }
+
     // Create the connection manager.
     conn_manager_ = std::make_unique<ConnManager>(
         config_.conn_config, event_channel_);

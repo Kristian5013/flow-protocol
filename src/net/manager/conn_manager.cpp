@@ -505,6 +505,16 @@ void ConnManager::handle_accept(net::Socket socket) {
     uint16_t remote_port = socket.remote_port();
     std::string remote = remote_addr + ":" + std::to_string(remote_port);
 
+    // IP whitelist: if configured, only allow connections from seed nodes.
+    if (!config_.allowed_ips.empty() &&
+        config_.allowed_ips.find(remote_addr) == config_.allowed_ips.end()) {
+        LOG_DEBUG(core::LogCategory::NET,
+                  "Rejecting inbound connection from " + remote +
+                  ": IP not in allowed list");
+        socket.close();
+        return;
+    }
+
     LOG_INFO(core::LogCategory::NET,
              "Accepted inbound connection from " + remote);
 
