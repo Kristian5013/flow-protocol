@@ -536,15 +536,16 @@ RpcResponse rpc_submitwork(const RpcRequest& req,
     // Remove mined transactions from the mempool.
     mempool.remove_for_block(block, tmpl.height);
 
-    // Flush block index and UTXO set to disk so data survives restarts.
-    chainstate.flush();
+    std::string hash_hex = block.hash().to_hex();
 
-    // Broadcast to P2P peers
+    // Broadcast to P2P peers (small INV message).
     if (net_manager) {
         net_manager->broadcast_block(block);
     }
 
-    std::string hash_hex = block.hash().to_hex();
+    // Flush block index and UTXO set to disk so data survives restarts.
+    chainstate.flush();
+
     LOG_INFO(core::LogCategory::RPC,
              "submitwork: block accepted, hash=" + hash_hex);
 
