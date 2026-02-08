@@ -1436,6 +1436,32 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     }
     int start_height = fork ? (fork->height + 1) : 0;
 
+    // Pick the best peer to request blocks from.  The caller's peer_id
+    // might be a node on a different fork that doesn't have these blocks.
+    // Prefer the peer with the highest start_height (most likely to have
+    // the blocks), preferring outbound connections.
+    uint64_t best_peer = peer_id;
+    int best_height = 0;
+    bool best_is_outbound = false;
+
+    auto peer_ids = conn_manager_.get_peer_ids();
+    for (uint64_t pid : peer_ids) {
+        Peer* p = conn_manager_.get_peer(pid);
+        if (!p || !peer_state_is_operational(p->state)) continue;
+
+        bool is_outbound = !p->inbound;
+        int sh = p->start_height;
+
+        // Prefer peers whose start_height >= best_header height (they
+        // have the full chain), then prefer outbound, then highest height.
+        if (sh > best_height ||
+            (sh == best_height && is_outbound && !best_is_outbound)) {
+            best_height = sh;
+            best_peer = pid;
+            best_is_outbound = is_outbound;
+        }
+    }
+
     // Walk from start_height to best_header, requesting blocks we don't have.
     std::vector<net::protocol::InvItem> to_request;
     static constexpr int MAX_BLOCKS_REQUEST = 16;
@@ -1456,7 +1482,7 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
             to_request.push_back(item);
 
             blocks_in_flight_.insert(index->block_hash);
-            block_request_peer_[index->block_hash] = peer_id;
+            block_request_peer_[index->block_hash] = best_peer;
         }
     }
 
@@ -1465,16 +1491,18 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
         getdata.items = std::move(to_request);
         auto getdata_payload = getdata.serialize();
 
-        send(peer_id,
+        send(best_peer,
              net::Message::create(commands::GETDATA,
                                   std::move(getdata_payload)));
 
         last_block_request_ = core::get_time();
 
-        LOG_DEBUG(core::LogCategory::NET,
-                  "Requested " +
-                  std::to_string(getdata.items.size()) +
-                  " blocks from peer " + std::to_string(peer_id));
+        LOG_INFO(core::LogCategory::NET,
+                 "Requested " +
+                 std::to_string(getdata.items.size()) +
+                 " blocks starting at height " +
+                 std::to_string(start_height) +
+                 " from peer " + std::to_string(best_peer));
     }
 }
 
