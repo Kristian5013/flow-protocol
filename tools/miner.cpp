@@ -525,6 +525,7 @@ int main(int argc, char* argv[]) {
         std::string header_hex = result["header"].get_string();
         std::string target_hex = result["target"].get_string();
         int64_t height = result["height"].get_int();
+        int64_t work_id = result["work_id"].is_int() ? result["work_id"].get_int() : 0;
 
         // ---------------------------------------------------------------
         // 2. Deserialize header and target
@@ -678,7 +679,8 @@ int main(int argc, char* argv[]) {
 
         std::string submit_resp = rpc_call(
             rpc_host, rpc_port, "submitwork",
-            "[" + std::to_string(winning->nonce) + "]");
+            "[" + std::to_string(winning->nonce) + "," +
+            std::to_string(work_id) + "]");
 
         if (submit_resp.empty()) {
             std::cout << "\r  " << color::dim() << "[" << current_timestamp() << "]"
