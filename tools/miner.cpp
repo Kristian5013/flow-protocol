@@ -321,6 +321,19 @@ static std::string http_post(const std::string& host, uint16_t port,
     }
     freeaddrinfo(result);
 
+    // Set receive timeout so we don't hang forever if node is slow.
+#ifdef _WIN32
+    DWORD recv_timeout = 60000; // 60 seconds
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&recv_timeout), sizeof(recv_timeout));
+#else
+    struct timeval tv;
+    tv.tv_sec = 60;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&tv), sizeof(tv));
+#endif
+
     // Build HTTP request
     std::string auth_header;
     if (!g_rpc_user.empty()) {
