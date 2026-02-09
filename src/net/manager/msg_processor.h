@@ -118,14 +118,18 @@ private:
     std::unordered_map<uint64_t, std::unordered_set<core::uint256>>
         peer_announced_txs_;
 
-    // -- Stale tip tracking --------------------------------------------------
+    // -- Block download parameters -------------------------------------------
     static constexpr int64_t STALE_TIP_CHECK_INTERVAL = 30;     // seconds
     static constexpr int64_t STALE_TIP_THRESHOLD = 30 * 60;     // 30 minutes
-    static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 20;       // seconds per block
-    static constexpr int64_t HEADER_PROBE_INTERVAL = 60;       // seconds
+    static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 30;       // seconds
+    static constexpr int64_t HEADER_PROBE_INTERVAL = 60;        // seconds
+    static constexpr int     MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
     int64_t last_stale_check_ = 0;
     int64_t last_header_probe_ = 0;
     int64_t last_block_catchup_ = 0;
+
+    // Per-block request timestamps (for stalling detection).
+    std::unordered_map<core::uint256, int64_t> block_request_time_;
 
     // -- Message handlers ----------------------------------------------------
     // Each handler receives the peer ID and the raw payload bytes (after

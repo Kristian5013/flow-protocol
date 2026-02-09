@@ -382,6 +382,37 @@ core::Result<BlockIndex*> ChainstateManager::accept_block_header(
             std::to_string(median_time));
     }
 
+    // --- Difficulty check: bits must match expected difficulty --------------
+    int new_height = parent->height + 1;
+    uint32_t expected_bits;
+    if (new_height % params_.difficulty_adjustment_interval() == 0 &&
+        new_height > 0) {
+        // Retarget boundary — calculate expected difficulty from the
+        // actual timespan of the previous 2016 blocks.
+        auto* first_block = parent->get_ancestor(
+            new_height - params_.difficulty_adjustment_interval());
+        if (!first_block) {
+            return core::Error(core::ErrorCode::VALIDATION_ERROR,
+                "cannot find retarget interval start block at height " +
+                std::to_string(new_height -
+                               params_.difficulty_adjustment_interval()));
+        }
+        expected_bits = consensus::get_next_work_required(
+            new_height, parent->time, first_block->time,
+            parent->bits, params_);
+    } else {
+        // Non-retarget block: same difficulty as parent.
+        expected_bits = parent->bits;
+    }
+
+    if (header.bits != expected_bits) {
+        return core::Error(core::ErrorCode::VALIDATION_ERROR,
+            "incorrect proof-of-work difficulty for height " +
+            std::to_string(new_height) + ": got " +
+            std::to_string(header.bits) + " expected " +
+            std::to_string(expected_bits));
+    }
+
     // --- Add to the block index -------------------------------------------
     BlockIndex* new_index = add_to_block_index(header);
     new_index->raise_validity(BlockIndex::BLOCK_VALID_TREE);
