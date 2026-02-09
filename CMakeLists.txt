@@ -10,6 +10,7 @@ option(BUILD_TESTS "Build unit tests" ON)
 option(BUILD_BENCH "Build benchmarks" OFF)
 option(ENABLE_WALLET "Enable wallet" ON)
 option(ENABLE_STRATUM "Enable stratum server" ON)
+option(ENABLE_GPU "Build GPU miner (requires OpenCL)" OFF)
 option(USE_ASM "Use assembly optimizations" ON)
 
 # Find OpenSSL 3.0+
@@ -43,6 +44,10 @@ add_subdirectory(src/rpc)
 add_subdirectory(src/wallet)
 add_subdirectory(src/miner)
 add_subdirectory(src/node)
+
+if(ENABLE_GPU)
+    add_subdirectory(src/gpu)
+endif()
 
 # Tools (genesis miner, etc.)
 add_subdirectory(tools)

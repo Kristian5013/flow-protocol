@@ -64,8 +64,35 @@ target_link_libraries(ftc-wallet PRIVATE
     ${PLATFORM_LIBS}
 )
 
+# GPU miner (optional, requires OpenCL)
+if(TARGET ftc_gpu)
+    add_executable(ftc-miner-gpu miner_gpu.cpp)
+
+    target_include_directories(ftc-miner-gpu PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(ftc-miner-gpu PRIVATE
+        ftc_gpu
+        ftc_miner
+        ftc_rpc
+        ftc_chain
+        ftc_consensus
+        ftc_primitives
+        ftc_crypto
+        ftc_core
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        Threads::Threads
+        ${PLATFORM_LIBS}
+    )
+endif()
+
 # Static link so tools run without MSYS2 DLLs
 if(MINGW)
     target_link_options(ftc-miner PRIVATE -static)
     target_link_options(ftc-wallet PRIVATE -static)
+    if(TARGET ftc-miner-gpu)
+        target_link_options(ftc-miner-gpu PRIVATE -static)
+    endif()
 endif()

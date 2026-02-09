@@ -125,6 +125,7 @@ private:
     static constexpr int64_t HEADER_PROBE_INTERVAL = 60;       // seconds
     int64_t last_stale_check_ = 0;
     int64_t last_header_probe_ = 0;
+    int64_t last_block_catchup_ = 0;
 
     // -- Message handlers ----------------------------------------------------
     // Each handler receives the peer ID and the raw payload bytes (after
