@@ -534,6 +534,14 @@ RpcResponse rpc_submitwork(const RpcRequest& req,
     }
 
     tmpl.header.nonce = static_cast<uint32_t>(nonce);
+
+    // If the miner rolled the timestamp (e.g. after nonce space exhaustion),
+    // accept the updated value so the block hash matches what was mined.
+    int64_t rolled_ts = param_int(req.params, 2, 0);
+    if (rolled_ts > 0) {
+        tmpl.header.timestamp = static_cast<uint32_t>(rolled_ts);
+    }
+
     auto block = tmpl.to_block();
 
     LOG_INFO(core::LogCategory::RPC,
@@ -637,10 +645,11 @@ void register_mining_rpcs(RpcServer& server,
              net::NetManager* nm = net_manager_ptr ? *net_manager_ptr : nullptr;
              return rpc_submitwork(r, chainstate, mempool, nm);
          },
-         "submitwork nonce [work_id]\n"
+         "submitwork nonce work_id [timestamp]\n"
          "Submit a solved nonce from an external miner.\n"
          "Call getwork first to obtain the work.\n"
-         "work_id is returned by getwork and identifies the template.",
+         "work_id is returned by getwork and identifies the template.\n"
+         "timestamp is optional: if the miner rolled the timestamp, pass it here.",
          "mining"},
     });
 }

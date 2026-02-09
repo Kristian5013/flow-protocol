@@ -25,6 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -638,67 +639,96 @@ int main(int argc, char* argv[]) {
         uint32_t winning_nonce = 0;
         uint64_t block_hashes = 0;
 
+        // Read initial timestamp from header bytes [68..71] (little-endian).
+        auto& hdr_bytes = *header_opt;
+        uint32_t cur_timestamp =
+            static_cast<uint32_t>(hdr_bytes[68])       |
+            (static_cast<uint32_t>(hdr_bytes[69]) << 8) |
+            (static_cast<uint32_t>(hdr_bytes[70]) << 16) |
+            (static_cast<uint32_t>(hdr_bytes[71]) << 24);
+
         // ---------------------------------------------------------------
-        // 3. GPU mining loop: dispatch batches of nonces
+        // 3. GPU mining loop with timestamp rolling
         // ---------------------------------------------------------------
-        // Update chain height from this work response.
+        // When all 4.2B nonces are exhausted, increment the timestamp by
+        // 1 second.  This changes the header hash completely, giving a
+        // fresh set of 4.2B nonces without an RPC round-trip.
+        // ---------------------------------------------------------------
         g_chain_height = height;
 
-        for (uint32_t base_nonce = 0; !g_stop && !found && !g_work_stale; ) {
-            // Compute actual batch size using 64-bit to avoid overflow.
-            // remaining64 = number of nonces left (including base_nonce).
-            uint64_t remaining64 =
-                static_cast<uint64_t>(UINT32_MAX) - base_nonce + 1;
-            if (remaining64 == 0) break;  // Full nonce space exhausted
-            uint32_t this_batch = static_cast<uint32_t>(
-                std::min(static_cast<uint64_t>(batch_size), remaining64));
-            if (this_batch == 0) break;
+        while (!g_stop && !found && !g_work_stale) {
+            // Inner loop: grind nonces for the current timestamp
+            for (uint32_t base_nonce = 0;
+                 !g_stop && !found && !g_work_stale; ) {
+                uint64_t remaining64 =
+                    static_cast<uint64_t>(UINT32_MAX) - base_nonce + 1;
+                if (remaining64 == 0) break;
+                uint32_t this_batch = static_cast<uint32_t>(
+                    std::min(static_cast<uint64_t>(batch_size), remaining64));
+                if (this_batch == 0) break;
 
-            auto results = miner.mine_batch(base_nonce, this_batch);
-            block_hashes += this_batch;
+                auto results = miner.mine_batch(base_nonce, this_batch);
+                block_hashes += this_batch;
 
-            if (!results.empty()) {
-                // CPU verification: double-check the GPU result
-                for (uint32_t nonce : results) {
-                    // Reconstruct header with this nonce
-                    auto hdr = *header_opt;
-                    hdr[76] = nonce & 0xFF;
-                    hdr[77] = (nonce >> 8) & 0xFF;
-                    hdr[78] = (nonce >> 16) & 0xFF;
-                    hdr[79] = (nonce >> 24) & 0xFF;
+                if (!results.empty()) {
+                    for (uint32_t nonce : results) {
+                        auto hdr = hdr_bytes;
+                        hdr[76] = nonce & 0xFF;
+                        hdr[77] = (nonce >> 8) & 0xFF;
+                        hdr[78] = (nonce >> 16) & 0xFF;
+                        hdr[79] = (nonce >> 24) & 0xFF;
 
-                    auto cpu_hash = crypto::keccak256d(
-                        std::span<const uint8_t>(hdr.data(), 80));
+                        auto cpu_hash = crypto::keccak256d(
+                            std::span<const uint8_t>(hdr.data(), 80));
 
-                    if (cpu_hash <= target) {
-                        found = true;
-                        winning_nonce = nonce;
-                        break;
+                        if (cpu_hash <= target) {
+                            found = true;
+                            winning_nonce = nonce;
+                            break;
+                        }
                     }
                 }
+
+                uint64_t next = static_cast<uint64_t>(base_nonce) + this_batch;
+                if (next > UINT32_MAX) break;
+                base_nonce = static_cast<uint32_t>(next);
+
+                // Update progress display
+                auto now = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double>(
+                    now - block_start).count();
+                double hash_rate = elapsed > 0.01
+                    ? static_cast<double>(block_hashes) / elapsed : 0;
+
+                std::ostringstream line;
+                line << "\r  " << color::dim() << "  " << color::reset()
+                     << color::cyan() << format_hashrate(hash_rate)
+                     << color::reset()
+                     << "  " << color::dim() << format_number(block_hashes)
+                     << " hashes"
+                     << "  " << format_duration(elapsed)
+                     << color::reset() << "      ";
+                std::cout << line.str() << std::flush;
             }
 
-            // Advance base nonce (64-bit to detect overflow)
-            uint64_t next = static_cast<uint64_t>(base_nonce) + this_batch;
-            if (next > UINT32_MAX) break;
-            base_nonce = static_cast<uint32_t>(next);
+            if (found || g_stop || g_work_stale) break;
 
-            // Update progress
-            auto now = std::chrono::steady_clock::now();
-            double elapsed = std::chrono::duration<double>(
-                now - block_start).count();
-            double hash_rate = elapsed > 0.01
-                ? static_cast<double>(block_hashes) / elapsed : 0;
+            // Nonce space exhausted — roll timestamp and retry.
+            ++cur_timestamp;
 
-            std::ostringstream line;
-            line << "\r  " << color::dim() << "  " << color::reset()
-                 << color::cyan() << format_hashrate(hash_rate)
-                 << color::reset()
-                 << "  " << color::dim() << format_number(block_hashes)
-                 << " hashes"
-                 << "  " << format_duration(elapsed)
-                 << color::reset() << "      ";
-            std::cout << line.str() << std::flush;
+            // Safety: don't set timestamp too far into the future.
+            auto real_time = static_cast<uint32_t>(std::time(nullptr));
+            if (cur_timestamp > real_time + 30) break;
+
+            // Write new timestamp into header bytes (little-endian).
+            hdr_bytes[68] = cur_timestamp & 0xFF;
+            hdr_bytes[69] = (cur_timestamp >> 8) & 0xFF;
+            hdr_bytes[70] = (cur_timestamp >> 16) & 0xFF;
+            hdr_bytes[71] = (cur_timestamp >> 24) & 0xFF;
+
+            // Re-upload modified header to GPU.
+            miner.set_header(std::span<const uint8_t>(
+                hdr_bytes.data(), 80));
         }
 
         // Clear progress line
@@ -720,12 +750,8 @@ int main(int argc, char* argv[]) {
                           << "New block detected (height "
                           << g_chain_height.load() << "), switching to fresh work..."
                           << color::reset() << std::endl;
-            } else {
-                std::cout << "  " << color::dim() << "[" << current_timestamp()
-                          << "]" << color::reset() << " " << color::yellow()
-                          << "Nonce space exhausted, fetching new work..."
-                          << color::reset() << std::endl;
             }
+            // Timestamp limit reached — silently fetch new work.
             continue;
         }
 
@@ -750,7 +776,8 @@ int main(int argc, char* argv[]) {
         std::string submit_resp = rpc_call(
             rpc_host, rpc_port, "submitwork",
             "[" + std::to_string(winning_nonce) + "," +
-            std::to_string(work_id) + "]");
+            std::to_string(work_id) + "," +
+            std::to_string(cur_timestamp) + "]");
 
         if (submit_resp.empty()) {
             std::cout << "\r  " << color::dim() << "[" << current_timestamp()
