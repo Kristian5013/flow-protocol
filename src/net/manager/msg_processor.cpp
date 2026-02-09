@@ -87,6 +87,22 @@ void MsgProcessor::on_peer_disconnected(uint64_t peer_id) {
     for (const auto& hash : to_remove) {
         blocks_in_flight_.erase(hash);
         block_request_peer_.erase(hash);
+        block_request_time_.erase(hash);
+    }
+
+    // If blocks were freed, try to re-request from another peer.
+    if (!to_remove.empty()) {
+        auto* best_hdr = chainstate_.best_header();
+        auto* tip = chainstate_.active_chain().tip();
+        if (best_hdr && tip && best_hdr->chain_work > tip->chain_work) {
+            auto remaining_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : remaining_peers) {
+                Peer* p = conn_manager_.get_peer(pid);
+                if (!p || !peer_state_is_operational(p->state)) continue;
+                request_blocks(pid);
+                break;
+            }
+        }
     }
 
     // Remove the peer from the connection manager.
@@ -335,22 +351,32 @@ void MsgProcessor::on_tick(int64_t now) {
     }
 
     // ------------------------------------------------------------------
-    // 3. Block download timeout — clear stale requests and retry.
+    // 3. Block download timeout — per-block stalling detection.
     // ------------------------------------------------------------------
-    // Use a fixed timeout (not scaled by count) to avoid stale requests
-    // blocking progress forever.  Do NOT penalize the peer — timeouts
-    // are normal when peers restart, reconnect, or the network hiccups.
-    if (!blocks_in_flight_.empty() && last_block_request_ > 0 &&
-        (now - last_block_request_) > BLOCK_DOWNLOAD_TIMEOUT) {
-        LOG_INFO(core::LogCategory::NET,
-                 "Clearing " + std::to_string(blocks_in_flight_.size()) +
-                 " stale block requests (timeout)");
-
-        blocks_in_flight_.clear();
-        block_request_peer_.clear();
-        sync_peer_id_ = 0;
-        // Don't call maybe_start_sync() here — the catch-up logic
-        // below will handle requesting blocks from available peers.
+    // Check each in-flight block individually.  If a block has been
+    // pending longer than BLOCK_DOWNLOAD_TIMEOUT, remove it and free
+    // the slot so catch-up logic can retry from a different peer.
+    {
+        std::vector<core::uint256> timed_out;
+        for (const auto& [hash, req_time] : block_request_time_) {
+            if ((now - req_time) > BLOCK_DOWNLOAD_TIMEOUT) {
+                timed_out.push_back(hash);
+            }
+        }
+        if (!timed_out.empty()) {
+            LOG_INFO(core::LogCategory::NET,
+                     "Clearing " + std::to_string(timed_out.size()) +
+                     " stale block requests (timeout)");
+            for (const auto& hash : timed_out) {
+                blocks_in_flight_.erase(hash);
+                block_request_peer_.erase(hash);
+                block_request_time_.erase(hash);
+            }
+            // Reset sync peer so catch-up can pick a new one.
+            if (blocks_in_flight_.empty()) {
+                sync_peer_id_ = 0;
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -706,14 +732,16 @@ void MsgProcessor::handle_inv(uint64_t peer_id,
         send(peer_id, std::move(getdata_msg));
 
         // Track in-flight block requests.
+        int64_t req_time = core::get_time();
         for (const auto& item : getdata.items) {
             if (item.type == net::protocol::InvType::BLOCK ||
                 item.type == net::protocol::InvType::WITNESS_BLOCK) {
                 blocks_in_flight_.insert(item.hash);
                 block_request_peer_[item.hash] = peer_id;
+                block_request_time_[item.hash] = req_time;
             }
         }
-        last_block_request_ = core::get_time();
+        last_block_request_ = req_time;
     }
 }
 
@@ -933,6 +961,7 @@ void MsgProcessor::handle_block(uint64_t peer_id,
     // Remove from in-flight tracking.
     blocks_in_flight_.erase(block_hash);
     block_request_peer_.erase(block_hash);
+    block_request_time_.erase(block_hash);
     known_blocks_.insert(block_hash);
 
     // Accept the block into chainstate.
@@ -1352,6 +1381,7 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
                 it->second == peer_id) {
                 blocks_in_flight_.erase(item.hash);
                 block_request_peer_.erase(it);
+                block_request_time_.erase(item.hash);
                 had_block_notfound = true;
             }
         }
@@ -1593,6 +1623,13 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 
         if (!index->has_data() &&
             blocks_in_flight_.count(index->block_hash) == 0) {
+            // Enforce per-peer in-flight limit.
+            int peer_in_flight = 0;
+            for (const auto& [h, pid] : block_request_peer_) {
+                if (pid == best_peer) ++peer_in_flight;
+            }
+            if (peer_in_flight >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) break;
+
             net::protocol::InvItem item;
             item.type = net::protocol::InvType::BLOCK;
             item.hash = index->block_hash;
@@ -1600,6 +1637,7 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 
             blocks_in_flight_.insert(index->block_hash);
             block_request_peer_[index->block_hash] = best_peer;
+            block_request_time_[index->block_hash] = core::get_time();
         }
     }
 
@@ -1634,31 +1672,27 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 // ===========================================================================
 
 void MsgProcessor::relay_block(const core::uint256& hash) {
-    // Push the full block to all connected peers directly.
-    // This eliminates the HEADERS→GETDATA→BLOCK round-trip which is
-    // the primary source of sync failures (timeouts, stale requests).
+    // Bitcoin-style block relay: announce via HEADERS (preferred) or INV.
+    // The peer decides whether to request the full block via GETDATA.
+    // This avoids pushing full block data to peers that already have it.
     auto* block_index = chainstate_.lookup_block_index(hash);
-    if (!block_index || !block_index->has_data()) return;
+    if (!block_index) return;
 
-    auto block_result = chainstate_.read_block(block_index);
-    if (!block_result.ok()) {
-        LOG_WARN(core::LogCategory::NET,
-                 "relay_block: failed to read block " +
-                 hash.to_hex().substr(0, 16) + "...");
-        return;
-    }
-
-    auto block_bytes = block_result.value().serialize();
-
-    // Also prepare a HEADERS message for peers that requested SENDHEADERS
-    // (they need the header to update their block index even if they
-    // already have the block data).
+    // Prepare HEADERS payload (1 header + 0 tx count).
     primitives::BlockHeader header = block_index->get_block_header();
     core::DataStream hdr_stream;
     core::ser_write_compact_size(hdr_stream, 1);
     header.serialize(hdr_stream);
     core::ser_write_compact_size(hdr_stream, 0);
     auto hdr_payload = hdr_stream.release();
+
+    // Prepare INV payload (for peers that don't prefer headers).
+    net::protocol::InvMessage inv;
+    net::protocol::InvItem inv_item;
+    inv_item.type = net::protocol::InvType::BLOCK;
+    inv_item.hash = hash;
+    inv.items.push_back(inv_item);
+    auto inv_payload = inv.serialize();
 
     auto peer_ids = conn_manager_.get_peer_ids();
     int sent_count = 0;
@@ -1668,25 +1702,30 @@ void MsgProcessor::relay_block(const core::uint256& hash) {
         if (!peer) continue;
         if (!peer_state_is_operational(peer->state)) continue;
 
-        // Send the full block data.
-        auto block_copy = block_bytes;  // copy for each peer
-        send(pid, net::Message::create(commands::BLOCK,
-                                       std::move(block_copy)));
+        // Don't announce back to peers who already told us about this block.
+        if (peer_announced_blocks_.count(pid) &&
+            peer_announced_blocks_[pid].count(hash)) {
+            continue;
+        }
 
-        // Also send HEADERS so the peer updates its header chain
-        // (handle_block alone may not update best_header if the header
-        // wasn't previously known).
         if (peer->prefers_headers) {
+            // Send HEADERS — peer will accept the header, then GETDATA
+            // the full block if it wants it.
             auto hdr_copy = hdr_payload;
             send(pid, net::Message::create(commands::HEADERS,
                                            std::move(hdr_copy)));
+        } else {
+            // Send INV — peer will GETDATA if interested.
+            auto inv_copy = inv_payload;
+            send(pid, net::Message::create(commands::INV,
+                                           std::move(inv_copy)));
         }
 
         ++sent_count;
     }
 
     LOG_INFO(core::LogCategory::NET,
-             "Broadcasting block " + hash.to_hex().substr(0, 16) +
+             "Announced block " + hash.to_hex().substr(0, 16) +
              "... to " + std::to_string(sent_count) + " peers");
 }
 
