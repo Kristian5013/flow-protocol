@@ -512,6 +512,27 @@ RpcResponse rpc_submitwork(const RpcRequest& req,
     }
     lock.unlock();
 
+    // Reject stale work: if the template builds on a block that is no
+    // longer the chain tip, the miner is submitting outdated solutions.
+    // This prevents the node from wasting resources validating and storing
+    // blocks on abandoned forks, which can cause self-reorgs and network
+    // fragmentation when multiple stale blocks accumulate.
+    {
+        int current_height = chainstate.active_chain().height();
+        if (tmpl.height <= current_height) {
+            LOG_WARN(core::LogCategory::RPC,
+                     "submitwork: rejecting stale work at height " +
+                     std::to_string(tmpl.height) +
+                     " (current tip: " + std::to_string(current_height) + ")");
+            return make_error(RpcError::MISC_ERROR,
+                              "Stale work: template height " +
+                              std::to_string(tmpl.height) +
+                              " <= current height " +
+                              std::to_string(current_height) +
+                              ". Call getwork for fresh work.", req.id);
+        }
+    }
+
     tmpl.header.nonce = static_cast<uint32_t>(nonce);
     auto block = tmpl.to_block();
 
