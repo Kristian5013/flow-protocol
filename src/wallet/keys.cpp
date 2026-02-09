@@ -100,7 +100,7 @@ core::Result<std::string> KeyManager::generate_key() {
     return addr;
 }
 
-core::Result<std::string> KeyManager::import_key(std::string_view wif) {
+core::Result<std::string> KeyManager::import_key(std::string_view key_str) {
     std::lock_guard lock(mutex_);
 
     if (!db_) {
@@ -108,15 +108,24 @@ core::Result<std::string> KeyManager::import_key(std::string_view wif) {
                            "KeyManager not initialized");
     }
 
-    // Decode the WIF string.
-    auto secret_result = decode_wif(wif);
-    if (!secret_result.ok()) {
+    // Try WIF first, then raw hex (64 hex characters = 32 bytes).
+    std::array<uint8_t, 32> secret{};
+    auto secret_result = decode_wif(key_str);
+    if (secret_result.ok()) {
+        secret = secret_result.value();
+    } else if (key_str.size() == 64 && core::is_hex(std::string(key_str))) {
+        auto bytes = core::from_hex(std::string(key_str));
+        if (bytes && bytes->size() == 32) {
+            std::copy(bytes->begin(), bytes->end(), secret.begin());
+        } else {
+            return core::Error(core::ErrorCode::PARSE_BAD_FORMAT,
+                               "Invalid hex key");
+        }
+    } else {
         return core::Error(core::ErrorCode::PARSE_BAD_FORMAT,
-                           "Invalid WIF key: " +
+                           "Invalid private key (not WIF or 64-char hex): " +
                            secret_result.error().message());
     }
-
-    auto secret = secret_result.value();
 
     // Create the EC key from the secret.
     auto ec_result = crypto::ECKey::from_secret(
