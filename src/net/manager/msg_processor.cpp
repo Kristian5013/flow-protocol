@@ -363,6 +363,47 @@ void MsgProcessor::on_tick(int64_t now) {
             maybe_start_sync();
         }
     }
+
+    // ------------------------------------------------------------------
+    // 4. Block download catch-up: detect "headers ahead of blocks" state.
+    // ------------------------------------------------------------------
+    // If our best known header is ahead of the active chain tip and we have
+    // no blocks in flight, we are stuck -- headers were fetched but block
+    // downloads were never initiated or they stalled.  Pick the best peer
+    // and request the missing blocks.  Rate-limited to every 5 seconds.
+    static constexpr int64_t BLOCK_CATCHUP_INTERVAL = 5;  // seconds
+
+    if (blocks_in_flight_.empty() &&
+        (now - last_block_catchup_) >= BLOCK_CATCHUP_INTERVAL) {
+        auto* best_hdr = chainstate_.best_header();
+        auto* tip = chainstate_.active_chain().tip();
+
+        if (best_hdr && tip && best_hdr->chain_work > tip->chain_work) {
+            last_block_catchup_ = now;
+
+            LOG_INFO(core::LogCategory::NET,
+                     "Block catch-up: best_header h=" +
+                     std::to_string(best_hdr->height) +
+                     " tip h=" + std::to_string(tip->height) +
+                     " gap=" + std::to_string(best_hdr->height - tip->height));
+
+            // Pick the best operational peer.
+            uint64_t dl_peer = 0;
+            int dl_best_height = 0;
+            auto all_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : all_peers) {
+                Peer* p = conn_manager_.get_peer(pid);
+                if (!p || !peer_state_is_operational(p->state)) continue;
+                if (p->start_height > dl_best_height) {
+                    dl_best_height = p->start_height;
+                    dl_peer = pid;
+                }
+            }
+            if (dl_peer != 0) {
+                request_blocks(dl_peer);
+            }
+        }
+    }
 }
 
 // ===========================================================================
@@ -839,22 +880,36 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
                  std::to_string(peer_id) +
                  ", sending GETHEADERS to sync");
         send_getheaders(peer_id);
-        return;
+        // Don't return -- fall through to check if we need block downloads.
+        // We may have headers from a previous sync that need block data.
     }
 
-    // If we received fewer than a full batch, headers sync is up to date.
-    // Try to activate the best chain and request block data.
-    if (count < MAX_HEADERS) {
-        auto activate_result = chainstate_.activate_best_chain();
-        if (activate_result.ok() && activate_result.value()) {
-            LOG_INFO(core::LogCategory::NET, "Chain tip updated");
-        }
+    // If we received fewer than a full batch, headers sync is complete.
+    // Clear the sync peer so future maybe_start_sync() can pick a new one.
+    if (count < MAX_HEADERS && peer_id == sync_peer_id_) {
+        LOG_INFO(core::LogCategory::NET,
+                 "Headers sync complete with peer " +
+                 std::to_string(sync_peer_id_));
+        sync_peer_id_ = 0;
+    }
 
-        // Request block data for any headers we accepted but don't have
-        // full block data for.
-        if (accepted > 0) {
-            request_blocks(peer_id);
-        }
+    // Try to activate the best chain and request block data.
+    // This runs for EVERY headers response (not just partial batches)
+    // so that block downloads are pipelined with header downloads.
+    auto activate_result = chainstate_.activate_best_chain();
+    if (activate_result.ok() && activate_result.value()) {
+        LOG_INFO(core::LogCategory::NET, "Chain tip updated");
+    }
+
+    // Request block data if our best header is ahead of our active tip.
+    // This covers:
+    //   - Normal headers-first sync (accepted > 0)
+    //   - Resumed sync after discovering headers are already known
+    //   - Pipelined block download during multi-batch header sync
+    auto* best_hdr = chainstate_.best_header();
+    auto* tip = chainstate_.active_chain().tip();
+    if (best_hdr && tip && best_hdr->chain_work > tip->chain_work) {
+        request_blocks(peer_id);
     }
 }
 
