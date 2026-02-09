@@ -963,7 +963,11 @@ BlockIndex* ChainstateManager::add_to_block_index(
 // ===========================================================================
 
 BlockIndex* ChainstateManager::find_best_candidate() const {
-    BlockIndex* best = nullptr;
+    // Start with the current tip as the default best candidate.
+    // This ensures that when two chains have EQUAL chainwork (e.g. two
+    // competing blocks at the same height), the existing active chain
+    // wins the tiebreaker and no unnecessary reorg occurs.
+    BlockIndex* best = active_chain_.tip();
 
     for (const auto& [hash, index] : block_index_) {
         BlockIndex* bi = index.get();
