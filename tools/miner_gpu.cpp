@@ -611,9 +611,14 @@ int main(int argc, char* argv[]) {
         // 3. GPU mining loop: dispatch batches of nonces
         // ---------------------------------------------------------------
         for (uint32_t base_nonce = 0; !g_stop && !found; ) {
-            // Compute actual batch size (don't overflow past UINT32_MAX)
-            uint32_t remaining = UINT32_MAX - base_nonce;
-            uint32_t this_batch = std::min(batch_size, remaining);
+            // Compute actual batch size using 64-bit to avoid overflow.
+            // remaining64 = number of nonces left (including base_nonce).
+            uint64_t remaining64 =
+                static_cast<uint64_t>(UINT32_MAX) - base_nonce + 1;
+            if (remaining64 == 0) break;  // Full nonce space exhausted
+            uint32_t this_batch = static_cast<uint32_t>(
+                std::min(static_cast<uint64_t>(batch_size), remaining64));
+            if (this_batch == 0) break;
 
             auto results = miner.mine_batch(base_nonce, this_batch);
             block_hashes += this_batch;
@@ -639,9 +644,10 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // Advance base nonce
-            if (base_nonce > UINT32_MAX - this_batch) break;
-            base_nonce += this_batch;
+            // Advance base nonce (64-bit to detect overflow)
+            uint64_t next = static_cast<uint64_t>(base_nonce) + this_batch;
+            if (next > UINT32_MAX) break;
+            base_nonce = static_cast<uint32_t>(next);
 
             // Update progress
             auto now = std::chrono::steady_clock::now();
