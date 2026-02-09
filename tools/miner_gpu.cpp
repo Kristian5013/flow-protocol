@@ -96,6 +96,8 @@ void init() {
 static std::string g_rpc_user;
 static std::string g_rpc_pass;
 static std::atomic<bool> g_stop{false};
+static std::atomic<int64_t> g_chain_height{0};  // updated by poll thread
+static std::atomic<bool> g_work_stale{false};    // set when height changes
 
 #ifdef _WIN32
 static BOOL WINAPI console_handler(DWORD signal) {
@@ -290,6 +292,30 @@ static std::string rpc_call(const std::string& host, uint16_t port,
     std::string body = "{\"jsonrpc\":\"1.0\",\"id\":1,\"method\":\"" +
                        method + "\",\"params\":" + params_json + "}";
     return http_post(host, port, body);
+}
+
+// ---------------------------------------------------------------------------
+// Background height poller — detects new blocks on the chain
+// ---------------------------------------------------------------------------
+static void height_poll_thread(const std::string& host, uint16_t port) {
+    while (!g_stop) {
+        std::string resp = rpc_call(host, port, "getblockcount", "[]");
+        if (!resp.empty()) {
+            try {
+                auto json = rpc::parse_json(resp);
+                if (json["result"].is_int()) {
+                    int64_t h = json["result"].get_int();
+                    int64_t prev = g_chain_height.exchange(h);
+                    if (prev > 0 && h > prev) {
+                        g_work_stale = true;
+                    }
+                }
+            } catch (...) {}
+        }
+        // Poll every 500ms — fast enough to catch new blocks promptly.
+        for (int i = 0; i < 5 && !g_stop; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +556,12 @@ int main(int argc, char* argv[]) {
     auto session_start = std::chrono::steady_clock::now();
     uint64_t session_hashes = 0;
 
+    // Start background height poller to detect new blocks on the network.
+    std::thread poller(height_poll_thread, rpc_host, rpc_port);
+
     while (!g_stop) {
+        // Reset stale flag at the start of each work cycle.
+        g_work_stale = false;
         // ---------------------------------------------------------------
         // 1. Fetch work from node
         // ---------------------------------------------------------------
@@ -610,7 +641,10 @@ int main(int argc, char* argv[]) {
         // ---------------------------------------------------------------
         // 3. GPU mining loop: dispatch batches of nonces
         // ---------------------------------------------------------------
-        for (uint32_t base_nonce = 0; !g_stop && !found; ) {
+        // Update chain height from this work response.
+        g_chain_height = height;
+
+        for (uint32_t base_nonce = 0; !g_stop && !found && !g_work_stale; ) {
             // Compute actual batch size using 64-bit to avoid overflow.
             // remaining64 = number of nonces left (including base_nonce).
             uint64_t remaining64 =
@@ -680,10 +714,18 @@ int main(int argc, char* argv[]) {
 
         if (!found) {
             if (g_stop) break;
-            std::cout << "  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::yellow()
-                      << "Nonce space exhausted, fetching new work..."
-                      << color::reset() << std::endl;
+            if (g_work_stale) {
+                std::cout << "  " << color::dim() << "[" << current_timestamp()
+                          << "]" << color::reset() << " " << color::yellow()
+                          << "New block detected (height "
+                          << g_chain_height.load() << "), switching to fresh work..."
+                          << color::reset() << std::endl;
+            } else {
+                std::cout << "  " << color::dim() << "[" << current_timestamp()
+                          << "]" << color::reset() << " " << color::yellow()
+                          << "Nonce space exhausted, fetching new work..."
+                          << color::reset() << std::endl;
+            }
             continue;
         }
 
@@ -754,6 +796,10 @@ int main(int argc, char* argv[]) {
                       << color::reset() << std::endl;
         }
     }
+
+    // Stop the height poller thread.
+    g_stop = true;
+    if (poller.joinable()) poller.join();
 
     // ---------------------------------------------------------------
     // Session summary
