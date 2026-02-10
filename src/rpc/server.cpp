@@ -251,6 +251,29 @@ void RpcServer::accept_loop(std::stop_token stoken) {
             break;
         }
 
+        // Per-IP rate limiting
+        {
+            uint32_t ip = ntohl(client_addr.sin_addr.s_addr);
+            int64_t now = core::get_time();
+            auto& bucket = rate_map_[ip];
+            if (bucket.window_start != now) {
+                bucket.window_start = now;
+                bucket.count = 1;
+            } else if (++bucket.count > RATE_LIMIT) {
+                CLOSE_SOCKET(client);
+                continue;
+            }
+            // Prune stale entries every 256 accepts
+            if ((rate_map_.size() > 256) && (now % 10 == 0)) {
+                for (auto it = rate_map_.begin(); it != rate_map_.end();) {
+                    if (now - it->second.window_start > 60)
+                        it = rate_map_.erase(it);
+                    else
+                        ++it;
+                }
+            }
+        }
+
         // Set receive timeout (5 seconds — short enough for clean shutdown)
 #ifdef _WIN32
         DWORD timeout = 5000;

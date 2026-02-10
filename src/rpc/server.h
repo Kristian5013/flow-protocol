@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace rpc {
@@ -120,6 +121,14 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> winsock_initialized_{false};
+
+    // Per-IP rate limiting
+    struct IpBucket {
+        int64_t window_start = 0;  // seconds
+        int     count        = 0;
+    };
+    std::unordered_map<uint32_t, IpBucket> rate_map_;
+    static constexpr int RATE_LIMIT = 10; // max requests per second per IP
 
     // -- Internal methods ---------------------------------------------------
 
