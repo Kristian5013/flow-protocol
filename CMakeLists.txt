@@ -61,6 +61,9 @@ target_link_libraries(ftcd PRIVATE
     ftc_crypto ftc_core
     OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${PLATFORM_LIBS}
 )
+if(MINGW)
+    target_link_options(ftcd PRIVATE -static)
+endif()
 
 if(BUILD_TESTS)
     enable_testing()
