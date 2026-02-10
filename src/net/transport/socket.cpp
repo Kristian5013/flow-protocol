@@ -839,6 +839,14 @@ void Socket::close() {
     if (is_open()) {
         LOG_TRACE(core::LogCategory::NET,
                   "closing socket fd=" + std::to_string(fd_));
+        // Shutdown both directions first to unblock any recv()/send()
+        // on other threads.  Without this, close() on Linux may not
+        // wake a thread blocked in recv(), causing join() to hang.
+#ifdef _WIN32
+        ::shutdown(static_cast<SOCKET>(fd_), SD_BOTH);
+#else
+        ::shutdown(static_cast<int>(fd_), SHUT_RDWR);
+#endif
         closesocket(static_cast<SOCKET>(fd_));
         fd_ = ~uintptr_t(0);
     }
