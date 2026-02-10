@@ -500,6 +500,22 @@ void MsgProcessor::handle_verack(uint64_t peer_id) {
         // Send a PING to establish baseline latency.
         send_ping(peer_id);
 
+        // If this inbound peer claims a higher chain than ours, request
+        // headers from them so we can learn about blocks they have mined.
+        // maybe_start_sync() only considers outbound peers, so inbound
+        // miners would never propagate their blocks to seed nodes without
+        // this explicit request.
+        int our_height = chainstate_.active_chain().height();
+        if (peer->inbound && peer->start_height > our_height) {
+            LOG_INFO(core::LogCategory::NET,
+                     "Inbound peer " + std::to_string(peer_id) +
+                     " has higher chain (height=" +
+                     std::to_string(peer->start_height) +
+                     " vs our " + std::to_string(our_height) +
+                     "), requesting headers");
+            send_getheaders(peer_id);
+        }
+
         // Consider this peer for header sync.
         maybe_start_sync();
     }
@@ -1564,15 +1580,29 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     bool downloading_fork = (start_height <= active_chain.height());
 
     if (!downloading_fork) {
-        // Linear extension — pick the outbound peer with the highest
-        // start_height.  Never download from inbound user nodes.
+        // Linear extension — prefer outbound peers, but fall back to
+        // any operational peer (including inbound) that claims higher height.
+        // This allows seed nodes to accept blocks from inbound miners.
         int best_height = 0;
+        // First pass: outbound peers (preferred).
         for (uint64_t pid : get_outbound_peers()) {
             Peer* p = conn_manager_.get_peer(pid);
             if (!p) continue;
             if (p->start_height > best_height) {
                 best_height = p->start_height;
                 best_peer = pid;
+            }
+        }
+        // Second pass: if no outbound peer has what we need, try inbound.
+        if (best_height < start_height) {
+            auto all_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : all_peers) {
+                Peer* p = conn_manager_.get_peer(pid);
+                if (!p || !peer_state_is_operational(p->state)) continue;
+                if (p->start_height > best_height) {
+                    best_height = p->start_height;
+                    best_peer = pid;
+                }
             }
         }
     }
