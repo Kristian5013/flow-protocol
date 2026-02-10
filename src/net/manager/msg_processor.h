@@ -109,8 +109,13 @@ private:
     // avoid duplicate requests and relays.
     std::unordered_set<core::uint256> known_blocks_;
     std::unordered_set<core::uint256> known_txs_;
-    std::unordered_set<core::uint256> blocks_in_flight_;
-    std::unordered_map<core::uint256, uint64_t> block_request_peer_;
+
+    /// In-flight block download tracking (single map replaces three).
+    struct BlockRequest {
+        uint64_t peer_id;
+        int64_t  request_time;
+    };
+    std::unordered_map<core::uint256, BlockRequest> block_requests_;
 
     // Per-peer sets of inventory items they have announced to us.
     std::unordered_map<uint64_t, std::unordered_set<core::uint256>>
@@ -126,9 +131,6 @@ private:
     int64_t last_stale_check_ = 0;
     int64_t last_header_probe_ = 0;
     int64_t last_block_catchup_ = 0;
-
-    // Per-block request timestamps (for stalling detection).
-    std::unordered_map<core::uint256, int64_t> block_request_time_;
 
     // Last header hash received from each peer.  Used in GETHEADERS locators
     // so that a peer sending fork-chain headers can continue from where it
@@ -167,6 +169,16 @@ private:
 
     /// Request block data for known headers that we have not yet downloaded.
     void request_blocks(uint64_t peer_id);
+
+    /// Return peer IDs of operational outbound peers (never inbound).
+    std::vector<uint64_t> get_outbound_peers() const;
+
+    /// Remove a block from in-flight tracking.  Returns the peer that
+    /// was requesting it (0 if not found).
+    uint64_t cancel_block_request(const core::uint256& hash);
+
+    /// Check if a block is currently being downloaded.
+    bool is_block_in_flight(const core::uint256& hash) const;
 
     // -- Relay helpers -------------------------------------------------------
 

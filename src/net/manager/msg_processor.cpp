@@ -80,29 +80,23 @@ void MsgProcessor::on_peer_disconnected(uint64_t peer_id) {
 
     // Clean up any in-flight block requests from this peer.
     std::vector<core::uint256> to_remove;
-    for (const auto& [hash, requesting_peer] : block_request_peer_) {
-        if (requesting_peer == peer_id) {
+    for (const auto& [hash, req] : block_requests_) {
+        if (req.peer_id == peer_id) {
             to_remove.push_back(hash);
         }
     }
     for (const auto& hash : to_remove) {
-        blocks_in_flight_.erase(hash);
-        block_request_peer_.erase(hash);
-        block_request_time_.erase(hash);
+        cancel_block_request(hash);
     }
 
-    // If blocks were freed, try to re-request from another peer.
+    // If blocks were freed, try to re-request from an outbound peer.
     if (!to_remove.empty()) {
         auto* best_hdr = chainstate_.best_header();
         auto* tip = chainstate_.active_chain().tip();
         if (best_hdr && tip && best_hdr != tip &&
             best_hdr->chain_work >= tip->chain_work) {
-            auto remaining_peers = conn_manager_.get_peer_ids();
-            for (uint64_t pid : remaining_peers) {
-                Peer* p = conn_manager_.get_peer(pid);
-                if (!p || !peer_state_is_operational(p->state)) continue;
+            for (uint64_t pid : get_outbound_peers()) {
                 request_blocks(pid);
-                break;
             }
         }
     }
@@ -324,21 +318,13 @@ void MsgProcessor::on_tick(int64_t now) {
     // ------------------------------------------------------------------
     // 2b. Periodic header probe — discover competing chains.
     // ------------------------------------------------------------------
-    // Mining nodes constantly update last_tip_update_ with their own
-    // blocks, so stale-tip detection never fires.  To ensure we always
-    // learn about longer chains from peers, periodically send GETHEADERS
-    // to ALL operational peers.  This is cheap (just a locator message)
-    // and guarantees fast header discovery regardless of which peer has
-    // new blocks.
+    // Only probe OUTBOUND peers.  Inbound peers are user nodes syncing
+    // FROM us — we should never try to sync from them.  This mirrors
+    // Bitcoin Core's approach where sync is driven by outbound connections.
     static constexpr int64_t FAST_HEADER_PROBE = 15;  // seconds
     if ((now - last_header_probe_) >= FAST_HEADER_PROBE) {
         last_header_probe_ = now;
-
-        auto peer_ids = conn_manager_.get_peer_ids();
-        for (uint64_t pid : peer_ids) {
-            Peer* peer = conn_manager_.get_peer(pid);
-            if (!peer) continue;
-            if (!peer_state_is_operational(peer->state)) continue;
+        for (uint64_t pid : get_outbound_peers()) {
             send_getheaders(pid);
         }
     }
@@ -346,38 +332,23 @@ void MsgProcessor::on_tick(int64_t now) {
     // ------------------------------------------------------------------
     // 3. Block download timeout — per-block stalling detection.
     // ------------------------------------------------------------------
-    // Check each in-flight block individually.  If a block has been
-    // pending longer than BLOCK_DOWNLOAD_TIMEOUT, remove it and free
-    // the slot so catch-up logic can retry from a different peer.
     {
         std::vector<core::uint256> timed_out;
-        for (const auto& [hash, req_time] : block_request_time_) {
-            if ((now - req_time) > BLOCK_DOWNLOAD_TIMEOUT) {
+        for (const auto& [hash, req] : block_requests_) {
+            if ((now - req.request_time) > BLOCK_DOWNLOAD_TIMEOUT) {
                 timed_out.push_back(hash);
             }
         }
         if (!timed_out.empty()) {
             LOG_INFO(core::LogCategory::NET,
                      "Clearing " + std::to_string(timed_out.size()) +
-                     " stale block requests (timeout), " +
-                     std::to_string(blocks_in_flight_.size()) +
-                     " still in flight");
+                     " stale block requests (timeout)");
             for (const auto& hash : timed_out) {
-                blocks_in_flight_.erase(hash);
-                block_request_peer_.erase(hash);
-                block_request_time_.erase(hash);
+                cancel_block_request(hash);
             }
-            // Always reset sync peer so catch-up can pick a fresh one.
-            // Previously this only fired when ALL blocks were cleared,
-            // causing stalls when some blocks timed out but others didn't.
             sync_peer_id_ = 0;
 
-            // Immediately retry with all operational peers instead of
-            // waiting for the next catch-up tick.
-            auto all_peers = conn_manager_.get_peer_ids();
-            for (uint64_t pid : all_peers) {
-                Peer* p = conn_manager_.get_peer(pid);
-                if (!p || !peer_state_is_operational(p->state)) continue;
+            for (uint64_t pid : get_outbound_peers()) {
                 request_blocks(pid);
             }
         }
@@ -386,10 +357,6 @@ void MsgProcessor::on_tick(int64_t now) {
     // ------------------------------------------------------------------
     // 4. Block download catch-up.
     // ------------------------------------------------------------------
-    // If our best header is ahead of our tip, aggressively request
-    // blocks.  request_blocks() already skips blocks that are in-flight,
-    // so we don't gate on blocks_in_flight_.empty() — that caused stalls
-    // when even one request was pending from a slow/dead peer.
     static constexpr int64_t BLOCK_CATCHUP_INTERVAL = 3;  // seconds
 
     if ((now - last_block_catchup_) >= BLOCK_CATCHUP_INTERVAL) {
@@ -405,28 +372,18 @@ void MsgProcessor::on_tick(int64_t now) {
                      std::to_string(best_hdr->height) +
                      " tip h=" + std::to_string(tip->height) +
                      " in_flight=" +
-                     std::to_string(blocks_in_flight_.size()));
+                     std::to_string(block_requests_.size()));
 
-            // Try requesting from each operational peer until we get
-            // some blocks queued.
-            auto all_peers = conn_manager_.get_peer_ids();
-            for (uint64_t pid : all_peers) {
-                Peer* p = conn_manager_.get_peer(pid);
-                if (!p || !peer_state_is_operational(p->state)) continue;
+            for (uint64_t pid : get_outbound_peers()) {
                 request_blocks(pid);
             }
         }
 
-        // If we think we're synced but a peer might have newer blocks,
-        // send GETHEADERS to discover them.  This replaces reliance on
-        // the stale start_height from VERSION handshake.
+        // If synced, probe one outbound peer for new headers.
         if (best_hdr && tip && best_hdr == tip) {
-            auto all_peers = conn_manager_.get_peer_ids();
-            for (uint64_t pid : all_peers) {
-                Peer* p = conn_manager_.get_peer(pid);
-                if (!p || !peer_state_is_operational(p->state)) continue;
-                send_getheaders(pid);
-                break;  // one peer per tick is enough
+            auto outbound = get_outbound_peers();
+            if (!outbound.empty()) {
+                send_getheaders(outbound.front());
             }
         }
     }
@@ -703,7 +660,7 @@ void MsgProcessor::handle_inv(uint64_t peer_id,
 
             // Check if we already have or are requesting this block.
             if (known_blocks_.count(item.hash) == 0 &&
-                blocks_in_flight_.count(item.hash) == 0) {
+                !is_block_in_flight(item.hash)) {
                 // Check if we have this block in our index.
                 auto* block_index = chainstate_.lookup_block_index(item.hash);
                 if (block_index == nullptr || !block_index->has_data()) {
@@ -742,9 +699,7 @@ void MsgProcessor::handle_inv(uint64_t peer_id,
         for (const auto& item : getdata.items) {
             if (item.type == net::protocol::InvType::BLOCK ||
                 item.type == net::protocol::InvType::WITNESS_BLOCK) {
-                blocks_in_flight_.insert(item.hash);
-                block_request_peer_[item.hash] = peer_id;
-                block_request_time_[item.hash] = req_time;
+                block_requests_[item.hash] = {peer_id, req_time};
             }
         }
         last_block_request_ = req_time;
@@ -907,7 +862,11 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
              std::to_string(new_headers) + " new) from peer " +
              std::to_string(peer_id));
 
-    last_tip_update_ = core::get_time();
+    // Only reset stale-tip timer when genuinely new data arrives.
+    // Empty responses from syncing peers must not suppress stale detection.
+    if (new_headers > 0) {
+        last_tip_update_ = core::get_time();
+    }
 
     // If we received a full batch of headers, request more.
     if (count == MAX_HEADERS && peer_id == sync_peer_id_) {
@@ -983,31 +942,24 @@ void MsgProcessor::handle_block(uint64_t peer_id,
              " txs) from peer " + std::to_string(peer_id));
 
     // Remove from in-flight tracking.
-    blocks_in_flight_.erase(block_hash);
-    block_request_peer_.erase(block_hash);
-    block_request_time_.erase(block_hash);
+    cancel_block_request(block_hash);
     known_blocks_.insert(block_hash);
 
     // Accept the block into chainstate.
     bool block_accepted = false;
     auto accept_result = chainstate_.accept_block(block);
     if (!accept_result.ok()) {
-        const auto& msg = accept_result.error().message();
-
-        // "previous block not found" is not misbehavior -- the block
-        // arrived before we finished syncing (orphan block).  Don't
-        // penalize, but DO fall through to request more blocks so the
-        // pipeline doesn't stall.
-        if (msg.find("previous block not found") != std::string::npos) {
+        // Orphan block (parent not yet synced) is not misbehavior.
+        // Fall through to request more blocks so the pipeline continues.
+        if (accept_result.error().code() == core::ErrorCode::VALIDATION_ORPHAN) {
             LOG_DEBUG(core::LogCategory::NET,
                       "Orphan block " + block_hash.to_hex().substr(0, 16) +
                       "... from peer " + std::to_string(peer_id) +
                       " (parent not yet synced)");
-            // Fall through — block_accepted stays false.
         } else {
             LOG_WARN(core::LogCategory::NET,
                      "Block " + block_hash.to_hex().substr(0, 16) +
-                     "... rejected: " + msg);
+                     "... rejected: " + accept_result.error().message());
 
             if (accept_result.error().code() ==
                 core::ErrorCode::VALIDATION_ERROR) {
@@ -1020,7 +972,6 @@ void MsgProcessor::handle_block(uint64_t peer_id,
     }
 
     if (block_accepted) {
-        // Try to activate the best chain with the new block.
         auto activate_result = chainstate_.activate_best_chain();
         if (activate_result.ok() && activate_result.value()) {
             auto* tip = chainstate_.active_chain().tip();
@@ -1031,31 +982,23 @@ void MsgProcessor::handle_block(uint64_t peer_id,
                          " hash=" + tip->block_hash.to_hex().substr(0, 16) +
                          "...");
 
-                // Periodically flush to disk (every 100 blocks during sync,
-                // or every block if chain is nearly synced).
-                if (tip->height % 100 == 0 ||
-                    blocks_in_flight_.empty()) {
+                if (tip->height % 100 == 0 || block_requests_.empty()) {
                     chainstate_.flush();
                 }
             }
             last_tip_update_ = core::get_time();
-
-            // Relay the new block to other peers.
             relay_block(block_hash);
         }
     }
 
-    // Request more blocks if we have pending headers or if
-    // best_header is ahead of our active tip (fork to download).
-    // This runs for BOTH accepted and orphan blocks to keep the
-    // download pipeline moving.
+    // Request more blocks — runs for both accepted and orphan blocks.
     {
         auto* best_hdr = chainstate_.best_header();
         auto* tip = chainstate_.active_chain().tip();
         bool more_to_download = best_hdr && tip && best_hdr != tip &&
             best_hdr->chain_work >= tip->chain_work;
 
-        if (!blocks_in_flight_.empty() || sync_peer_id_ == peer_id ||
+        if (!block_requests_.empty() || sync_peer_id_ == peer_id ||
             more_to_download) {
             request_blocks(peer_id);
         }
@@ -1411,31 +1354,23 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
     for (const auto& item : msg.items) {
         if (item.type == net::protocol::InvType::BLOCK ||
             item.type == net::protocol::InvType::WITNESS_BLOCK) {
-            auto it = block_request_peer_.find(item.hash);
-            if (it != block_request_peer_.end() &&
-                it->second == peer_id) {
-                blocks_in_flight_.erase(item.hash);
-                block_request_peer_.erase(it);
-                block_request_time_.erase(item.hash);
+            auto it = block_requests_.find(item.hash);
+            if (it != block_requests_.end() &&
+                it->second.peer_id == peer_id) {
+                cancel_block_request(item.hash);
                 had_block_notfound = true;
             }
         }
     }
 
-    // If blocks were removed from in-flight, retry with a different peer.
-    // This handles the case where we asked the wrong peer for fork blocks.
+    // Retry with a different outbound peer.
     if (had_block_notfound) {
         auto* best_hdr = chainstate_.best_header();
         auto* tip = chainstate_.active_chain().tip();
         if (best_hdr && tip && best_hdr != tip &&
             best_hdr->chain_work >= tip->chain_work) {
-            // Find a peer who might have these blocks (different from
-            // the peer that just responded NOTFOUND).
-            auto all_peers = conn_manager_.get_peer_ids();
-            for (uint64_t pid : all_peers) {
+            for (uint64_t pid : get_outbound_peers()) {
                 if (pid == peer_id) continue;
-                Peer* p = conn_manager_.get_peer(pid);
-                if (!p || !peer_state_is_operational(p->state)) continue;
                 LOG_INFO(core::LogCategory::NET,
                          "NOTFOUND retry: requesting blocks from peer " +
                          std::to_string(pid));
@@ -1461,49 +1396,37 @@ void MsgProcessor::maybe_start_sync() {
         }
     }
 
-    // Select the best peer for syncing.  Prefer outbound peers with the
-    // highest reported start_height.  If no suitable outbound peer exists,
-    // fall back to the best inbound peer -- this is critical for nodes
-    // running with -connect where the outbound connection may drop while
-    // the remote connects inbound.
+    // Select the best OUTBOUND peer for syncing.  Never sync from
+    // inbound peers — they are user nodes downloading from us.
+    // This prevents syncing noise from random inbound connections.
     uint64_t best_peer = 0;
     int32_t best_height = 0;
-    uint64_t any_peer = 0;
-    uint64_t best_inbound = 0;
-    int32_t best_inbound_height = 0;
+    uint64_t any_outbound = 0;
 
     auto peer_ids = conn_manager_.get_peer_ids();
     for (uint64_t pid : peer_ids) {
         Peer* peer = conn_manager_.get_peer(pid);
         if (!peer) continue;
+        if (peer->inbound) continue;  // Skip all inbound peers
         if (!peer_state_is_operational(peer->state)) continue;
 
-        if (any_peer == 0) {
-            any_peer = pid;
+        if (any_outbound == 0) {
+            any_outbound = pid;
         }
-        if (!peer->inbound && peer->start_height > best_height) {
+        if (peer->start_height > best_height) {
             best_height = peer->start_height;
             best_peer = pid;
-        }
-        if (peer->inbound && peer->start_height > best_inbound_height) {
-            best_inbound_height = peer->start_height;
-            best_inbound = pid;
         }
     }
 
     int our_height = chainstate_.active_chain().height();
 
-    // Prefer an outbound peer that claims to have more blocks.
     if (best_peer != 0 && best_height > our_height) {
-        // Use best outbound peer.
-    } else if (best_inbound != 0 && best_inbound_height > our_height) {
-        // Fallback: inbound peer with higher chain.
-        best_peer = best_inbound;
-        best_height = best_inbound_height;
-    } else if (any_peer != 0) {
-        // No peer claims higher height, but send GETHEADERS anyway
-        // to discover blocks mined after the VERSION handshake.
-        best_peer = any_peer;
+        // Use best outbound peer that claims more blocks.
+    } else if (any_outbound != 0) {
+        // No outbound peer claims higher height, but send GETHEADERS
+        // anyway to discover blocks mined after the VERSION handshake.
+        best_peer = any_outbound;
     } else {
         return;
     }
@@ -1641,21 +1564,15 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     bool downloading_fork = (start_height <= active_chain.height());
 
     if (!downloading_fork) {
-        // Linear extension of same chain — pick the peer with the
-        // highest start_height (most likely to have the blocks).
+        // Linear extension — pick the outbound peer with the highest
+        // start_height.  Never download from inbound user nodes.
         int best_height = 0;
-        bool best_is_outbound = false;
-        auto peer_ids = conn_manager_.get_peer_ids();
-        for (uint64_t pid : peer_ids) {
+        for (uint64_t pid : get_outbound_peers()) {
             Peer* p = conn_manager_.get_peer(pid);
-            if (!p || !peer_state_is_operational(p->state)) continue;
-            bool is_outbound = !p->inbound;
-            int sh = p->start_height;
-            if (sh > best_height ||
-                (sh == best_height && is_outbound && !best_is_outbound)) {
-                best_height = sh;
+            if (!p) continue;
+            if (p->start_height > best_height) {
+                best_height = p->start_height;
                 best_peer = pid;
-                best_is_outbound = is_outbound;
             }
         }
     }
@@ -1678,20 +1595,16 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
         }
 
         if (!index->has_data()) {
-            bool already_in_flight =
-                blocks_in_flight_.count(index->block_hash) != 0;
+            bool already_in_flight = is_block_in_flight(index->block_hash);
 
-            // Allow re-requesting a block from a DIFFERENT peer if it
-            // has been in-flight for over half the timeout (stale request).
+            // Re-request from a DIFFERENT peer if stale (> half timeout).
             bool stale_request = false;
             if (already_in_flight) {
-                auto time_it = block_request_time_.find(index->block_hash);
-                auto peer_it = block_request_peer_.find(index->block_hash);
-                if (time_it != block_request_time_.end() &&
-                    peer_it != block_request_peer_.end()) {
-                    int64_t elapsed = core::get_time() - time_it->second;
+                auto it = block_requests_.find(index->block_hash);
+                if (it != block_requests_.end()) {
+                    int64_t elapsed = core::get_time() - it->second.request_time;
                     if (elapsed > BLOCK_DOWNLOAD_TIMEOUT / 2 &&
-                        peer_it->second != best_peer) {
+                        it->second.peer_id != best_peer) {
                         stale_request = true;
                     }
                 }
@@ -1700,8 +1613,8 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
             if (!already_in_flight || stale_request) {
                 // Enforce per-peer in-flight limit.
                 int peer_in_flight = 0;
-                for (const auto& [bh, pid] : block_request_peer_) {
-                    if (pid == best_peer) ++peer_in_flight;
+                for (const auto& [bh, req] : block_requests_) {
+                    if (req.peer_id == best_peer) ++peer_in_flight;
                 }
                 if (peer_in_flight >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) break;
 
@@ -1710,9 +1623,7 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
                 item.hash = index->block_hash;
                 to_request.push_back(item);
 
-                blocks_in_flight_.insert(index->block_hash);
-                block_request_peer_[index->block_hash] = best_peer;
-                block_request_time_[index->block_hash] = core::get_time();
+                block_requests_[index->block_hash] = {best_peer, core::get_time()};
             }
         }
     }
@@ -1736,11 +1647,38 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
                  " from peer " + std::to_string(best_peer) +
                  (downloading_fork ? " (fork download)" : ""));
     } else {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "request_blocks: nothing to request"
                  " (in_flight=" +
-                 std::to_string(blocks_in_flight_.size()) + ")");
+                 std::to_string(block_requests_.size()) + ")");
     }
+}
+
+// ===========================================================================
+// Block request helpers
+// ===========================================================================
+
+std::vector<uint64_t> MsgProcessor::get_outbound_peers() const {
+    std::vector<uint64_t> result;
+    auto peer_ids = conn_manager_.get_peer_ids();
+    for (uint64_t pid : peer_ids) {
+        const Peer* p = conn_manager_.get_peer(pid);
+        if (!p || p->inbound || !peer_state_is_operational(p->state)) continue;
+        result.push_back(pid);
+    }
+    return result;
+}
+
+uint64_t MsgProcessor::cancel_block_request(const core::uint256& hash) {
+    auto it = block_requests_.find(hash);
+    if (it == block_requests_.end()) return 0;
+    uint64_t peer_id = it->second.peer_id;
+    block_requests_.erase(it);
+    return peer_id;
+}
+
+bool MsgProcessor::is_block_in_flight(const core::uint256& hash) const {
+    return block_requests_.count(hash) != 0;
 }
 
 // ===========================================================================
