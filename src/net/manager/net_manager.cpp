@@ -305,13 +305,19 @@ void NetManager::event_loop(std::stop_token stoken) {
             msg_processor_->on_tick(now);
 
             // DNS seed lookup after a short delay to allow explicit peers
-            // to connect first.
-            if (!dns_seed_done && config_.dns_seed &&
-                (now - start_time) >= DNS_SEED_DELAY) {
-                dns_seed_done = true;
-
-                // Only do DNS seeding if we have very few peers.
-                if (conn_manager_->peer_count() < 2) {
+            // to connect first.  Also re-seed if we have zero outbound
+            // connections (node is isolated and needs new peers).
+            if (config_.dns_seed && (now - start_time) >= DNS_SEED_DELAY) {
+                if (!dns_seed_done) {
+                    dns_seed_done = true;
+                    if (conn_manager_->peer_count() < 2) {
+                        dns_seed_lookup();
+                    }
+                } else if (conn_manager_->outbound_count() == 0 &&
+                           (now - last_dns_reseed_) >= DNS_RESEED_INTERVAL) {
+                    last_dns_reseed_ = now;
+                    LOG_INFO(core::LogCategory::NET,
+                             "No outbound peers — re-querying DNS seeds");
                     dns_seed_lookup();
                 }
             }

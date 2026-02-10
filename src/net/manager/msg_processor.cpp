@@ -301,14 +301,24 @@ void MsgProcessor::on_tick(int64_t now) {
 
         if (tip != nullptr) {
             int64_t tip_time = static_cast<int64_t>(tip->time);
-            if ((now - tip_time) > STALE_TIP_THRESHOLD &&
-                conn_manager_.outbound_count() > 0) {
-                // Our tip is stale -- try to sync with a different peer.
+            if ((now - tip_time) > STALE_TIP_THRESHOLD) {
                 LOG_INFO(core::LogCategory::NET,
                          "Stale tip detected (tip time " +
                          core::format_iso8601(tip_time) +
                          "), attempting resync");
                 maybe_start_sync();
+
+                // If no outbound peers, probe ALL connected peers
+                // for headers — inbound peers may have newer blocks.
+                if (conn_manager_.outbound_count() == 0) {
+                    auto all_peers = conn_manager_.get_peer_ids();
+                    for (uint64_t pid : all_peers) {
+                        Peer* p = conn_manager_.get_peer(pid);
+                        if (p && peer_state_is_operational(p->state)) {
+                            send_getheaders(pid);
+                        }
+                    }
+                }
             }
         }
     }
@@ -316,14 +326,25 @@ void MsgProcessor::on_tick(int64_t now) {
     // ------------------------------------------------------------------
     // 2b. Periodic header probe — discover competing chains.
     // ------------------------------------------------------------------
-    // Only probe OUTBOUND peers.  Inbound peers are user nodes syncing
-    // FROM us — we should never try to sync from them.  This mirrors
-    // Bitcoin Core's approach where sync is driven by outbound connections.
+    // Prefer outbound peers.  If none exist, fall back to probing
+    // inbound peers so we can still discover new blocks.
     static constexpr int64_t FAST_HEADER_PROBE = 15;  // seconds
     if ((now - last_header_probe_) >= FAST_HEADER_PROBE) {
         last_header_probe_ = now;
-        for (uint64_t pid : get_outbound_peers()) {
-            send_getheaders(pid);
+        auto outbound = get_outbound_peers();
+        if (!outbound.empty()) {
+            for (uint64_t pid : outbound) {
+                send_getheaders(pid);
+            }
+        } else {
+            // No outbound — probe inbound so we don't get stuck.
+            auto all_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : all_peers) {
+                Peer* p = conn_manager_.get_peer(pid);
+                if (p && peer_state_is_operational(p->state)) {
+                    send_getheaders(pid);
+                }
+            }
         }
     }
 
@@ -1432,9 +1453,9 @@ void MsgProcessor::maybe_start_sync() {
         }
     }
 
-    // Select the best OUTBOUND peer for syncing.  Never sync from
-    // inbound peers — they are user nodes downloading from us.
-    // This prevents syncing noise from random inbound connections.
+    // Select the best peer for syncing.  Prefer outbound peers, but
+    // fall back to inbound if no outbound connections exist (e.g. seed
+    // nodes that lost their outbound connection).
     uint64_t best_peer = 0;
     int32_t best_height = 0;
     uint64_t any_outbound = 0;
@@ -1443,7 +1464,7 @@ void MsgProcessor::maybe_start_sync() {
     for (uint64_t pid : peer_ids) {
         Peer* peer = conn_manager_.get_peer(pid);
         if (!peer) continue;
-        if (peer->inbound) continue;  // Skip all inbound peers
+        if (peer->inbound) continue;
         if (!peer_state_is_operational(peer->state)) continue;
 
         if (any_outbound == 0) {
@@ -1464,7 +1485,16 @@ void MsgProcessor::maybe_start_sync() {
         // anyway to discover blocks mined after the VERSION handshake.
         best_peer = any_outbound;
     } else {
-        return;
+        // No outbound peers at all — fall back to the best inbound peer.
+        for (uint64_t pid : peer_ids) {
+            Peer* peer = conn_manager_.get_peer(pid);
+            if (!peer || !peer_state_is_operational(peer->state)) continue;
+            if (peer->start_height > best_height) {
+                best_height = peer->start_height;
+                best_peer = pid;
+            }
+        }
+        if (best_peer == 0) return;
     }
 
     sync_peer_id_ = best_peer;
