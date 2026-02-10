@@ -3,443 +3,143 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 // =========================================================================
-// keccak256.cl -- NIST SHA3-256 for OpenCL
+// keccak256.cl -- NIST SHA3-256 for OpenCL  (scalar-variable edition)
 // =========================================================================
 //
-// This file implements the NIST SHA3-256 hash function (FIPS 202) on the
-// GPU.  It is optimized for fixed-size inputs used by the FTC miner.
+// Production-proven approach used by sgminer/cgminer/xptMiner:
+//   - All 25 state lanes are individual scalar variables (s00..s44)
+//   - Theta/rho/pi/chi steps are preprocessor macros
+//   - All 24 rounds fully unrolled (no loop)
 //
-// CRITICAL: This is NIST SHA3-256, NOT Ethereum Keccak-256.
-//   - SHA3-256 padding byte:    0x06
-//   - Ethereum Keccak padding:  0x01
-//   The Keccak-f[1600] permutation is identical; only the padding differs.
+// This prevents NVIDIA's compiler from performing dead-store elimination
+// on array elements — the root cause of "phantom hashrate" on Ada Lovelace
+// and Blackwell GPUs.
 //
-// SHA3-256 parameters:
-//   - State: 1600 bits = 200 bytes = 25 ulong lanes (5x5 matrix)
-//   - Rate:  1088 bits = 136 bytes = 17 ulong lanes
-//   - Capacity: 512 bits = 64 bytes = 8 ulong lanes
-//   - Output: 256 bits = 32 bytes = 4 ulong lanes
-//
-// For a 36-byte message (< 136 byte rate):
-//   1. Initialize 25-lane state to zero
-//   2. XOR message bytes into the first lanes (rate portion)
-//   3. Apply SHA3 padding:
-//      - Byte 36: XOR with 0x06 (SHA3 domain separator)
-//      - Byte 135 (last byte of rate): XOR with 0x80
-//   4. Apply Keccak-f[1600] permutation (24 rounds)
-//   5. Read first 32 bytes (4 lanes) as output
-//   6. Read output bytes
-//
-// All values are little-endian within each 64-bit lane.
+// Variable naming: sXY where state index = X + 5*Y  (X=column, Y=row)
+//   s00=st[0]  s10=st[1]  s20=st[2]  s30=st[3]  s40=st[4]
+//   s01=st[5]  s11=st[6]  s21=st[7]  s31=st[8]  s41=st[9]
+//   s02=st[10] s12=st[11] s22=st[12] s32=st[13] s42=st[14]
+//   s03=st[15] s13=st[16] s23=st[17] s33=st[18] s43=st[19]
+//   s04=st[20] s14=st[21] s24=st[22] s34=st[23] s44=st[24]
 // =========================================================================
 
 #ifndef KECCAK256_CL
 #define KECCAK256_CL
 
 // -------------------------------------------------------------------------
-// Keccak-f[1600] round constants (24 rounds)
-//
-// These are the iota step constants, derived from a linear feedback shift
-// register.  Each constant is XOR'd into lane (0,0) at the end of the
-// corresponding round.
+// Round constants
 // -------------------------------------------------------------------------
 
 __constant ulong RC[24] = {
-    0x0000000000000001UL,
-    0x0000000000008082UL,
-    0x800000000000808AUL,
-    0x8000000080008000UL,
-    0x000000000000808BUL,
-    0x0000000080000001UL,
-    0x8000000080008081UL,
-    0x8000000000008009UL,
-    0x000000000000008AUL,
-    0x0000000000000088UL,
-    0x0000000080008009UL,
-    0x000000008000000AUL,
-    0x000000008000808BUL,
-    0x800000000000008BUL,
-    0x8000000000008089UL,
-    0x8000000000008003UL,
-    0x8000000000008002UL,
-    0x8000000000000080UL,
-    0x000000000000800AUL,
-    0x800000008000000AUL,
-    0x8000000080008081UL,
-    0x8000000000008080UL,
-    0x0000000080000001UL,
-    0x8000000080008008UL
+    0x0000000000000001UL, 0x0000000000008082UL,
+    0x800000000000808AUL, 0x8000000080008000UL,
+    0x000000000000808BUL, 0x0000000080000001UL,
+    0x8000000080008081UL, 0x8000000000008009UL,
+    0x000000000000008AUL, 0x0000000000000088UL,
+    0x0000000080008009UL, 0x000000008000000AUL,
+    0x000000008000808BUL, 0x800000000000008BUL,
+    0x8000000000008089UL, 0x8000000000008003UL,
+    0x8000000000008002UL, 0x8000000000000080UL,
+    0x000000000000800AUL, 0x800000008000000AUL,
+    0x8000000080008081UL, 0x8000000000008080UL,
+    0x0000000080000001UL, 0x8000000080008008UL
 };
-
-// -------------------------------------------------------------------------
-// Rotation offsets for the rho step
-//
-// Indexed as [x + 5*y] for the 5x5 state matrix.
-// These are the number of bit positions each lane is rotated left by.
-//
-// Lane (0,0) has offset 0 (not rotated).
-// The offsets for the remaining 24 lanes are derived from the specification:
-//   - Start at (x,y) = (1,0)
-//   - Iterate: (x,y) = (y, 2x+3y mod 5) for t = 0..23
-//   - Rotation offset = (t+1)(t+2)/2 mod 64
-// -------------------------------------------------------------------------
-
-// Rho offsets indexed by linear index [x + 5*y]:
-//
-//   (x,y):  (0,0)=0  (1,0)=1  (2,0)=62 (3,0)=28 (4,0)=27
-//           (0,1)=36 (1,1)=44 (2,1)=6  (3,1)=55 (4,1)=20
-//           (0,2)=3  (1,2)=10 (2,2)=43 (3,2)=25 (4,2)=39
-//           (0,3)=41 (1,3)=45 (2,3)=15 (3,3)=21 (4,3)=8
-//           (0,4)=18 (1,4)=2  (2,4)=61 (3,4)=56 (4,4)=14
-
-// -------------------------------------------------------------------------
-// Rotate-left helper for 64-bit values
-// -------------------------------------------------------------------------
 
 #define ROL64(x, n) (((x) << (n)) | ((x) >> (64 - (n))))
 
 // -------------------------------------------------------------------------
-// Keccak-f[1600] permutation -- 24 rounds
+// KECCAK_ROUND -- one round of Keccak-f[1600] on scalar variables
 //
-// The state is 25 ulong lanes arranged as a 5x5 matrix A[x][y],
-// stored linearly as st[x + 5*y].
-//
-// Each round applies 5 steps: theta, rho, pi, chi, iota.
+// Expects 25 ulong variables s00..s44 in the enclosing scope.
 // -------------------------------------------------------------------------
 
-// __attribute__((noinline)): NVIDIA's OpenCL compiler silently inlines all
-// device functions and then aggressively optimizes the combined code, which
-// on Ada Lovelace / Blackwell GPUs eliminates the keccak loop body entirely.
-// Preventing inlining forces the compiler to treat st[] as an opaque pointer,
-// preserving all writes while still optimizing the function body itself.
-static void __attribute__((noinline)) keccak_f1600(ulong st[25])
-{
-    // Temporary array for rho+pi step -- declared outside the loop
-    // to reduce register/stack pressure (avoids 24 copies if unrolled).
-    ulong tmp[25];
-
-    for (int round = 0; round < 24; round++) {
-        ulong t, bc0, bc1, bc2, bc3, bc4;
-
-        // ---- Theta step ----
-        // Compute column parities.
-        bc0 = st[0] ^ st[5] ^ st[10] ^ st[15] ^ st[20];
-        bc1 = st[1] ^ st[6] ^ st[11] ^ st[16] ^ st[21];
-        bc2 = st[2] ^ st[7] ^ st[12] ^ st[17] ^ st[22];
-        bc3 = st[3] ^ st[8] ^ st[13] ^ st[18] ^ st[23];
-        bc4 = st[4] ^ st[9] ^ st[14] ^ st[19] ^ st[24];
-
-        // XOR each column with (left_neighbor ^ rot(right_neighbor, 1)).
-        t = bc4 ^ ROL64(bc1, 1); st[0]  ^= t; st[5]  ^= t; st[10] ^= t; st[15] ^= t; st[20] ^= t;
-        t = bc0 ^ ROL64(bc2, 1); st[1]  ^= t; st[6]  ^= t; st[11] ^= t; st[16] ^= t; st[21] ^= t;
-        t = bc1 ^ ROL64(bc3, 1); st[2]  ^= t; st[7]  ^= t; st[12] ^= t; st[17] ^= t; st[22] ^= t;
-        t = bc2 ^ ROL64(bc4, 1); st[3]  ^= t; st[8]  ^= t; st[13] ^= t; st[18] ^= t; st[23] ^= t;
-        t = bc3 ^ ROL64(bc0, 1); st[4]  ^= t; st[9]  ^= t; st[14] ^= t; st[19] ^= t; st[24] ^= t;
-
-        // ---- Rho + Pi steps (combined) ----
-        // Rho rotates each lane, Pi moves lanes to new positions.
-        // Combined: tmp[pi(x,y)] = rot(st[x+5y], rho_offset[x+5y])
-        // Pi mapping: A'[y][2x+3y mod 5] = A[x][y]
-        //   i.e., new position = y + 5*(2x+3y mod 5)
-        //
-        // We compute this in a single pass using a temporary array.
-        {
-            // (x=0,y=0): new_pos = 0 + 5*(0) = 0,  rho=0
-            tmp[0]  = st[0];  // ROL64(st[0], 0) = st[0]
-
-            // (x=1,y=0): new_pos = 0 + 5*(2*1+0 mod 5) = 0+5*2 = 10,  rho=1
-            tmp[10] = ROL64(st[1], 1);
-
-            // (x=2,y=0): new_pos = 0 + 5*(2*2+0 mod 5) = 0+5*4 = 20,  rho=62
-            tmp[20] = ROL64(st[2], 62);
-
-            // (x=3,y=0): new_pos = 0 + 5*(2*3+0 mod 5) = 0+5*1 = 5,  rho=28
-            tmp[5]  = ROL64(st[3], 28);
-
-            // (x=4,y=0): new_pos = 0 + 5*(2*4+0 mod 5) = 0+5*3 = 15,  rho=27
-            tmp[15] = ROL64(st[4], 27);
-
-            // (x=0,y=1): new_pos = 1 + 5*(0+3 mod 5) = 1+5*3 = 16,  rho=36
-            tmp[16] = ROL64(st[5], 36);
-
-            // (x=1,y=1): new_pos = 1 + 5*(2+3 mod 5) = 1+5*0 = 1,  rho=44
-            tmp[1]  = ROL64(st[6], 44);
-
-            // (x=2,y=1): new_pos = 1 + 5*(4+3 mod 5) = 1+5*2 = 11,  rho=6
-            tmp[11] = ROL64(st[7], 6);
-
-            // (x=3,y=1): new_pos = 1 + 5*(6+3 mod 5) = 1+5*4 = 21,  rho=55
-            tmp[21] = ROL64(st[8], 55);
-
-            // (x=4,y=1): new_pos = 1 + 5*(8+3 mod 5) = 1+5*1 = 6,  rho=20
-            tmp[6]  = ROL64(st[9], 20);
-
-            // (x=0,y=2): new_pos = 2 + 5*(0+6 mod 5) = 2+5*1 = 7,  rho=3
-            tmp[7]  = ROL64(st[10], 3);
-
-            // (x=1,y=2): new_pos = 2 + 5*(2+6 mod 5) = 2+5*3 = 17,  rho=10
-            tmp[17] = ROL64(st[11], 10);
-
-            // (x=2,y=2): new_pos = 2 + 5*(4+6 mod 5) = 2+5*0 = 2,  rho=43
-            tmp[2]  = ROL64(st[12], 43);
-
-            // (x=3,y=2): new_pos = 2 + 5*(6+6 mod 5) = 2+5*2 = 12,  rho=25
-            tmp[12] = ROL64(st[13], 25);
-
-            // (x=4,y=2): new_pos = 2 + 5*(8+6 mod 5) = 2+5*4 = 22,  rho=39
-            tmp[22] = ROL64(st[14], 39);
-
-            // (x=0,y=3): new_pos = 3 + 5*(0+9 mod 5) = 3+5*4 = 23,  rho=41
-            tmp[23] = ROL64(st[15], 41);
-
-            // (x=1,y=3): new_pos = 3 + 5*(2+9 mod 5) = 3+5*1 = 8,  rho=45
-            tmp[8]  = ROL64(st[16], 45);
-
-            // (x=2,y=3): new_pos = 3 + 5*(4+9 mod 5) = 3+5*3 = 18,  rho=15
-            tmp[18] = ROL64(st[17], 15);
-
-            // (x=3,y=3): new_pos = 3 + 5*(6+9 mod 5) = 3+5*0 = 3,  rho=21
-            tmp[3]  = ROL64(st[18], 21);
-
-            // (x=4,y=3): new_pos = 3 + 5*(8+9 mod 5) = 3+5*2 = 13,  rho=8
-            tmp[13] = ROL64(st[19], 8);
-
-            // (x=0,y=4): new_pos = 4 + 5*(0+12 mod 5) = 4+5*2 = 14,  rho=18
-            tmp[14] = ROL64(st[20], 18);
-
-            // (x=1,y=4): new_pos = 4 + 5*(2+12 mod 5) = 4+5*4 = 24,  rho=2
-            tmp[24] = ROL64(st[21], 2);
-
-            // (x=2,y=4): new_pos = 4 + 5*(4+12 mod 5) = 4+5*1 = 9,  rho=61
-            tmp[9]  = ROL64(st[22], 61);
-
-            // (x=3,y=4): new_pos = 4 + 5*(6+12 mod 5) = 4+5*3 = 19,  rho=56
-            tmp[19] = ROL64(st[23], 56);
-
-            // (x=4,y=4): new_pos = 4 + 5*(8+12 mod 5) = 4+5*0 = 4,  rho=14
-            tmp[4]  = ROL64(st[24], 14);
-
-            // Copy back for chi step.
-            for (int i = 0; i < 25; i++) {
-                st[i] = tmp[i];
-            }
-        }
-
-        // ---- Chi step ----
-        // For each row y: A'[x][y] = A[x][y] ^ (~A[x+1][y] & A[x+2][y])
-        for (int y = 0; y < 5; y++) {
-            int base = y * 5;
-            ulong a0 = st[base + 0];
-            ulong a1 = st[base + 1];
-            ulong a2 = st[base + 2];
-            ulong a3 = st[base + 3];
-            ulong a4 = st[base + 4];
-
-            st[base + 0] = a0 ^ (~a1 & a2);
-            st[base + 1] = a1 ^ (~a2 & a3);
-            st[base + 2] = a2 ^ (~a3 & a4);
-            st[base + 3] = a3 ^ (~a4 & a0);
-            st[base + 4] = a4 ^ (~a0 & a1);
-        }
-
-        // ---- Iota step ----
-        // XOR round constant into lane (0,0).
-        st[0] ^= RC[round];
-    }
-}
+#define KECCAK_ROUND(rc) do {                                              \
+    /* -- Theta -- */                                                      \
+    ulong c0 = s00 ^ s01 ^ s02 ^ s03 ^ s04;                              \
+    ulong c1 = s10 ^ s11 ^ s12 ^ s13 ^ s14;                              \
+    ulong c2 = s20 ^ s21 ^ s22 ^ s23 ^ s24;                              \
+    ulong c3 = s30 ^ s31 ^ s32 ^ s33 ^ s34;                              \
+    ulong c4 = s40 ^ s41 ^ s42 ^ s43 ^ s44;                              \
+    ulong d0 = c4 ^ ROL64(c1, 1);                                         \
+    ulong d1 = c0 ^ ROL64(c2, 1);                                         \
+    ulong d2 = c1 ^ ROL64(c3, 1);                                         \
+    ulong d3 = c2 ^ ROL64(c4, 1);                                         \
+    ulong d4 = c3 ^ ROL64(c0, 1);                                         \
+    s00 ^= d0; s01 ^= d0; s02 ^= d0; s03 ^= d0; s04 ^= d0;              \
+    s10 ^= d1; s11 ^= d1; s12 ^= d1; s13 ^= d1; s14 ^= d1;              \
+    s20 ^= d2; s21 ^= d2; s22 ^= d2; s23 ^= d2; s24 ^= d2;              \
+    s30 ^= d3; s31 ^= d3; s32 ^= d3; s33 ^= d3; s34 ^= d3;              \
+    s40 ^= d4; s41 ^= d4; s42 ^= d4; s43 ^= d4; s44 ^= d4;              \
+    /* -- Rho: rotate each lane by its fixed offset -- */                  \
+    /* s00: rho=0 (no-op) */                                               \
+    s10 = ROL64(s10,  1); s20 = ROL64(s20, 62);                           \
+    s30 = ROL64(s30, 28); s40 = ROL64(s40, 27);                           \
+    s01 = ROL64(s01, 36); s11 = ROL64(s11, 44);                           \
+    s21 = ROL64(s21,  6); s31 = ROL64(s31, 55);                           \
+    s41 = ROL64(s41, 20); s02 = ROL64(s02,  3);                           \
+    s12 = ROL64(s12, 10); s22 = ROL64(s22, 43);                           \
+    s32 = ROL64(s32, 25); s42 = ROL64(s42, 39);                           \
+    s03 = ROL64(s03, 41); s13 = ROL64(s13, 45);                           \
+    s23 = ROL64(s23, 15); s33 = ROL64(s33, 21);                           \
+    s43 = ROL64(s43,  8); s04 = ROL64(s04, 18);                           \
+    s14 = ROL64(s14,  2); s24 = ROL64(s24, 61);                           \
+    s34 = ROL64(s34, 56); s44 = ROL64(s44, 14);                           \
+    /* -- Pi: A'[y, 2x+3y mod 5] = A[x,y] -- */                          \
+    /* Permute using temporaries (all 25 values read before any write) */  \
+    { ulong p00=s00, p10=s10, p20=s20, p30=s30, p40=s40,                  \
+            p01=s01, p11=s11, p21=s21, p31=s31, p41=s41,                  \
+            p02=s02, p12=s12, p22=s22, p32=s32, p42=s42,                  \
+            p03=s03, p13=s13, p23=s23, p33=s33, p43=s43,                  \
+            p04=s04, p14=s14, p24=s24, p34=s34, p44=s44;                  \
+      /* dest[i] = src[pi_inv[i]]  where pi maps index j to: */           \
+      /* j=0->0, j=1->10, j=2->20, j=3->5, j=4->15,  */                 \
+      /* j=5->16, j=6->1, j=7->11, j=8->21, j=9->6,  */                 \
+      /* j=10->7, j=11->17, j=12->2, j=13->12, j=14->22, */             \
+      /* j=15->23, j=16->8, j=17->18, j=18->3, j=19->13, */             \
+      /* j=20->14, j=21->24, j=22->9, j=23->19, j=24->4  */             \
+      s00=p00; s10=p11; s20=p22; s30=p33; s40=p44;                        \
+      s01=p30; s11=p41; s21=p02; s31=p13; s41=p24;                        \
+      s02=p10; s12=p21; s22=p32; s32=p43; s42=p04;                        \
+      s03=p40; s13=p01; s23=p12; s33=p23; s43=p34;                        \
+      s04=p20; s14=p31; s24=p42; s34=p03; s44=p14;                        \
+    }                                                                      \
+    /* -- Chi: A'[x,y] = A[x,y] ^ (~A[x+1,y] & A[x+2,y]) -- */          \
+    { ulong a0=s00,a1=s10,a2=s20,a3=s30,a4=s40;                           \
+      s00=a0^(~a1&a2); s10=a1^(~a2&a3); s20=a2^(~a3&a4);                 \
+      s30=a3^(~a4&a0); s40=a4^(~a0&a1); }                                 \
+    { ulong a0=s01,a1=s11,a2=s21,a3=s31,a4=s41;                           \
+      s01=a0^(~a1&a2); s11=a1^(~a2&a3); s21=a2^(~a3&a4);                 \
+      s31=a3^(~a4&a0); s41=a4^(~a0&a1); }                                 \
+    { ulong a0=s02,a1=s12,a2=s22,a3=s32,a4=s42;                           \
+      s02=a0^(~a1&a2); s12=a1^(~a2&a3); s22=a2^(~a3&a4);                 \
+      s32=a3^(~a4&a0); s42=a4^(~a0&a1); }                                 \
+    { ulong a0=s03,a1=s13,a2=s23,a3=s33,a4=s43;                           \
+      s03=a0^(~a1&a2); s13=a1^(~a2&a3); s23=a2^(~a3&a4);                 \
+      s33=a3^(~a4&a0); s43=a4^(~a0&a1); }                                 \
+    { ulong a0=s04,a1=s14,a2=s24,a3=s34,a4=s44;                           \
+      s04=a0^(~a1&a2); s14=a1^(~a2&a3); s24=a2^(~a3&a4);                 \
+      s34=a3^(~a4&a0); s44=a4^(~a0&a1); }                                 \
+    /* -- Iota -- */                                                       \
+    s00 ^= (rc);                                                           \
+} while(0)
 
 // -------------------------------------------------------------------------
-// SHA3-256 for exactly 36-byte input
-//
-// This function computes NIST SHA3-256 of a 36-byte message and returns
-// the first 25 bytes of the 32-byte digest.
-//
-// Parameters:
-//   input32 -- pointer to the 32-byte hash input (constant across
-//              all work items; this is keccak256(serialized_header))
-//   index   -- the 4-byte index (appended as LE32)
-//   out25   -- output buffer receiving 25 bytes of digest
-//
-// The 36-byte preimage is:  input32[0..31] || le32(index)
-//
-// State layout after absorbing (all in little-endian lane order):
-//
-//   Lane 0 (bytes  0.. 7): input32[ 0.. 7]
-//   Lane 1 (bytes  8..15): input32[ 8..15]
-//   Lane 2 (bytes 16..23): input32[16..23]
-//   Lane 3 (bytes 24..31): input32[24..31]
-//   Lane 4 (bytes 32..39): le32(index) [4 bytes] || 0x06 [SHA3 pad] ||
-//                           0x00 0x00 0x00
-//   Lanes 5..15: 0
-//   Lane 16 (bytes 128..135): 0x80 at byte 135 (MSB of lane 16)
-//   Lanes 17..24: 0  (capacity portion, not part of rate)
-//
-// Byte 36 = 0x06 is the SHA3 domain separator (NOT 0x01 for raw Keccak).
-// Byte 135 = 0x80 is the padding terminator (last byte of the rate).
+// KECCAK_F1600 -- full 24-round permutation (fully unrolled)
 // -------------------------------------------------------------------------
 
-inline void sha3_256_36bytes(__global const uchar* input32,
-                             uint index,
-                             uchar out25[25])
-{
-    // Initialize state to zero.
-    ulong st[25];
-    for (int i = 0; i < 25; i++) {
-        st[i] = 0;
-    }
-
-    // Absorb the 32-byte constant input into lanes 0..3.
-    // Each lane is 8 bytes, little-endian.
-    st[0] = (ulong)input32[0]
-          | ((ulong)input32[1]  << 8)
-          | ((ulong)input32[2]  << 16)
-          | ((ulong)input32[3]  << 24)
-          | ((ulong)input32[4]  << 32)
-          | ((ulong)input32[5]  << 40)
-          | ((ulong)input32[6]  << 48)
-          | ((ulong)input32[7]  << 56);
-
-    st[1] = (ulong)input32[8]
-          | ((ulong)input32[9]  << 8)
-          | ((ulong)input32[10] << 16)
-          | ((ulong)input32[11] << 24)
-          | ((ulong)input32[12] << 32)
-          | ((ulong)input32[13] << 40)
-          | ((ulong)input32[14] << 48)
-          | ((ulong)input32[15] << 56);
-
-    st[2] = (ulong)input32[16]
-          | ((ulong)input32[17] << 8)
-          | ((ulong)input32[18] << 16)
-          | ((ulong)input32[19] << 24)
-          | ((ulong)input32[20] << 32)
-          | ((ulong)input32[21] << 40)
-          | ((ulong)input32[22] << 48)
-          | ((ulong)input32[23] << 56);
-
-    st[3] = (ulong)input32[24]
-          | ((ulong)input32[25] << 8)
-          | ((ulong)input32[26] << 16)
-          | ((ulong)input32[27] << 24)
-          | ((ulong)input32[28] << 32)
-          | ((ulong)input32[29] << 40)
-          | ((ulong)input32[30] << 48)
-          | ((ulong)input32[31] << 56);
-
-    // Lane 4: bytes 32..39 of the rate.
-    // Bytes 32..35 = le32(index), byte 36 = 0x06 (SHA3 pad), bytes 37..39 = 0.
-    //
-    // In little-endian lane layout:
-    //   byte 32 = index & 0xFF           -> bits 0..7
-    //   byte 33 = (index >> 8) & 0xFF    -> bits 8..15
-    //   byte 34 = (index >> 16) & 0xFF   -> bits 16..23
-    //   byte 35 = (index >> 24) & 0xFF   -> bits 24..31
-    //   byte 36 = 0x06                   -> bits 32..39
-    //   bytes 37..39 = 0x00              -> bits 40..63
-    st[4] = (ulong)index | ((ulong)0x06 << 32);
-
-    // Lanes 5..15 remain zero (no more message bytes).
-
-    // Lane 16: byte 135 (the last byte of the 136-byte rate) gets 0x80.
-    // Byte 135 is the last byte of lane 16 (bytes 128..135).
-    // In little-endian: byte 135 is the most significant byte of lane 16.
-    st[16] = 0x8000000000000000UL;
-
-    // Lanes 17..24 remain zero (capacity portion).
-
-    // Apply Keccak-f[1600] permutation.
-    keccak_f1600(st);
-
-    // Extract the first 25 bytes of output (from lanes 0..3).
-    // Lane 0 = output bytes 0..7, Lane 1 = bytes 8..15,
-    // Lane 2 = bytes 16..23, Lane 3 = bytes 24..31.
-    // We need bytes 0..24 (25 bytes).
-
-    // Lanes 0..2: full 24 bytes.
-    for (int i = 0; i < 3; i++) {
-        ulong lane = st[i];
-        out25[i * 8 + 0] = (uchar)(lane);
-        out25[i * 8 + 1] = (uchar)(lane >> 8);
-        out25[i * 8 + 2] = (uchar)(lane >> 16);
-        out25[i * 8 + 3] = (uchar)(lane >> 24);
-        out25[i * 8 + 4] = (uchar)(lane >> 32);
-        out25[i * 8 + 5] = (uchar)(lane >> 40);
-        out25[i * 8 + 6] = (uchar)(lane >> 48);
-        out25[i * 8 + 7] = (uchar)(lane >> 56);
-    }
-
-    // Lane 3: only the first byte (byte 24).
-    out25[24] = (uchar)(st[3]);
-}
-
-// -------------------------------------------------------------------------
-// Variant that reads input from private memory instead of global
-// (useful if the caller has already cached the 32-byte input locally)
-// -------------------------------------------------------------------------
-
-inline void sha3_256_36bytes_priv(const uchar input32[32],
-                                  uint index,
-                                  uchar out25[25])
-{
-    ulong st[25];
-    for (int i = 0; i < 25; i++) {
-        st[i] = 0;
-    }
-
-    st[0] = (ulong)input32[0]
-          | ((ulong)input32[1]  << 8)
-          | ((ulong)input32[2]  << 16)
-          | ((ulong)input32[3]  << 24)
-          | ((ulong)input32[4]  << 32)
-          | ((ulong)input32[5]  << 40)
-          | ((ulong)input32[6]  << 48)
-          | ((ulong)input32[7]  << 56);
-
-    st[1] = (ulong)input32[8]
-          | ((ulong)input32[9]  << 8)
-          | ((ulong)input32[10] << 16)
-          | ((ulong)input32[11] << 24)
-          | ((ulong)input32[12] << 32)
-          | ((ulong)input32[13] << 40)
-          | ((ulong)input32[14] << 48)
-          | ((ulong)input32[15] << 56);
-
-    st[2] = (ulong)input32[16]
-          | ((ulong)input32[17] << 8)
-          | ((ulong)input32[18] << 16)
-          | ((ulong)input32[19] << 24)
-          | ((ulong)input32[20] << 32)
-          | ((ulong)input32[21] << 40)
-          | ((ulong)input32[22] << 48)
-          | ((ulong)input32[23] << 56);
-
-    st[3] = (ulong)input32[24]
-          | ((ulong)input32[25] << 8)
-          | ((ulong)input32[26] << 16)
-          | ((ulong)input32[27] << 24)
-          | ((ulong)input32[28] << 32)
-          | ((ulong)input32[29] << 40)
-          | ((ulong)input32[30] << 48)
-          | ((ulong)input32[31] << 56);
-
-    st[4] = (ulong)index | ((ulong)0x06 << 32);
-    st[16] = 0x8000000000000000UL;
-
-    keccak_f1600(st);
-
-    for (int i = 0; i < 3; i++) {
-        ulong lane = st[i];
-        out25[i * 8 + 0] = (uchar)(lane);
-        out25[i * 8 + 1] = (uchar)(lane >> 8);
-        out25[i * 8 + 2] = (uchar)(lane >> 16);
-        out25[i * 8 + 3] = (uchar)(lane >> 24);
-        out25[i * 8 + 4] = (uchar)(lane >> 32);
-        out25[i * 8 + 5] = (uchar)(lane >> 40);
-        out25[i * 8 + 6] = (uchar)(lane >> 48);
-        out25[i * 8 + 7] = (uchar)(lane >> 56);
-    }
-
-    out25[24] = (uchar)(st[3]);
-}
+#define KECCAK_F1600() do {                                                \
+    KECCAK_ROUND(RC[ 0]); KECCAK_ROUND(RC[ 1]);                           \
+    KECCAK_ROUND(RC[ 2]); KECCAK_ROUND(RC[ 3]);                           \
+    KECCAK_ROUND(RC[ 4]); KECCAK_ROUND(RC[ 5]);                           \
+    KECCAK_ROUND(RC[ 6]); KECCAK_ROUND(RC[ 7]);                           \
+    KECCAK_ROUND(RC[ 8]); KECCAK_ROUND(RC[ 9]);                           \
+    KECCAK_ROUND(RC[10]); KECCAK_ROUND(RC[11]);                           \
+    KECCAK_ROUND(RC[12]); KECCAK_ROUND(RC[13]);                           \
+    KECCAK_ROUND(RC[14]); KECCAK_ROUND(RC[15]);                           \
+    KECCAK_ROUND(RC[16]); KECCAK_ROUND(RC[17]);                           \
+    KECCAK_ROUND(RC[18]); KECCAK_ROUND(RC[19]);                           \
+    KECCAK_ROUND(RC[20]); KECCAK_ROUND(RC[21]);                           \
+    KECCAK_ROUND(RC[22]); KECCAK_ROUND(RC[23]);                           \
+} while(0)
 
 #endif // KECCAK256_CL
