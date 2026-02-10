@@ -59,6 +59,10 @@ public:
     /// Get the current batch size.
     uint32_t batch_size() const { return batch_size_; }
 
+    /// Return the OpenCL error code from the last mine_batch() call.
+    /// 0 (CL_SUCCESS) means the kernel executed successfully.
+    int32_t last_kernel_error() const { return last_kernel_error_; }
+
 private:
     OpenCLContext& ctx_;
 
@@ -72,6 +76,7 @@ private:
     void* kernel_ = nullptr;
 
     uint32_t batch_size_ = 1u << 22;  // 4M nonces per dispatch
+    int32_t  last_kernel_error_ = 0;
     bool initialized_ = false;
 };
 

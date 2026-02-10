@@ -166,9 +166,26 @@ std::vector<uint32_t> GpuMiner::mine_batch(uint32_t base_nonce,
         global_size = ((global_size + local_size - 1) / local_size) * local_size;
     }
 
-    clEnqueueNDRangeKernel(queue, kernel, 1, nullptr,
+    cl_int kernel_err = clEnqueueNDRangeKernel(queue, kernel, 1, nullptr,
                            &global_size, &local_size,
                            0, nullptr, nullptr);
+    if (kernel_err != CL_SUCCESS) {
+        last_kernel_error_ = static_cast<int32_t>(kernel_err);
+        // Try falling back to a smaller local_size (GPU may not support 256)
+        if (kernel_err == CL_INVALID_WORK_GROUP_SIZE && local_size > 64) {
+            local_size = 64;
+            if (global_size % local_size != 0)
+                global_size = ((global_size + local_size - 1) / local_size) * local_size;
+            kernel_err = clEnqueueNDRangeKernel(queue, kernel, 1, nullptr,
+                               &global_size, &local_size,
+                               0, nullptr, nullptr);
+        }
+        if (kernel_err != CL_SUCCESS) {
+            last_kernel_error_ = static_cast<int32_t>(kernel_err);
+            return {};
+        }
+    }
+    last_kernel_error_ = 0;
 
     // Read back result count
     uint32_t count = 0;
