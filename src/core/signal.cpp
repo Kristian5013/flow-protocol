@@ -8,7 +8,9 @@
 #   include <windows.h>
 #else
 #   include <csignal>
+#   include <cstdlib>  // _exit
 #   include <cstring>  // std::memset
+#   include <unistd.h> // write, STDERR_FILENO
 #endif
 
 namespace core {
@@ -92,13 +94,31 @@ void init_signal_handlers() {
 // ---- POSIX implementation -------------------------------------------------
 
 static void posix_signal_handler(int signum) {
-    // Signal handlers must be async-signal-safe.  request_shutdown()
-    // only performs an atomic store and (on the first call) a
-    // mutex lock + notify, which is acceptable in practice for
-    // shutdown paths.  Logging macros are *not* async-signal-safe,
-    // so we skip them here; the message is logged inside
-    // request_shutdown() on the first invocation.
-    request_shutdown();
+    // Signal handlers must be async-signal-safe.  We must NOT call
+    // LOG_INFO, lock mutexes, or do anything that could deadlock
+    // (e.g. if the main thread holds the logger mutex when the signal
+    // arrives, calling LOG_INFO here would deadlock).
+    //
+    // First Ctrl+C: set the atomic flag to request graceful shutdown.
+    // Second Ctrl+C: force immediate exit (shutdown may be stuck).
+    if (g_shutdown_requested.load(std::memory_order_relaxed)) {
+        // Already shutting down — force exit on second signal.
+        const char msg[] = "\nForced shutdown (second signal received)\n";
+        (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        _exit(1);
+    }
+
+    // Set the flag — async-signal-safe (atomic store).
+    g_shutdown_requested.store(true, std::memory_order_release);
+
+    // Wake wait_for_shutdown().  mutex lock + cv notify are technically
+    // not async-signal-safe, but in practice work on Linux/glibc and
+    // are the standard pattern for this shutdown mechanism.
+    {
+        std::lock_guard<std::mutex> lock(g_shutdown_mutex);
+        g_shutdown_cv.notify_all();
+    }
+
     (void)signum;
 }
 
