@@ -33,7 +33,9 @@ NetManager::NetManager(Config config,
     : config_(std::move(config))
     , chainstate_(chainstate)
     , mempool_(mempool)
-    , event_channel_(1024)  // Bounded channel: 1024 pending events max
+    , event_channel_(0)  // Unbounded: bounded channel deadlocks when
+                         // remove_peer() joins a read thread that is
+                         // blocked trying to push to a full channel.
 {
 }
 
