@@ -212,7 +212,7 @@ core::Result<uint64_t> ConnManager::connect_to(const std::string& host,
     // Set socket options for the new connection.
     socket.set_nodelay(true);
     socket.set_keepalive(true);
-    socket.set_send_timeout(30000); // 30s send timeout prevents deadlock
+    socket.set_send_timeout(5000); // 5s send timeout prevents event loop stalls
 
     uint64_t peer_id = allocate_peer_id();
     std::string remote = host + ":" + std::to_string(port);
@@ -573,7 +573,7 @@ void ConnManager::handle_accept(net::Socket socket) {
     // Set socket options.
     socket.set_nodelay(true);
     socket.set_keepalive(true);
-    socket.set_send_timeout(30000); // 30s send timeout prevents deadlock
+    socket.set_send_timeout(5000); // 5s send timeout prevents event loop stalls
 
     uint64_t peer_id = allocate_peer_id();
 
