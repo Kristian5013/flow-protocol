@@ -122,7 +122,6 @@ private:
     static constexpr int64_t STALE_TIP_CHECK_INTERVAL = 30;     // seconds
     static constexpr int64_t STALE_TIP_THRESHOLD = 30 * 60;     // 30 minutes
     static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 30;       // seconds
-    static constexpr int64_t HEADER_PROBE_INTERVAL = 60;        // seconds
     static constexpr int     MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
     int64_t last_stale_check_ = 0;
     int64_t last_header_probe_ = 0;
