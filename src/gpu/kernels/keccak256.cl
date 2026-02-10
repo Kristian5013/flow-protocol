@@ -3,14 +3,11 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 // =========================================================================
-// keccak256.cl -- NIST SHA3-256 for OpenCL (Equihash hash generation)
+// keccak256.cl -- NIST SHA3-256 for OpenCL
 // =========================================================================
 //
 // This file implements the NIST SHA3-256 hash function (FIPS 202) on the
-// GPU.  It is specifically optimized for 36-byte inputs, which is the
-// exact preimage size used by the FTC Equihash (200,9) miner:
-//
-//   preimage = equihash_input[32 bytes] || le32(index)[4 bytes] = 36 bytes
+// GPU.  It is optimized for fixed-size inputs used by the FTC miner.
 //
 // CRITICAL: This is NIST SHA3-256, NOT Ethereum Keccak-256.
 //   - SHA3-256 padding byte:    0x06
@@ -31,7 +28,7 @@
 //      - Byte 135 (last byte of rate): XOR with 0x80
 //   4. Apply Keccak-f[1600] permutation (24 rounds)
 //   5. Read first 32 bytes (4 lanes) as output
-//   6. Truncate to 25 bytes for Equihash
+//   6. Read output bytes
 //
 // All values are little-endian within each 64-bit lane.
 // =========================================================================
@@ -251,9 +248,9 @@ inline void keccak_f1600(ulong st[25])
 // the first 25 bytes of the 32-byte digest.
 //
 // Parameters:
-//   input32 -- pointer to the 32-byte equihash input (constant across
+//   input32 -- pointer to the 32-byte hash input (constant across
 //              all work items; this is keccak256(serialized_header))
-//   index   -- the 4-byte Equihash index (appended as LE32)
+//   index   -- the 4-byte index (appended as LE32)
 //   out25   -- output buffer receiving 25 bytes of digest
 //
 // The 36-byte preimage is:  input32[0..31] || le32(index)

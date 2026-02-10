@@ -43,14 +43,6 @@ struct ConsensusParams {
         return pow_target_timespan / pow_target_spacing;
     }
 
-    // -- Equihash parameters ------------------------------------------------
-
-    /// Equihash N parameter (collision bit-length).
-    int equihash_n = 200;
-
-    /// Equihash K parameter (number of rounds).
-    int equihash_k = 9;
-
     // -- Subsidy schedule ---------------------------------------------------
 
     /// Number of blocks between subsidy halvings.

@@ -75,7 +75,7 @@ int main() {
 
     auto start_time = std::chrono::steady_clock::now();
 
-    miner::EquihashSolver solver;
+    miner::PowSolver solver;
     std::atomic<bool> cancel{false};
 
     auto result = solver.solve(header, target, cancel);

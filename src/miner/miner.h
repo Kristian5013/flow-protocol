@@ -226,8 +226,7 @@ private:
 
     /// Submit a mined block to the chainstate manager.
     core::Result<void> submit_block(
-        const primitives::BlockHeader& header,
-        const std::vector<uint8_t>& solution);
+        const primitives::BlockHeader& header);
 
     // -- Data members -------------------------------------------------------
 

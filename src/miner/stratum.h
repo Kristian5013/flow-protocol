@@ -116,9 +116,6 @@ struct StratumShare {
     /// The nonce used by the worker.
     uint32_t nonce = 0;
 
-    /// The Equihash solution bytes.
-    std::vector<uint8_t> solution;
-
     /// The extra nonce assigned to this client.
     uint32_t extra_nonce = 0;
 
@@ -132,8 +129,7 @@ struct StratumShare {
 
 /// Callback invoked when a submitted share also qualifies as a valid block.
 using ShareCallback = std::function<void(
-    const primitives::BlockHeader& header,
-    const std::vector<uint8_t>& solution)>;
+    const primitives::BlockHeader& header)>;
 
 // ---------------------------------------------------------------------------
 // StratumServer
@@ -310,8 +306,6 @@ private:
     std::atomic<uint64_t> total_valid_shares_{0};
     std::atomic<uint64_t> total_invalid_shares_{0};
 
-    /// Equihash solver for share verification.
-    EquihashSolver verifier_;
 };
 
 } // namespace miner

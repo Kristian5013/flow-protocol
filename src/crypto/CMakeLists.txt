@@ -10,7 +10,6 @@ add_library(ftc_crypto STATIC
     aes.cpp
     chacha20.cpp
     siphash.cpp
-    equihash.cpp
 )
 
 target_include_directories(ftc_crypto PUBLIC

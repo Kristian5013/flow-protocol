@@ -6,7 +6,6 @@
 
 #include "core/logging.h"
 #include "core/time.h"
-#include "crypto/keccak.h"
 
 #include <algorithm>
 #include <cstring>
@@ -62,12 +61,7 @@ std::vector<NonceRange> partition_nonce_space(int num_workers) {
 // ---------------------------------------------------------------------------
 
 MinerWorker::MinerWorker(int worker_id)
-    : worker_id_(worker_id),
-      solver_() {}
-
-MinerWorker::MinerWorker(int worker_id, unsigned n, unsigned k)
-    : worker_id_(worker_id),
-      solver_(n, k) {}
+    : worker_id_(worker_id) {}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -127,7 +121,6 @@ void MinerWorker::run(
     bool wraps = (range.end == 0) && (range.start != 0 || range.size() == (uint64_t(1) << 32));
 
     while (true) {
-        // Check for cancellation periodically.
         if (cancel_token.load(std::memory_order_relaxed)) {
             LOG_DEBUG(core::LogCategory::MINING,
                 "Worker " + std::to_string(worker_id_) + " cancelled after " +
@@ -135,98 +128,49 @@ void MinerWorker::run(
             break;
         }
 
-        // Set the nonce and attempt to solve.
         header.nonce = nonce;
-
-        // Serialize the header.
-        auto serialized = EquihashSolver::serialize_header(header);
-
-        // Compute the Equihash input.
-        auto input_hash = crypto::keccak256(
-            std::span<const uint8_t>(serialized.data(), serialized.size()));
-
-        std::span<const uint8_t> input_span(
-            input_hash.data(), input_hash.size());
-
-        // Run the Equihash solver for this nonce (find up to 4 solutions).
-        auto solutions = crypto::equihash_solve(
-            solver_.params(), input_span, 4);
-
+        core::uint256 block_hash = header.hash();
         ++nonces_tried;
 
-        // Check each solution.
-        for (auto& solution : solutions) {
-            // Verify the Equihash solution.
-            if (!crypto::equihash_verify(
-                    solver_.params(), input_span, solution)) {
-                continue;
-            }
+        if (block_hash <= tmpl.target) {
+            auto end_time = std::chrono::steady_clock::now();
+            int64_t elapsed_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    end_time - start_time).count();
 
-            // Compute the block hash: keccak256d(header || solution).
-            std::vector<uint8_t> block_data;
-            block_data.reserve(serialized.size() + solution.size());
-            block_data.insert(block_data.end(),
-                serialized.begin(), serialized.end());
-            block_data.insert(block_data.end(),
-                solution.begin(), solution.end());
+            LOG_INFO(core::LogCategory::MINING,
+                "Worker " + std::to_string(worker_id_) +
+                " FOUND BLOCK! nonce=" + std::to_string(nonce) +
+                " hash=" + block_hash.to_hex() +
+                " elapsed=" + std::to_string(elapsed_ms) + "ms");
 
-            core::uint256 block_hash = crypto::keccak256d(
-                std::span<const uint8_t>(
-                    block_data.data(), block_data.size()));
-
-            // Check difficulty.
-            if (block_hash <= tmpl.target) {
-                auto end_time = std::chrono::steady_clock::now();
-                int64_t elapsed_ms =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        end_time - start_time).count();
-
-                LOG_INFO(core::LogCategory::MINING,
-                    "Worker " + std::to_string(worker_id_) +
-                    " FOUND BLOCK! nonce=" + std::to_string(nonce) +
-                    " hash=" + block_hash.to_hex() +
-                    " elapsed=" + std::to_string(elapsed_ms) + "ms");
-
-                // Update statistics.
-                total_nonces_.fetch_add(nonces_tried,
+            total_nonces_.fetch_add(nonces_tried, std::memory_order_relaxed);
+            if (elapsed_ms > 0) {
+                hashrate_.store(
+                    static_cast<double>(nonces_tried) * 1000.0 /
+                    static_cast<double>(elapsed_ms),
                     std::memory_order_relaxed);
-                if (elapsed_ms > 0) {
-                    hashrate_.store(
-                        static_cast<double>(nonces_tried) * 1000.0 /
-                        static_cast<double>(elapsed_ms),
-                        std::memory_order_relaxed);
-                }
-
-                // Report the result.
-                WorkerResult result;
-                result.found = true;
-                result.header = header;
-                result.solution = std::move(solution);
-                result.nonces_tried = nonces_tried;
-                result.elapsed_ms = elapsed_ms;
-                report_result(std::move(result));
-
-                running_.store(false, std::memory_order_relaxed);
-                return;
             }
+
+            WorkerResult result;
+            result.found = true;
+            result.header = header;
+            result.nonces_tried = nonces_tried;
+            result.elapsed_ms = elapsed_ms;
+            report_result(std::move(result));
+
+            running_.store(false, std::memory_order_relaxed);
+            return;
         }
 
-        // Advance to the next nonce.
         ++nonce;
 
-        // Check if we've exhausted our range.
         if (wraps) {
-            // We wrap around to 0; check if we've come back to start.
-            if (nonce == range.start) {
-                break;
-            }
+            if (nonce == range.start) break;
         } else {
-            if (nonce == range.end) {
-                break;
-            }
+            if (nonce == range.end) break;
         }
 
-        // Periodic hashrate update.
         if (nonces_tried % 10000 == 0) {
             auto now = std::chrono::steady_clock::now();
             int64_t elapsed_ms =

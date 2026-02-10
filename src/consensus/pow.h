@@ -6,8 +6,8 @@
 // ---------------------------------------------------------------------------
 // Proof-of-work validation and difficulty adjustment
 // ---------------------------------------------------------------------------
-// FTC uses Equihash(200,9) as its memory-hard PoW algorithm with Keccak-256
-// block hashing.  Difficulty retargets every 2016 blocks with a target block
+// FTC uses Keccak-256d as its proof-of-work hash function.
+// Difficulty retargets every 2016 blocks with a target block
 // interval of 600 seconds.  The nBits compact format follows Bitcoin's
 // convention.
 // ---------------------------------------------------------------------------
@@ -89,21 +89,5 @@ struct ConsensusParams;
                                               int64_t first_block_time,
                                               uint32_t last_nbits,
                                               const ConsensusParams& params);
-
-// ---------------------------------------------------------------------------
-// Equihash solution verification
-// ---------------------------------------------------------------------------
-
-/// Verify the Equihash(200,9) solution embedded in the block header.
-///
-/// Serialises the 80-byte header as the puzzle input and delegates to
-/// crypto::equihash_verify().
-///
-/// @param header  The block header to validate.
-/// @param params  Consensus parameters (supplies Equihash n, k).
-/// @returns true if the Equihash solution is valid.
-[[nodiscard]] bool check_equihash_solution(
-    const primitives::BlockHeader& header,
-    const ConsensusParams& params);
 
 }  // namespace consensus
