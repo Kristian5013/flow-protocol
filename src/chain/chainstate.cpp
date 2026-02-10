@@ -417,9 +417,17 @@ core::Result<BlockIndex*> ChainstateManager::accept_block_header(
     BlockIndex* new_index = add_to_block_index(header);
     new_index->raise_validity(BlockIndex::BLOCK_VALID_TREE);
 
-    // --- Update best header if this has more work -------------------------
+    // --- Update best header if this has more (or equal) work --------------
+    // Use >= with a tiebreaker that prefers fork headers over the active
+    // chain.  This ensures we discover competing forks with equal work and
+    // trigger block downloads for them proactively.  find_best_candidate()
+    // still uses strict > so the active chain wins ties for actual reorgs.
     if (best_header_ == nullptr ||
-        new_index->chain_work > best_header_->chain_work) {
+        new_index->chain_work > best_header_->chain_work ||
+        (new_index->chain_work == best_header_->chain_work &&
+         !active_chain_.contains(new_index) &&
+         (active_chain_.contains(best_header_) ||
+          new_index->block_hash < best_header_->block_hash))) {
         best_header_ = new_index;
     }
 
@@ -575,13 +583,16 @@ core::Result<bool> ChainstateManager::activate_best_chain() {
     // Compute reorg path.
     ReorgPath path = compute_reorg_path(active_chain_, best_candidate);
 
-    // Safety check: refuse excessively deep reorgs.
+    // Safety advisory: log a warning for deep reorgs but allow them.
+    // In a proof-of-work system, the longest valid chain MUST win.
     if (!is_reorg_safe(path)) {
-        return core::Error(core::ErrorCode::VALIDATION_ERROR,
-            "reorganization of " +
+        LOG_WARN(core::LogCategory::CHAIN,
+            "Deep reorganization: disconnecting " +
             std::to_string(path.to_disconnect.size()) +
-            " blocks exceeds safety limit of " +
-            std::to_string(MAX_REORG_DEPTH));
+            " blocks, connecting " +
+            std::to_string(path.to_connect.size()) +
+            " blocks (advisory limit is " +
+            std::to_string(MAX_REORG_DEPTH) + ")");
     }
 
     // Pre-flight: verify ALL blocks in the connect path have data on disk.
