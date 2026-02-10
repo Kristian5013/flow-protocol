@@ -229,8 +229,7 @@ double estimate_hashrate(double difficulty, double block_time) {
     //   D * 2^32
     // The hashrate is that divided by the average block time.
     //
-    // For Equihash the notion of "hash" is one Equihash evaluation, but
-    // the formula remains the same for estimating effective hashrate.
+    // For keccak256d one hash evaluation equals one nonce attempt.
 
     return difficulty * 4294967296.0 / block_time;
 }

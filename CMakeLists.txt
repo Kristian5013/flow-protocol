@@ -56,7 +56,7 @@ add_subdirectory(tools)
 add_executable(ftcd src/main.cpp)
 target_include_directories(ftcd PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(ftcd PRIVATE
-    ftc_node ftc_miner ftc_wallet ftc_rpc ftc_net
+    ftc_node ftc_rpc ftc_miner ftc_wallet ftc_net
     ftc_mempool ftc_chain ftc_consensus ftc_primitives
     ftc_crypto ftc_core
     OpenSSL::SSL OpenSSL::Crypto Threads::Threads ${PLATFORM_LIBS}

@@ -6,7 +6,6 @@
 
 #include "core/hex.h"
 #include "core/logging.h"
-#include "crypto/keccak.h"
 #include "miner/difficulty.h"
 
 #include <algorithm>
@@ -438,13 +437,8 @@ void StratumServer::process_message(uint64_t client_id,
             }
         }
 
-        // Parse solution (hex string).
-        if (param_list.size() > 3) {
-            share.solution = hex_to_bytes(param_list[3]);
-        }
-
         // Parse time (hex string).
-        if (param_list.size() > 4) {
+        if (param_list.size() > 3) {
             try {
                 share.time = static_cast<uint32_t>(
                     std::stoul(param_list[4], nullptr, 16));
@@ -575,36 +569,8 @@ void StratumServer::handle_submit(
         header.timestamp = share.time;
     }
 
-    // Verify the Equihash solution.
-    if (!verifier_.verify_solution(header, share.solution)) {
-        std::string response = json_response(msg_id, "null",
-            "[23, \"Invalid solution\", null]");
-        send_to_client(client_id, response);
-        total_invalid_shares_.fetch_add(1, std::memory_order_relaxed);
-
-        {
-            std::lock_guard lock(clients_mutex_);
-            auto it = clients_.find(client_id);
-            if (it != clients_.end()) {
-                it->second->invalid_shares++;
-            }
-        }
-
-        LOG_DEBUG(core::LogCategory::MINING,
-            "Invalid share from client " + std::to_string(client_id));
-        return;
-    }
-
-    // Valid share. Check if it meets the network target (block-level).
-    auto serialized = EquihashSolver::serialize_header(header);
-    std::vector<uint8_t> block_data;
-    block_data.reserve(serialized.size() + share.solution.size());
-    block_data.insert(block_data.end(), serialized.begin(), serialized.end());
-    block_data.insert(block_data.end(),
-        share.solution.begin(), share.solution.end());
-
-    core::uint256 block_hash = crypto::keccak256d(
-        std::span<const uint8_t>(block_data.data(), block_data.size()));
+    // Compute block hash via keccak256d(80-byte header).
+    core::uint256 block_hash = header.hash();
 
     bool meets_network_target = (block_hash <= tmpl->target);
 
@@ -628,7 +594,7 @@ void StratumServer::handle_submit(
 
     // If the share also meets the network target, it's a block!
     if (meets_network_target && share_callback_) {
-        share_callback_(header, share.solution);
+        share_callback_(header);
     }
 }
 
@@ -760,7 +726,7 @@ std::string StratumServer::build_notify_message(
     //   [job_id, prev_hash, coinbase1, coinbase2, merkle_branches,
     //    version, nbits, ntime, clean_jobs]
     //
-    // For Equihash, we simplify: send the full header info.
+    // We send the full header info for keccak256d mining.
 
     std::string prev_hash = tmpl.header.prev_hash.to_hex();
     std::string merkle_root = tmpl.header.merkle_root.to_hex();

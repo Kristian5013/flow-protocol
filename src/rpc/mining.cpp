@@ -355,7 +355,7 @@ RpcResponse rpc_generate(const RpcRequest& req,
         }
         auto& tmpl = tmpl_result.value();
 
-        miner::EquihashSolver solver;
+        miner::PowSolver solver;
         std::atomic<bool> cancel{false};
         auto solve_result = solver.solve(tmpl.header, tmpl.target, cancel);
         if (!solve_result) {
@@ -637,7 +637,7 @@ void register_mining_rpcs(RpcServer& server,
          [&](const RpcRequest& r) { return rpc_getwork(r, chainstate, mempool); },
          "getwork \"address\"\n"
          "Returns mining work (header + target) for external miners.\n"
-         "The miner solves Equihash locally and submits via submitwork.",
+         "The miner grinds keccak256d nonces locally and submits via submitwork.",
          "mining"},
 
         {"submitwork",

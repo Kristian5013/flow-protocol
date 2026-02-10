@@ -49,9 +49,6 @@ TEST_CASE(ConsensusParams, mainnet_params) {
     CHECK_EQ(mainnet.bip66_height, 0);
     CHECK_EQ(mainnet.segwit_height, 0);
 
-    // Equihash parameters.
-    CHECK_EQ(mainnet.equihash_n, 200);
-    CHECK_EQ(mainnet.equihash_k, 9);
 }
 
 // ===========================================================================

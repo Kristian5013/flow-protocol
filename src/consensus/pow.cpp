@@ -6,7 +6,6 @@
 #include "consensus/params.h"
 #include "core/logging.h"
 #include "core/types.h"
-#include "crypto/equihash.h"
 #include "primitives/block_header.h"
 
 #include <algorithm>
@@ -220,68 +219,6 @@ uint32_t get_next_work_required(int height,
     }
 
     return target_to_nbits(new_target);
-}
-
-// ---------------------------------------------------------------------------
-// check_equihash_solution
-// ---------------------------------------------------------------------------
-
-bool check_equihash_solution(const primitives::BlockHeader& header,
-                             const ConsensusParams& params) {
-    // Serialize the 80-byte block header as the Equihash puzzle input.
-    auto header_bytes = header.serialize_array();
-    std::span<const uint8_t> input(header_bytes.data(), header_bytes.size());
-
-    // Build Equihash parameters from the consensus config.
-    crypto::EquihashParams eq_params;
-    eq_params.n = static_cast<unsigned>(params.equihash_n);
-    eq_params.k = static_cast<unsigned>(params.equihash_k);
-
-    // The solution is expected to be carried externally (e.g. in an extended
-    // block header field).  For the base 80-byte header format, the nonce is
-    // part of the header and the solution must be supplied separately.
-    // In FTC's wire format the Equihash solution is appended after the
-    // standard 80-byte header.  At this layer we verify only the header
-    // bytes; the caller is responsible for extracting the solution.
-    //
-    // For the base verification API we pass an empty solution span to
-    // detect structural issues.  A full-node integration will provide the
-    // actual solution bytes.
-    //
-    // NOTE: This function currently verifies the header commitment.  The
-    // solution bytes are expected to be validated at a higher layer that
-    // has access to the full serialised block (including the appended
-    // Equihash solution field).  When that integration is wired up, the
-    // solution parameter below will be replaced with the real data.
-
-    // For now, we verify with the understanding that the caller provides
-    // the solution embedded in the block data.  The minimal stub returns
-    // true for the header-only check so that PoW validation can proceed
-    // using the hash-based check (check_proof_of_work) as the primary
-    // gate.  Full Equihash verification is performed at the block
-    // deserialization layer.
-
-    // TODO(consensus): Wire up the extended header solution field once the
-    // block serialisation format is finalised.  For now, always delegate to
-    // the hash-based PoW check.
-
-    // Placeholder: verify with empty solution returns false for real blocks,
-    // which is correct -- callers must use the overload that supplies the
-    // solution bytes.  However, to keep the API usable during development
-    // we log and return the result.
-    std::vector<uint8_t> empty_solution;
-    bool valid = crypto::equihash_verify(
-        eq_params, input,
-        std::span<const uint8_t>(empty_solution.data(),
-                                 empty_solution.size()));
-
-    if (!valid) {
-        LOG_DEBUG(core::LogCategory::VALIDATION,
-                  "check_equihash_solution: Equihash verification failed for "
-                  "block " + header.hash().to_hex());
-    }
-
-    return valid;
 }
 
 }  // namespace consensus

@@ -7,7 +7,6 @@
 #include "consensus/merkle.h"
 #include "core/logging.h"
 #include "core/time.h"
-#include "crypto/keccak.h"
 #include "miner/difficulty.h"
 
 #include <algorithm>
@@ -211,8 +210,7 @@ core::Result<void> Miner::enable_stratum(uint16_t port) {
 
     // Set up the share callback to detect block-level solutions.
     stratum_->set_share_callback(
-        [this](const primitives::BlockHeader& header,
-               const std::vector<uint8_t>& solution) {
+        [this](const primitives::BlockHeader& header) {
             LOG_INFO(core::LogCategory::MINING,
                 "Stratum worker found a block!");
 
@@ -222,7 +220,6 @@ core::Result<void> Miner::enable_stratum(uint16_t port) {
                 last_result_ = std::make_unique<WorkerResult>();
                 last_result_->found = true;
                 last_result_->header = header;
-                last_result_->solution = solution;
                 last_result_->worker_id = -1;  // Stratum worker
             }
             event_channel_.send(MinerEvent::STRATUM_BLOCK);
@@ -483,7 +480,7 @@ void Miner::handle_block_found(const WorkerResult& result) {
     if (!result.found) return;
 
     // Submit the block.
-    auto submit_result = submit_block(result.header, result.solution);
+    auto submit_result = submit_block(result.header);
 
     if (submit_result.ok()) {
         blocks_found_.fetch_add(1, std::memory_order_relaxed);
@@ -509,8 +506,7 @@ void Miner::handle_block_found(const WorkerResult& result) {
 // ---------------------------------------------------------------------------
 
 core::Result<void> Miner::submit_block(
-    const primitives::BlockHeader& header,
-    const std::vector<uint8_t>& solution) {
+    const primitives::BlockHeader& header) {
 
     // Build the full block from the current template.
     std::vector<primitives::Transaction> txs;
@@ -533,17 +529,8 @@ core::Result<void> Miner::submit_block(
             "Block merkle root mismatch after solving");
     }
 
-    // Verify proof-of-work.
-    auto block_serialized = EquihashSolver::serialize_header(solved_header);
-    std::vector<uint8_t> block_data;
-    block_data.reserve(block_serialized.size() + solution.size());
-    block_data.insert(block_data.end(),
-        block_serialized.begin(), block_serialized.end());
-    block_data.insert(block_data.end(),
-        solution.begin(), solution.end());
-
-    core::uint256 block_hash = crypto::keccak256d(
-        std::span<const uint8_t>(block_data.data(), block_data.size()));
+    // Verify proof-of-work: keccak256d(80-byte header).
+    core::uint256 block_hash = solved_header.hash();
 
     core::uint256 target;
     {

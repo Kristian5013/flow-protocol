@@ -71,9 +71,6 @@ const ConsensusParams& ConsensusParams::mainnet_params() {
         p.pow_target_spacing  = 600;          // 10 minutes
         p.pow_target_timespan = 2016 * 600;   // ~2 weeks (1,209,600 s)
 
-        p.equihash_n = 200;
-        p.equihash_k = 9;
-
         // Subsidy
         p.subsidy_halving_interval = 210'000;
 
@@ -178,9 +175,6 @@ const ConsensusParams& ConsensusParams::regtest_params() {
 
         p.pow_target_spacing  = 600;
         p.pow_target_timespan = 2016 * 600;
-
-        p.equihash_n = 200;
-        p.equihash_k = 9;
 
         // Halve every 150 blocks for quick testing.
         p.subsidy_halving_interval = 150;

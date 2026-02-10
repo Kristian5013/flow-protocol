@@ -7,12 +7,8 @@ if(OpenCL_FOUND)
     # Generate embedded kernel source header.
     # Each .cl file is read at configure time and substituted into
     # kernel_source.h via CMake's configure_file().
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/kernels/common.cl" KERNEL_COMMON)
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/kernels/keccak256.cl" KERNEL_KECCAK)
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/kernels/keccak_mine.cl" KERNEL_KECCAK_MINE)
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/kernels/equihash_init.cl" KERNEL_INIT)
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/kernels/equihash_round.cl" KERNEL_ROUND)
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/kernels/equihash_sols.cl" KERNEL_SOLS)
 
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/kernel_source.h.in"
@@ -22,7 +18,6 @@ if(OpenCL_FOUND)
 
     add_library(ftc_gpu STATIC
         opencl_context.cpp
-        gpu_equihash.cpp
         gpu_miner.cpp
     )
 

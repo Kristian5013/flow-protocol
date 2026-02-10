@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 // MinerWorker -- single mining thread for the FTC miner.
 //
-// Each MinerWorker owns an EquihashSolver and processes a designated
+// Each MinerWorker owns a PowSolver and processes a designated
 // range of nonces. Multiple workers run in parallel to utilise all
 // available CPU cores. Workers communicate results back to the Miner
 // coordinator through a callback or channel.
@@ -39,9 +39,6 @@ struct WorkerResult {
 
     /// The block header with the winning nonce (only valid if found == true).
     primitives::BlockHeader header;
-
-    /// The Equihash solution bytes (only valid if found == true).
-    std::vector<uint8_t> solution;
 
     /// The number of nonces tried during this run.
     uint64_t nonces_tried = 0;
@@ -86,7 +83,7 @@ using WorkerCallback = std::function<void(WorkerResult)>;
 // ---------------------------------------------------------------------------
 
 /// A single mining thread that iterates nonces and searches for valid
-/// Equihash solutions.
+/// keccak256d proof-of-work solutions.
 ///
 /// Usage:
 ///   MinerWorker worker(0);
@@ -98,13 +95,6 @@ public:
     ///
     /// @param worker_id  A unique identifier for this worker (0-based).
     explicit MinerWorker(int worker_id);
-
-    /// Construct a worker with custom Equihash parameters.
-    ///
-    /// @param worker_id  Worker identifier.
-    /// @param n          Equihash N parameter.
-    /// @param k          Equihash K parameter.
-    MinerWorker(int worker_id, unsigned n, unsigned k);
 
     // -- Configuration -----------------------------------------------------
 
@@ -154,7 +144,7 @@ public:
 
 private:
     int worker_id_;
-    EquihashSolver solver_;
+    PowSolver solver_;
     WorkerCallback callback_;
     core::Channel<WorkerResult>* result_channel_ = nullptr;
 
