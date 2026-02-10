@@ -27,6 +27,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -221,6 +223,47 @@ static std::string base64_encode(const std::string& input) {
         out.push_back(table[((val << 8) >> (valb + 8)) & 0x3F]);
     while (out.size() % 4) out.push_back('=');
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// Cookie-based auth: auto-read .cookie from default data directory
+// ---------------------------------------------------------------------------
+static bool try_load_cookie() {
+    // Determine the default data directory (same logic as core::fs).
+    std::filesystem::path datadir;
+#ifdef _WIN32
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata && appdata[0] != '\0')
+        datadir = std::filesystem::path(appdata) / "FTC";
+    else {
+        const char* up = std::getenv("USERPROFILE");
+        datadir = up ? std::filesystem::path(up) / "AppData" / "Roaming" / "FTC"
+                     : std::filesystem::path("C:\\FTC");
+    }
+#elif defined(__APPLE__)
+    const char* home = std::getenv("HOME");
+    datadir = home ? std::filesystem::path(home) / "Library" / "Application Support" / "FTC"
+                   : std::filesystem::path("/tmp/FTC");
+#else
+    const char* home = std::getenv("HOME");
+    datadir = home ? std::filesystem::path(home) / ".ftc"
+                   : std::filesystem::path("/tmp/.ftc");
+#endif
+
+    std::filesystem::path cookie_path = datadir / ".cookie";
+    std::ifstream ifs(cookie_path);
+    if (!ifs.is_open()) return false;
+
+    std::string line;
+    if (!std::getline(ifs, line)) return false;
+
+    // Format: "__cookie__:HEXVALUE"
+    auto colon = line.find(':');
+    if (colon == std::string::npos) return false;
+
+    g_rpc_user = line.substr(0, colon);
+    g_rpc_pass = line.substr(colon + 1);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,8 +510,8 @@ int main(int argc, char* argv[]) {
                   << "  --address=ADDR       Mining reward address (required)\n"
                   << "  --rpc-host=HOST      RPC server host (default: 127.0.0.1)\n"
                   << "  --rpc-port=PORT      RPC server port (default: 9332)\n"
-                  << "  --rpc-user=USER      RPC username (default: ftcuser)\n"
-                  << "  --rpc-pass=PASS      RPC password (default: ftcpass)\n"
+                  << "  --rpc-user=USER      RPC username (default: auto from .cookie)\n"
+                  << "  --rpc-pass=PASS      RPC password (default: auto from .cookie)\n"
                   << "  --gpu-platform=N     OpenCL platform index (default: 0)\n"
                   << "  --gpu-device=N       GPU device index (default: 0)\n"
                   << "  --batch-size=N       Nonces per GPU dispatch (default: 4194304)\n"
@@ -487,8 +530,20 @@ int main(int argc, char* argv[]) {
     std::string rpc_host = get_arg(argc, argv, "rpc-host", "127.0.0.1");
     uint16_t rpc_port    = static_cast<uint16_t>(
         std::atoi(get_arg(argc, argv, "rpc-port", "9332").c_str()));
-    g_rpc_user           = get_arg(argc, argv, "rpc-user", "ftcuser");
-    g_rpc_pass           = get_arg(argc, argv, "rpc-pass", "ftcpass");
+    // RPC credentials: if user explicitly provides --rpc-user/--rpc-pass, use
+    // those.  Otherwise auto-read the .cookie file from the default data dir.
+    bool explicit_creds = has_arg(argc, argv, "rpc-user") ||
+                          has_arg(argc, argv, "rpc-pass");
+    if (explicit_creds) {
+        g_rpc_user = get_arg(argc, argv, "rpc-user");
+        g_rpc_pass = get_arg(argc, argv, "rpc-pass");
+    } else {
+        if (!try_load_cookie()) {
+            // No cookie file found — leave empty; server may allow no-auth.
+            g_rpc_user.clear();
+            g_rpc_pass.clear();
+        }
+    }
     int gpu_platform     = std::atoi(
         get_arg(argc, argv, "gpu-platform", "0").c_str());
     int gpu_device       = std::atoi(
@@ -559,6 +614,10 @@ int main(int argc, char* argv[]) {
               << "  " << color::bold() << address << color::reset() << "\n";
     std::cout << "  " << color::dim() << "Node:   " << color::reset()
               << "  " << rpc_host << ":" << rpc_port << "\n";
+    std::cout << "  " << color::dim() << "Auth:   " << color::reset()
+              << "  " << (g_rpc_user == "__cookie__" ? "cookie (auto)"
+                         : g_rpc_user.empty() ? "none"
+                         : "rpcuser") << "\n";
     std::cout << "  " << color::dim() << "Press Ctrl+C to stop"
               << color::reset() << "\n\n";
 
