@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -339,6 +340,47 @@ static std::string get_arg(int argc, char* argv[], const std::string& name,
         }
     }
     return default_val;
+}
+
+static bool has_arg(int argc, char* argv[], const std::string& name) {
+    std::string prefix = "--" + name;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg(argv[i]);
+        if (arg == prefix || arg.rfind(prefix + "=", 0) == 0) return true;
+    }
+    return false;
+}
+
+static bool try_load_cookie() {
+    std::filesystem::path datadir;
+#ifdef _WIN32
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata && appdata[0] != '\0')
+        datadir = std::filesystem::path(appdata) / "FTC";
+    else {
+        const char* up = std::getenv("USERPROFILE");
+        datadir = up ? std::filesystem::path(up) / "AppData" / "Roaming" / "FTC"
+                     : std::filesystem::path("C:\\FTC");
+    }
+#elif defined(__APPLE__)
+    const char* home = std::getenv("HOME");
+    datadir = home ? std::filesystem::path(home) / "Library" / "Application Support" / "FTC"
+                   : std::filesystem::path("/tmp/FTC");
+#else
+    const char* home = std::getenv("HOME");
+    datadir = home ? std::filesystem::path(home) / ".ftc"
+                   : std::filesystem::path("/tmp/.ftc");
+#endif
+    std::filesystem::path cookie_path = datadir / ".cookie";
+    std::ifstream ifs(cookie_path);
+    if (!ifs.is_open()) return false;
+    std::string line;
+    if (!std::getline(ifs, line)) return false;
+    auto colon = line.find(':');
+    if (colon == std::string::npos) return false;
+    g_rpc_user = line.substr(0, colon);
+    g_rpc_pass = line.substr(colon + 1);
+    return true;
 }
 
 static std::string get_command(int argc, char* argv[]) {
@@ -777,8 +819,8 @@ int main(int argc, char* argv[]) {
                   << "Options:\n"
                   << "  --rpc-host=HOST     Node RPC host (default: 127.0.0.1)\n"
                   << "  --rpc-port=PORT     Node RPC port (default: 9332)\n"
-                  << "  --rpc-user=USER     RPC username (default: ftcuser)\n"
-                  << "  --rpc-pass=PASS     RPC password (default: ftcpass)\n"
+                  << "  --rpc-user=USER     RPC username (default: auto from .cookie)\n"
+                  << "  --rpc-pass=PASS     RPC password (default: auto from .cookie)\n"
                   << "  --wallet=FILE       Wallet file (default: wallet.keys)\n\n"
                   << "Examples:\n"
                   << "  ftc-wallet newaddress\n"
@@ -790,8 +832,15 @@ int main(int argc, char* argv[]) {
     std::string rpc_host    = get_arg(argc, argv, "rpc-host", "127.0.0.1");
     uint16_t rpc_port       = static_cast<uint16_t>(
         std::atoi(get_arg(argc, argv, "rpc-port", "9332").c_str()));
-    g_rpc_user              = get_arg(argc, argv, "rpc-user", "ftcuser");
-    g_rpc_pass              = get_arg(argc, argv, "rpc-pass", "ftcpass");
+    if (has_arg(argc, argv, "rpc-user") || has_arg(argc, argv, "rpc-pass")) {
+        g_rpc_user = get_arg(argc, argv, "rpc-user");
+        g_rpc_pass = get_arg(argc, argv, "rpc-pass");
+    } else {
+        if (!try_load_cookie()) {
+            g_rpc_user.clear();
+            g_rpc_pass.clear();
+        }
+    }
     std::string wallet_file = get_arg(argc, argv, "wallet", "wallet.keys");
 
     std::string command = get_command(argc, argv);
