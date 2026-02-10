@@ -1578,53 +1578,66 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     }
 
     // Walk from start_height to best_header, requesting blocks we don't have.
+    // Use a single backward walk from best_header instead of calling
+    // get_ancestor(h) per height (O(n) each → O(n*k) total).
     std::vector<net::protocol::InvItem> to_request;
-    static constexpr int MAX_BLOCKS_REQUEST = 16;
+    static constexpr int MAX_BLOCKS_REQUEST = 128;
 
-    for (int h = start_height;
-         h <= best_header->height &&
-         static_cast<int>(to_request.size()) < MAX_BLOCKS_REQUEST;
-         ++h) {
-        // Walk the best header chain to find the block at height h.
-        auto* index = best_header->get_ancestor(h);
-        if (!index) {
-            LOG_WARN(core::LogCategory::NET,
-                     "request_blocks: get_ancestor returned null at h=" +
-                     std::to_string(h));
-            break;
+    // Pre-count current in-flight for best_peer.
+    int peer_in_flight = 0;
+    for (const auto& [bh, req] : block_requests_) {
+        if (req.peer_id == best_peer) ++peer_in_flight;
+    }
+
+    // Collect candidate block indices by walking backward from best_header
+    // to start_height.  Reverse to get ascending order.
+    int scan_end = best_header->height;
+    int scan_begin = start_height;
+    // Limit how far we scan ahead (at most 2x pipeline depth).
+    if (scan_end - scan_begin > MAX_BLOCKS_IN_TRANSIT_PER_PEER * 2) {
+        scan_end = scan_begin + MAX_BLOCKS_IN_TRANSIT_PER_PEER * 2;
+    }
+
+    std::vector<chain::BlockIndex*> candidates;
+    candidates.reserve(scan_end - scan_begin + 1);
+    auto* walk = best_header->get_ancestor(scan_end);
+    while (walk && walk->height >= scan_begin) {
+        candidates.push_back(walk);
+        walk = walk->prev;
+    }
+    std::reverse(candidates.begin(), candidates.end());
+
+    int64_t now = core::get_time();
+    for (auto* index : candidates) {
+        if (static_cast<int>(to_request.size()) >= MAX_BLOCKS_REQUEST) break;
+        if (peer_in_flight >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) break;
+
+        if (index->has_data()) continue;
+
+        bool already_in_flight = is_block_in_flight(index->block_hash);
+
+        // Re-request if stale: works even with a single peer.
+        // After half the timeout, re-request regardless of which peer
+        // originally requested it.
+        bool stale_request = false;
+        if (already_in_flight) {
+            auto it = block_requests_.find(index->block_hash);
+            if (it != block_requests_.end()) {
+                int64_t elapsed = now - it->second.request_time;
+                if (elapsed > BLOCK_DOWNLOAD_TIMEOUT / 2) {
+                    stale_request = true;
+                }
+            }
         }
 
-        if (!index->has_data()) {
-            bool already_in_flight = is_block_in_flight(index->block_hash);
+        if (!already_in_flight || stale_request) {
+            net::protocol::InvItem item;
+            item.type = net::protocol::InvType::BLOCK;
+            item.hash = index->block_hash;
+            to_request.push_back(item);
 
-            // Re-request from a DIFFERENT peer if stale (> half timeout).
-            bool stale_request = false;
-            if (already_in_flight) {
-                auto it = block_requests_.find(index->block_hash);
-                if (it != block_requests_.end()) {
-                    int64_t elapsed = core::get_time() - it->second.request_time;
-                    if (elapsed > BLOCK_DOWNLOAD_TIMEOUT / 2 &&
-                        it->second.peer_id != best_peer) {
-                        stale_request = true;
-                    }
-                }
-            }
-
-            if (!already_in_flight || stale_request) {
-                // Enforce per-peer in-flight limit.
-                int peer_in_flight = 0;
-                for (const auto& [bh, req] : block_requests_) {
-                    if (req.peer_id == best_peer) ++peer_in_flight;
-                }
-                if (peer_in_flight >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) break;
-
-                net::protocol::InvItem item;
-                item.type = net::protocol::InvType::BLOCK;
-                item.hash = index->block_hash;
-                to_request.push_back(item);
-
-                block_requests_[index->block_hash] = {best_peer, core::get_time()};
-            }
+            block_requests_[index->block_hash] = {best_peer, now};
+            ++peer_in_flight;
         }
     }
 
@@ -1637,14 +1650,14 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
              net::Message::create(commands::GETDATA,
                                   std::move(getdata_payload)));
 
-        last_block_request_ = core::get_time();
+        last_block_request_ = now;
 
         LOG_INFO(core::LogCategory::NET,
                  "Requested " +
                  std::to_string(getdata.items.size()) +
-                 " blocks starting at height " +
-                 std::to_string(start_height) +
-                 " from peer " + std::to_string(best_peer) +
+                 " blocks (in_flight=" +
+                 std::to_string(block_requests_.size()) +
+                 ") from peer " + std::to_string(best_peer) +
                  (downloading_fork ? " (fork download)" : ""));
     } else {
         LOG_DEBUG(core::LogCategory::NET,
