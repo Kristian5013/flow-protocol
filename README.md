@@ -21,14 +21,14 @@
 
 ## Overview
 
-Flow Protocol is a Layer-1 blockchain with its own native coin **FTC**. The network uses **Equihash (200,9)** proof-of-work, 10-minute block times, and a fixed supply of **21,000,000 FTC**. All consensus rules (SegWit, BIP34/65/66) are active from genesis.
+Flow Protocol is a Layer-1 blockchain with its own native coin **FTC**. The network uses **Keccak-256d** proof-of-work, 10-minute block times, and a fixed supply of **21,000,000 FTC**. All consensus rules (SegWit, BIP34/65/66) are active from genesis.
 
 The entire codebase — core libraries, cryptography, networking, consensus, wallet, miner, and RPC server — is written from the ground up in modern C++20 with zero external dependencies beyond OpenSSL.
 
 ### Key Differences from Bitcoin
 
 - **Keccak-256d (SHA-3)** instead of SHA-256d — fundamentally stronger hash construction
-- **Equihash PoW (200,9)** — ASIC-resistant, memory-hard, CPU/GPU fair mining
+- **Keccak-256d PoW** — memory-bandwidth bound, ASIC-resistant, GPU-friendly mining
 - **Actor model P2P** — lock-free message passing, no deadlocks
 - **81,418 lines of original C++20 code** — not a fork, fully verifiable on GitHub
 - **Zero Bitcoin Core dependencies** — independent implementation of every subsystem
@@ -37,7 +37,7 @@ The entire codebase — core libraries, cryptography, networking, consensus, wal
 
 | Parameter | Value |
 |---|---|
-| **Algorithm** | Equihash (N=200, K=9) |
+| **Algorithm** | Keccak-256d (double Keccak-256) |
 | **Block Time** | 600 seconds (10 minutes) |
 | **Block Reward** | 50 FTC (halves every 210,000 blocks) |
 | **Max Supply** | 21,000,000 FTC |
@@ -94,7 +94,7 @@ cmake --build . -j8
 | Binary | Description |
 |---|---|
 | `ftcd` | Full node daemon |
-| `ftc-miner` | External Equihash miner |
+| `ftc-miner` | CPU miner |
 | `ftc-wallet` | Wallet CLI utility |
 | `ftc_tests` | Test suite (184 tests, 791 checks) |
 
@@ -171,7 +171,7 @@ WantedBy=multi-user.target
 
 ## Mining
 
-FTC uses **Equihash (200,9)** — an ASIC-resistant, memory-hard proof-of-work algorithm. The external miner communicates with the node via `getwork`/`submitwork` RPC calls.
+FTC uses **Keccak-256d** (double Keccak-256) — a memory-bandwidth bound, ASIC-resistant proof-of-work algorithm. The external miner communicates with the node via `getwork`/`submitwork` RPC calls.
 
 ### External Miner
 
@@ -426,7 +426,7 @@ Parameters:
 
 #### `generate nblocks "address"`
 
-Mines blocks using the built-in Equihash solver. Returns array of mined block hashes.
+Mines blocks using the built-in PoW solver. Returns array of mined block hashes.
 
 ```
 Parameters:
@@ -436,7 +436,7 @@ Parameters:
 
 #### `getwork "address"`
 
-Returns mining work (header + target) for external miners. The miner solves Equihash locally and submits the nonce via `submitwork`.
+Returns mining work (header + target) for external miners. The miner solves the PoW locally and submits the nonce via `submitwork`.
 
 ```
 Parameters:
@@ -829,7 +829,7 @@ Available categories: `net`, `mempool`, `validation`, `mining`, `rpc`, `wallet`,
 ```
 src/
   core/         Core types, serialization, streams, logging, threading
-  crypto/       Keccak-256, secp256k1, Schnorr, BIP32/39, AES, ChaCha20, Equihash
+  crypto/       Keccak-256, secp256k1, Schnorr, BIP32/39, AES, ChaCha20
   primitives/   Transactions, blocks, scripts, addresses, fees
   consensus/    Consensus rules, PoW validation, block/tx verification
   chain/        Block index, chain state, UTXO set, block storage
@@ -837,7 +837,7 @@ src/
   net/          P2P networking, peer management, block/tx relay
   rpc/          JSON-RPC server with 51 commands
   wallet/       Key management, HD wallet, coin selection, signing
-  miner/        Block template construction, Equihash solver
+  miner/        Block template construction, PoW solver
   node/         Node lifecycle, initialization, shutdown
   test/         Test suite (184 tests across 12 test files)
 ```
