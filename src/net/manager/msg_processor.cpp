@@ -1642,19 +1642,26 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     }
 
     if (!to_request.empty()) {
-        net::protocol::InvMessage getdata;
-        getdata.items = std::move(to_request);
-        auto getdata_payload = getdata.serialize();
-
-        send(best_peer,
-             net::Message::create(commands::GETDATA,
-                                  std::move(getdata_payload)));
+        // Send in batches of 16 to avoid overwhelming the serving peer's
+        // event loop (handle_getdata reads+sends all items synchronously).
+        static constexpr size_t GETDATA_BATCH = 16;
+        for (size_t i = 0; i < to_request.size(); i += GETDATA_BATCH) {
+            size_t end = std::min(i + GETDATA_BATCH, to_request.size());
+            net::protocol::InvMessage getdata;
+            getdata.items.assign(
+                std::make_move_iterator(to_request.begin() + i),
+                std::make_move_iterator(to_request.begin() + end));
+            auto getdata_payload = getdata.serialize();
+            send(best_peer,
+                 net::Message::create(commands::GETDATA,
+                                      std::move(getdata_payload)));
+        }
 
         last_block_request_ = now;
 
         LOG_INFO(core::LogCategory::NET,
                  "Requested " +
-                 std::to_string(getdata.items.size()) +
+                 std::to_string(to_request.size()) +
                  " blocks (in_flight=" +
                  std::to_string(block_requests_.size()) +
                  ") from peer " + std::to_string(best_peer) +
