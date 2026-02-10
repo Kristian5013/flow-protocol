@@ -364,7 +364,7 @@ core::Result<BlockIndex*> ChainstateManager::accept_block_header(
     // so every subsequent header must connect to a known parent.
     BlockIndex* parent = lookup_block_index(header.prev_hash);
     if (parent == nullptr) {
-        return core::Error(core::ErrorCode::VALIDATION_ERROR,
+        return core::Error(core::ErrorCode::VALIDATION_ORPHAN,
             "previous block not found: " + header.prev_hash.to_hex());
     }
 

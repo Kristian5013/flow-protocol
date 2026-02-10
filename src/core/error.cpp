@@ -26,6 +26,7 @@ std::string_view error_code_name(ErrorCode code) noexcept {
         case ErrorCode::VALIDATION_RANGE:  return "VALIDATION_RANGE";
         case ErrorCode::VALIDATION_SCRIPT: return "VALIDATION_SCRIPT";
         case ErrorCode::VALIDATION_SIG:    return "VALIDATION_SIG";
+        case ErrorCode::VALIDATION_ORPHAN: return "VALIDATION_ORPHAN";
 
         // Network
         case ErrorCode::NETWORK_ERROR:     return "NETWORK_ERROR";
