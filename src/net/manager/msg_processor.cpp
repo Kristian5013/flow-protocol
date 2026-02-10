@@ -1379,14 +1379,34 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
         }
     }
 
-    // Retry with a different outbound peer.
+    // Mark this peer as not having the blocks we need so it won't be
+    // selected again by request_blocks().
     if (had_block_notfound) {
+        Peer* nf_peer = conn_manager_.get_peer(peer_id);
+        if (nf_peer) {
+            int our_height = chainstate_.active_chain().height();
+            if (nf_peer->start_height > our_height) {
+                LOG_INFO(core::LogCategory::NET,
+                         "Peer " + std::to_string(peer_id) +
+                         " NOTFOUND blocks, lowering start_height from " +
+                         std::to_string(nf_peer->start_height) +
+                         " to " + std::to_string(our_height));
+                nf_peer->start_height = our_height;
+            }
+        }
+
+        // Retry with any peer that still claims higher height.
         auto* best_hdr = chainstate_.best_header();
         auto* tip = chainstate_.active_chain().tip();
         if (best_hdr && tip && best_hdr != tip &&
             best_hdr->chain_work >= tip->chain_work) {
-            for (uint64_t pid : get_outbound_peers()) {
+            // Try outbound first, then any peer.
+            auto all_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : all_peers) {
                 if (pid == peer_id) continue;
+                Peer* p = conn_manager_.get_peer(pid);
+                if (!p || !peer_state_is_operational(p->state)) continue;
+                if (p->start_height <= chainstate_.active_chain().height()) continue;
                 LOG_INFO(core::LogCategory::NET,
                          "NOTFOUND retry: requesting blocks from peer " +
                          std::to_string(pid));
