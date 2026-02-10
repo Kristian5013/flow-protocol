@@ -327,28 +327,19 @@ void MsgProcessor::on_tick(int64_t now) {
     // Mining nodes constantly update last_tip_update_ with their own
     // blocks, so stale-tip detection never fires.  To ensure we always
     // learn about longer chains from peers, periodically send GETHEADERS
-    // to a random operational peer.
-    if ((now - last_header_probe_) >= HEADER_PROBE_INTERVAL) {
+    // to ALL operational peers.  This is cheap (just a locator message)
+    // and guarantees fast header discovery regardless of which peer has
+    // new blocks.
+    static constexpr int64_t FAST_HEADER_PROBE = 15;  // seconds
+    if ((now - last_header_probe_) >= FAST_HEADER_PROBE) {
         last_header_probe_ = now;
 
         auto peer_ids = conn_manager_.get_peer_ids();
-        // Collect operational peers (excluding current sync peer).
-        std::vector<uint64_t> candidates;
         for (uint64_t pid : peer_ids) {
             Peer* peer = conn_manager_.get_peer(pid);
             if (!peer) continue;
             if (!peer_state_is_operational(peer->state)) continue;
-            if (pid == sync_peer_id_) continue;
-            candidates.push_back(pid);
-        }
-        if (!candidates.empty()) {
-            // Pick one at random.
-            uint64_t probe_peer =
-                candidates[static_cast<size_t>(now) % candidates.size()];
-            send_getheaders(probe_peer);
-            LOG_DEBUG(core::LogCategory::NET,
-                      "Periodic header probe sent to peer " +
-                      std::to_string(probe_peer));
+            send_getheaders(pid);
         }
     }
 
@@ -368,15 +359,26 @@ void MsgProcessor::on_tick(int64_t now) {
         if (!timed_out.empty()) {
             LOG_INFO(core::LogCategory::NET,
                      "Clearing " + std::to_string(timed_out.size()) +
-                     " stale block requests (timeout)");
+                     " stale block requests (timeout), " +
+                     std::to_string(blocks_in_flight_.size()) +
+                     " still in flight");
             for (const auto& hash : timed_out) {
                 blocks_in_flight_.erase(hash);
                 block_request_peer_.erase(hash);
                 block_request_time_.erase(hash);
             }
-            // Reset sync peer so catch-up can pick a new one.
-            if (blocks_in_flight_.empty()) {
-                sync_peer_id_ = 0;
+            // Always reset sync peer so catch-up can pick a fresh one.
+            // Previously this only fired when ALL blocks were cleared,
+            // causing stalls when some blocks timed out but others didn't.
+            sync_peer_id_ = 0;
+
+            // Immediately retry with all operational peers instead of
+            // waiting for the next catch-up tick.
+            auto all_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : all_peers) {
+                Peer* p = conn_manager_.get_peer(pid);
+                if (!p || !peer_state_is_operational(p->state)) continue;
+                request_blocks(pid);
             }
         }
     }
@@ -384,9 +386,10 @@ void MsgProcessor::on_tick(int64_t now) {
     // ------------------------------------------------------------------
     // 4. Block download catch-up.
     // ------------------------------------------------------------------
-    // If our best header is ahead of our tip and nothing is in flight,
-    // aggressively request blocks.  Also periodically send GETHEADERS
-    // to discover new blocks from peers.
+    // If our best header is ahead of our tip, aggressively request
+    // blocks.  request_blocks() already skips blocks that are in-flight,
+    // so we don't gate on blocks_in_flight_.empty() — that caused stalls
+    // when even one request was pending from a slow/dead peer.
     static constexpr int64_t BLOCK_CATCHUP_INTERVAL = 3;  // seconds
 
     if ((now - last_block_catchup_) >= BLOCK_CATCHUP_INTERVAL) {
@@ -396,12 +399,13 @@ void MsgProcessor::on_tick(int64_t now) {
         auto* tip = chainstate_.active_chain().tip();
 
         if (best_hdr && tip && best_hdr != tip &&
-            best_hdr->chain_work >= tip->chain_work &&
-            blocks_in_flight_.empty()) {
-            LOG_INFO(core::LogCategory::NET,
+            best_hdr->chain_work >= tip->chain_work) {
+            LOG_DEBUG(core::LogCategory::NET,
                      "Block catch-up: header h=" +
                      std::to_string(best_hdr->height) +
-                     " tip h=" + std::to_string(tip->height));
+                     " tip h=" + std::to_string(tip->height) +
+                     " in_flight=" +
+                     std::to_string(blocks_in_flight_.size()));
 
             // Try requesting from each operational peer until we get
             // some blocks queued.
@@ -410,7 +414,6 @@ void MsgProcessor::on_tick(int64_t now) {
                 Peer* p = conn_manager_.get_peer(pid);
                 if (!p || !peer_state_is_operational(p->state)) continue;
                 request_blocks(pid);
-                if (!blocks_in_flight_.empty()) break;
             }
         }
 
@@ -986,65 +989,76 @@ void MsgProcessor::handle_block(uint64_t peer_id,
     known_blocks_.insert(block_hash);
 
     // Accept the block into chainstate.
+    bool block_accepted = false;
     auto accept_result = chainstate_.accept_block(block);
     if (!accept_result.ok()) {
         const auto& msg = accept_result.error().message();
 
         // "previous block not found" is not misbehavior -- the block
-        // arrived before we finished syncing (orphan block).  Just
-        // ignore it; we will request it again later once we catch up.
+        // arrived before we finished syncing (orphan block).  Don't
+        // penalize, but DO fall through to request more blocks so the
+        // pipeline doesn't stall.
         if (msg.find("previous block not found") != std::string::npos) {
             LOG_DEBUG(core::LogCategory::NET,
                       "Orphan block " + block_hash.to_hex().substr(0, 16) +
                       "... from peer " + std::to_string(peer_id) +
                       " (parent not yet synced)");
+            // Fall through — block_accepted stays false.
+        } else {
+            LOG_WARN(core::LogCategory::NET,
+                     "Block " + block_hash.to_hex().substr(0, 16) +
+                     "... rejected: " + msg);
+
+            if (accept_result.error().code() ==
+                core::ErrorCode::VALIDATION_ERROR) {
+                misbehaving(peer_id, 100, "invalid block");
+            }
             return;
         }
-
-        LOG_WARN(core::LogCategory::NET,
-                 "Block " + block_hash.to_hex().substr(0, 16) +
-                 "... rejected: " + msg);
-
-        if (accept_result.error().code() ==
-            core::ErrorCode::VALIDATION_ERROR) {
-            misbehaving(peer_id, 100, "invalid block");
-        }
-        return;
+    } else {
+        block_accepted = true;
     }
 
-    // Try to activate the best chain with the new block.
-    auto activate_result = chainstate_.activate_best_chain();
-    if (activate_result.ok() && activate_result.value()) {
-        auto* tip = chainstate_.active_chain().tip();
-        if (tip) {
-            LOG_INFO(core::LogCategory::NET,
-                     "New chain tip: height=" +
-                     std::to_string(tip->height) +
-                     " hash=" + tip->block_hash.to_hex().substr(0, 16) + "...");
+    if (block_accepted) {
+        // Try to activate the best chain with the new block.
+        auto activate_result = chainstate_.activate_best_chain();
+        if (activate_result.ok() && activate_result.value()) {
+            auto* tip = chainstate_.active_chain().tip();
+            if (tip) {
+                LOG_INFO(core::LogCategory::NET,
+                         "New chain tip: height=" +
+                         std::to_string(tip->height) +
+                         " hash=" + tip->block_hash.to_hex().substr(0, 16) +
+                         "...");
 
-            // Periodically flush to disk (every 100 blocks during sync,
-            // or every block if chain is nearly synced).
-            if (tip->height % 100 == 0 ||
-                blocks_in_flight_.empty()) {
-                chainstate_.flush();
+                // Periodically flush to disk (every 100 blocks during sync,
+                // or every block if chain is nearly synced).
+                if (tip->height % 100 == 0 ||
+                    blocks_in_flight_.empty()) {
+                    chainstate_.flush();
+                }
             }
-        }
-        last_tip_update_ = core::get_time();
+            last_tip_update_ = core::get_time();
 
-        // Relay the new block to other peers.
-        relay_block(block_hash);
+            // Relay the new block to other peers.
+            relay_block(block_hash);
+        }
     }
 
     // Request more blocks if we have pending headers or if
     // best_header is ahead of our active tip (fork to download).
-    auto* best_hdr = chainstate_.best_header();
-    auto* tip = chainstate_.active_chain().tip();
-    bool more_to_download = best_hdr && tip && best_hdr != tip &&
-        best_hdr->chain_work >= tip->chain_work;
+    // This runs for BOTH accepted and orphan blocks to keep the
+    // download pipeline moving.
+    {
+        auto* best_hdr = chainstate_.best_header();
+        auto* tip = chainstate_.active_chain().tip();
+        bool more_to_download = best_hdr && tip && best_hdr != tip &&
+            best_hdr->chain_work >= tip->chain_work;
 
-    if (!blocks_in_flight_.empty() || sync_peer_id_ == peer_id ||
-        more_to_download) {
-        request_blocks(peer_id);
+        if (!blocks_in_flight_.empty() || sync_peer_id_ == peer_id ||
+            more_to_download) {
+            request_blocks(peer_id);
+        }
     }
 }
 
@@ -1663,23 +1677,43 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
             break;
         }
 
-        if (!index->has_data() &&
-            blocks_in_flight_.count(index->block_hash) == 0) {
-            // Enforce per-peer in-flight limit.
-            int peer_in_flight = 0;
-            for (const auto& [h, pid] : block_request_peer_) {
-                if (pid == best_peer) ++peer_in_flight;
+        if (!index->has_data()) {
+            bool already_in_flight =
+                blocks_in_flight_.count(index->block_hash) != 0;
+
+            // Allow re-requesting a block from a DIFFERENT peer if it
+            // has been in-flight for over half the timeout (stale request).
+            bool stale_request = false;
+            if (already_in_flight) {
+                auto time_it = block_request_time_.find(index->block_hash);
+                auto peer_it = block_request_peer_.find(index->block_hash);
+                if (time_it != block_request_time_.end() &&
+                    peer_it != block_request_peer_.end()) {
+                    int64_t elapsed = core::get_time() - time_it->second;
+                    if (elapsed > BLOCK_DOWNLOAD_TIMEOUT / 2 &&
+                        peer_it->second != best_peer) {
+                        stale_request = true;
+                    }
+                }
             }
-            if (peer_in_flight >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) break;
 
-            net::protocol::InvItem item;
-            item.type = net::protocol::InvType::BLOCK;
-            item.hash = index->block_hash;
-            to_request.push_back(item);
+            if (!already_in_flight || stale_request) {
+                // Enforce per-peer in-flight limit.
+                int peer_in_flight = 0;
+                for (const auto& [bh, pid] : block_request_peer_) {
+                    if (pid == best_peer) ++peer_in_flight;
+                }
+                if (peer_in_flight >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) break;
 
-            blocks_in_flight_.insert(index->block_hash);
-            block_request_peer_[index->block_hash] = best_peer;
-            block_request_time_[index->block_hash] = core::get_time();
+                net::protocol::InvItem item;
+                item.type = net::protocol::InvType::BLOCK;
+                item.hash = index->block_hash;
+                to_request.push_back(item);
+
+                blocks_in_flight_.insert(index->block_hash);
+                block_request_peer_[index->block_hash] = best_peer;
+                block_request_time_[index->block_hash] = core::get_time();
+            }
         }
     }
 
