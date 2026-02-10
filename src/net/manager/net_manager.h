@@ -181,6 +181,9 @@ private:
     static constexpr int64_t TICK_INTERVAL_MS = 1000;       // 1 second
     static constexpr int64_t DNS_SEED_DELAY = 11;           // seconds after start
     static constexpr int64_t OUTBOUND_RETRY_INTERVAL = 5;   // seconds
+    static constexpr int64_t DNS_RESEED_INTERVAL = 60;      // re-seed every 60s when isolated
+
+    int64_t last_dns_reseed_ = 0;
 };
 
 } // namespace net
