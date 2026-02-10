@@ -804,6 +804,23 @@ int main(int argc, char* argv[]) {
                 if (this_batch == 0) break;
 
                 auto results = miner.mine_batch(base_nonce, this_batch);
+
+                if (miner.last_kernel_error() != 0) {
+                    // Kernel dispatch failed — show error once and abort.
+                    std::cout << "\r" << std::string(100, ' ') << "\r";
+                    std::cout << "  " << color::dim() << current_timestamp()
+                              << color::reset() << "  " << color::red()
+                              << "GPU kernel error (OpenCL code "
+                              << miner.last_kernel_error()
+                              << "). Hashes NOT computed — hashrate was "
+                              << "inflated. Try --batch-size=1048576 or a "
+                              << "different --gpu-device."
+                              << color::reset() << std::endl;
+                    found = false;
+                    g_stop = true;
+                    break;
+                }
+
                 block_hashes += this_batch;
                 session_hashes += this_batch;
 
