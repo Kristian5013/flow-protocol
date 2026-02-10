@@ -107,8 +107,16 @@ __constant ulong RC[24] = {
 // Each round applies 5 steps: theta, rho, pi, chi, iota.
 // -------------------------------------------------------------------------
 
-inline void keccak_f1600(ulong st[25])
+void keccak_f1600(ulong st[25])
 {
+    // Temporary array for rho+pi step -- declared outside the loop
+    // to reduce register/stack pressure (avoids 24 copies if unrolled).
+    ulong tmp[25];
+
+    // Prevent the compiler from unrolling the 24-round loop.
+    // NVIDIA's OpenCL compiler on Blackwell (RTX 5090) may eliminate
+    // the loop body entirely when it inlines + unrolls aggressively.
+    #pragma unroll 1
     for (int round = 0; round < 24; round++) {
         ulong t, bc0, bc1, bc2, bc3, bc4;
 
@@ -135,8 +143,6 @@ inline void keccak_f1600(ulong st[25])
         //
         // We compute this in a single pass using a temporary array.
         {
-            ulong tmp[25];
-
             // (x=0,y=0): new_pos = 0 + 5*(0) = 0,  rho=0
             tmp[0]  = st[0];  // ROL64(st[0], 0) = st[0]
 
