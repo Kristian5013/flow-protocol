@@ -107,7 +107,7 @@ __constant ulong RC[24] = {
 // Each round applies 5 steps: theta, rho, pi, chi, iota.
 // -------------------------------------------------------------------------
 
-void keccak_f1600(ulong st[25])
+static void keccak_f1600(ulong st[25])
 {
     // Temporary array for rho+pi step -- declared outside the loop
     // to reduce register/stack pressure (avoids 24 copies if unrolled).

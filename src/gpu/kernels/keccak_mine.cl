@@ -47,7 +47,7 @@
 // integers in reverse order (lane 3 first, then 2, 1, 0).
 // No byte swapping needed -- LE lane comparison == LE uint256 comparison.
 // -------------------------------------------------------------------------
-inline bool hash_le_target(ulong h0, ulong h1, ulong h2, ulong h3,
+static inline bool hash_le_target(ulong h0, ulong h1, ulong h2, ulong h3,
                            ulong t0, ulong t1, ulong t2, ulong t3)
 {
     // Compare most significant lane first (lane 3 = bytes 24-31)
