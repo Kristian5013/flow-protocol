@@ -9,6 +9,7 @@
 #include "core/channel.h"
 #include "core/config.h"
 #include "core/error.h"
+#include "net/address/subnet.h"
 #include "rpc/request.h"
 
 #include <atomic>
@@ -19,7 +20,6 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace rpc {
@@ -62,6 +62,8 @@ public:
         std::string rpc_password;
         int         num_threads  = 4;
         size_t      max_request_size = 16 * 1024 * 1024; // 16 MB
+        std::string data_dir;    // for .cookie file
+        std::vector<net::Subnet> allowed_subnets; // rpcallowip
     };
 
     explicit RpcServer(Config config);
@@ -122,13 +124,9 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> winsock_initialized_{false};
 
-    // Per-IP rate limiting
-    struct IpBucket {
-        int64_t window_start = 0;  // seconds
-        int     count        = 0;
-    };
-    std::unordered_map<uint32_t, IpBucket> rate_map_;
-    static constexpr int RATE_LIMIT = 10; // max requests per second per IP
+    // Cookie-based authentication
+    std::string cookie_credentials_; // "__cookie__:HEXVALUE"
+    std::string cookie_file_path_;
 
     // -- Internal methods ---------------------------------------------------
 
@@ -164,6 +162,18 @@ private:
 
     /// Process a JSON-RPC request and return the response.
     RpcResponse process_request(const std::string& body);
+
+    /// Check if a client IP is allowed by the allowlist.
+    bool is_client_allowed(uint32_t ipv4_host_order) const;
+
+    /// Check auth: supports both rpcuser:rpcpassword and cookie auth.
+    bool check_auth(std::string_view auth_header) const;
+
+    /// Generate cookie file for authentication.
+    void generate_cookie();
+
+    /// Delete cookie file on shutdown.
+    void delete_cookie();
 
     /// Close a socket handle.
     void close_socket(uintptr_t sock);

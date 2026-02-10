@@ -856,11 +856,13 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
         last_header_from_peer_[peer_id] = last_accepted_hash;
     }
 
-    LOG_INFO(core::LogCategory::NET,
-             "Accepted " + std::to_string(accepted) + "/" +
-             std::to_string(count) + " headers (" +
-             std::to_string(new_headers) + " new) from peer " +
-             std::to_string(peer_id));
+    if (new_headers > 0) {
+        LOG_INFO(core::LogCategory::NET,
+                 "Accepted " + std::to_string(accepted) + "/" +
+                 std::to_string(count) + " headers (" +
+                 std::to_string(new_headers) + " new) from peer " +
+                 std::to_string(peer_id));
+    }
 
     // Only reset stale-tip timer when genuinely new data arrives.
     // Empty responses from syncing peers must not suppress stale detection.

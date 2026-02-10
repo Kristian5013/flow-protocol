@@ -26,6 +26,7 @@ inline constexpr const char* CONF_DBCACHE        = "dbcache";
 inline constexpr const char* CONF_MINE           = "mine";
 inline constexpr const char* CONF_MINETHREADS    = "minethreads";
 inline constexpr const char* CONF_LOGLEVEL       = "loglevel";
+inline constexpr const char* CONF_RPCALLOWIP     = "rpcallowip";
 inline constexpr const char* CONF_CONNECT        = "connect";
 inline constexpr const char* CONF_ADDNODE        = "addnode";
 
