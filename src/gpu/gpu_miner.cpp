@@ -42,11 +42,7 @@ bool GpuMiner::init() {
     source += kernels::KECCAK_MINE_CL;
     source += "\n";
 
-    // -cl-opt-disable: NVIDIA's OpenCL compiler on Ada Lovelace (RTX 4090)
-    // silently eliminates the keccak_f1600 loop body when optimizations are
-    // enabled, producing phantom 500 GH/s with zero blocks found.
-    // Disabling optimizations fixes correctness; real hashrate is ~3-5 GH/s.
-    if (!ctx_.build_program(source, "-cl-std=CL1.2 -cl-opt-disable")) {
+    if (!ctx_.build_program(source, "-cl-std=CL1.2")) {
         std::fprintf(stderr, "  [gpu] Mining kernel build failed:\n%s\n",
                      ctx_.get_build_log().c_str());
         return false;

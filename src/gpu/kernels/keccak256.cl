@@ -107,7 +107,12 @@ __constant ulong RC[24] = {
 // Each round applies 5 steps: theta, rho, pi, chi, iota.
 // -------------------------------------------------------------------------
 
-static void keccak_f1600(ulong st[25])
+// __attribute__((noinline)): NVIDIA's OpenCL compiler silently inlines all
+// device functions and then aggressively optimizes the combined code, which
+// on Ada Lovelace / Blackwell GPUs eliminates the keccak loop body entirely.
+// Preventing inlining forces the compiler to treat st[] as an opaque pointer,
+// preserving all writes while still optimizing the function body itself.
+static void __attribute__((noinline)) keccak_f1600(ulong st[25])
 {
     // Temporary array for rho+pi step -- declared outside the loop
     // to reduce register/stack pressure (avoids 24 copies if unrolled).
