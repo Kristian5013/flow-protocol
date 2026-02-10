@@ -118,10 +118,6 @@ static void __attribute__((noinline)) keccak_f1600(ulong st[25])
     // to reduce register/stack pressure (avoids 24 copies if unrolled).
     ulong tmp[25];
 
-    // Prevent the compiler from unrolling the 24-round loop.
-    // NVIDIA's OpenCL compiler on Blackwell (RTX 5090) may eliminate
-    // the loop body entirely when it inlines + unrolls aggressively.
-    #pragma unroll 1
     for (int round = 0; round < 24; round++) {
         ulong t, bc0, bc1, bc2, bc3, bc4;
 
