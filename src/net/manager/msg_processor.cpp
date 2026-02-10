@@ -76,6 +76,7 @@ void MsgProcessor::on_peer_disconnected(uint64_t peer_id) {
     // Clean up per-peer tracking state.
     peer_announced_blocks_.erase(peer_id);
     peer_announced_txs_.erase(peer_id);
+    last_header_from_peer_.erase(peer_id);
 
     // Clean up any in-flight block requests from this peer.
     std::vector<core::uint256> to_remove;
@@ -94,7 +95,8 @@ void MsgProcessor::on_peer_disconnected(uint64_t peer_id) {
     if (!to_remove.empty()) {
         auto* best_hdr = chainstate_.best_header();
         auto* tip = chainstate_.active_chain().tip();
-        if (best_hdr && tip && best_hdr->chain_work > tip->chain_work) {
+        if (best_hdr && tip && best_hdr != tip &&
+            best_hdr->chain_work >= tip->chain_work) {
             auto remaining_peers = conn_manager_.get_peer_ids();
             for (uint64_t pid : remaining_peers) {
                 Peer* p = conn_manager_.get_peer(pid);
@@ -393,7 +395,8 @@ void MsgProcessor::on_tick(int64_t now) {
         auto* best_hdr = chainstate_.best_header();
         auto* tip = chainstate_.active_chain().tip();
 
-        if (best_hdr && tip && best_hdr->chain_work > tip->chain_work &&
+        if (best_hdr && tip && best_hdr != tip &&
+            best_hdr->chain_work >= tip->chain_work &&
             blocks_in_flight_.empty()) {
             LOG_INFO(core::LogCategory::NET,
                      "Block catch-up: header h=" +
@@ -847,6 +850,8 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
               " headers from peer " + std::to_string(peer_id));
 
     int accepted = 0;
+    int new_headers = 0;
+    core::uint256 last_accepted_hash;
 
     for (uint64_t i = 0; i < count; ++i) {
         try {
@@ -858,11 +863,18 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
             uint64_t tx_count = core::ser_read_compact_size(reader);
             (void)tx_count;
 
+            core::uint256 hdr_hash = header.hash();
+
             // Accept the header into the block index.
             auto accept_result = chainstate_.accept_block_header(header);
             if (accept_result.ok()) {
                 ++accepted;
-                known_blocks_.insert(header.hash());
+                last_accepted_hash = hdr_hash;
+                // Count genuinely new headers (not already known).
+                if (!known_blocks_.count(hdr_hash)) {
+                    ++new_headers;
+                }
+                known_blocks_.insert(hdr_hash);
             } else {
                 LOG_DEBUG(core::LogCategory::NET,
                           "Header rejected from peer " +
@@ -879,9 +891,17 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
         }
     }
 
+    // Track the last accepted header from this peer so that GETHEADERS
+    // locators can include fork-chain progress even before the fork
+    // surpasses our active chain's total work.
+    if (accepted > 0) {
+        last_header_from_peer_[peer_id] = last_accepted_hash;
+    }
+
     LOG_INFO(core::LogCategory::NET,
              "Accepted " + std::to_string(accepted) + "/" +
-             std::to_string(count) + " headers from peer " +
+             std::to_string(count) + " headers (" +
+             std::to_string(new_headers) + " new) from peer " +
              std::to_string(peer_id));
 
     last_tip_update_ = core::get_time();
@@ -930,7 +950,8 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
     //   - Pipelined block download during multi-batch header sync
     auto* best_hdr = chainstate_.best_header();
     auto* tip = chainstate_.active_chain().tip();
-    if (best_hdr && tip && best_hdr->chain_work > tip->chain_work) {
+    if (best_hdr && tip && best_hdr != tip &&
+        best_hdr->chain_work >= tip->chain_work) {
         request_blocks(peer_id);
     }
 }
@@ -1018,8 +1039,8 @@ void MsgProcessor::handle_block(uint64_t peer_id,
     // best_header is ahead of our active tip (fork to download).
     auto* best_hdr = chainstate_.best_header();
     auto* tip = chainstate_.active_chain().tip();
-    bool more_to_download = best_hdr && tip &&
-        best_hdr->chain_work > tip->chain_work;
+    bool more_to_download = best_hdr && tip && best_hdr != tip &&
+        best_hdr->chain_work >= tip->chain_work;
 
     if (!blocks_in_flight_.empty() || sync_peer_id_ == peer_id ||
         more_to_download) {
@@ -1393,7 +1414,7 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
         auto* best_hdr = chainstate_.best_header();
         auto* tip = chainstate_.active_chain().tip();
         if (best_hdr && tip && best_hdr != tip &&
-            best_hdr->chain_work > tip->chain_work) {
+            best_hdr->chain_work >= tip->chain_work) {
             // Find a peer who might have these blocks (different from
             // the peer that just responded NOTFOUND).
             auto all_peers = conn_manager_.get_peer_ids();
@@ -1505,6 +1526,27 @@ void MsgProcessor::send_getheaders(uint64_t peer_id) {
         }
         if (!already_present) {
             locator.insert(locator.begin(), best_hash);
+        }
+    }
+
+    // Include the last header we received from this specific peer.
+    // This is critical for fork-chain syncing: when a peer sends us headers
+    // from a competing fork whose cumulative work hasn't yet surpassed our
+    // active chain, best_header_ won't point to that fork.  Without this,
+    // the locator only contains our active chain hashes, the peer always
+    // resolves the same fork point, and we loop receiving the same headers.
+    auto peer_it = last_header_from_peer_.find(peer_id);
+    if (peer_it != last_header_from_peer_.end()) {
+        const core::uint256& peer_hash = peer_it->second;
+        bool already_present = false;
+        for (const auto& h : locator) {
+            if (h == peer_hash) {
+                already_present = true;
+                break;
+            }
+        }
+        if (!already_present) {
+            locator.insert(locator.begin(), peer_hash);
         }
     }
 

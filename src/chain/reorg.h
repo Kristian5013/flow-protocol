@@ -43,7 +43,7 @@ struct ReorgPath {
 /// reorganization.  This protects against an attacker who constructs an
 /// extremely long alternate chain designed to cause excessive I/O or
 /// memory consumption.
-constexpr int MAX_REORG_DEPTH = 1000;
+constexpr int MAX_REORG_DEPTH = 100000;
 
 // ---------------------------------------------------------------------------
 // Free functions

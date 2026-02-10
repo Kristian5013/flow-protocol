@@ -131,6 +131,11 @@ private:
     // Per-block request timestamps (for stalling detection).
     std::unordered_map<core::uint256, int64_t> block_request_time_;
 
+    // Last header hash received from each peer.  Used in GETHEADERS locators
+    // so that a peer sending fork-chain headers can continue from where it
+    // left off, even before the fork chain's cumulative work exceeds ours.
+    std::unordered_map<uint64_t, core::uint256> last_header_from_peer_;
+
     // -- Message handlers ----------------------------------------------------
     // Each handler receives the peer ID and the raw payload bytes (after
     // the message header has been stripped).
