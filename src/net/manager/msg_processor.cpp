@@ -139,24 +139,22 @@ void MsgProcessor::process_message(uint64_t peer_id,
               std::to_string(msg.payload.size()) +
               " bytes) from peer " + std::to_string(peer_id));
 
-    // Check that the peer exists.
+    // Check that the peer exists and is not already disconnecting.
+    // After a peer is removed, queued messages may still arrive — drop silently.
     Peer* peer = conn_manager_.get_peer(peer_id);
-    if (!peer) {
-        LOG_WARN(core::LogCategory::NET,
-                 "Received message from unknown peer " +
-                 std::to_string(peer_id));
+    if (!peer) return;
+
+    if (peer->state == PeerState::DISCONNECTING ||
+        peer->state == PeerState::DISCONNECTED) {
         return;
     }
 
     // Before the handshake is complete, only VERSION and VERACK are allowed.
+    // Instant disconnect (+100) to prevent queue flooding from misbehaving peers.
     if (peer->state != PeerState::ACTIVE &&
         peer->state != PeerState::HANDSHAKE_DONE) {
         if (command != commands::VERSION && command != commands::VERACK) {
-            LOG_WARN(core::LogCategory::NET,
-                     "Received " + command + " from peer " +
-                     std::to_string(peer_id) +
-                     " before handshake complete");
-            misbehaving(peer_id, 1,
+            misbehaving(peer_id, 100,
                         "message before handshake: " + command);
             return;
         }
