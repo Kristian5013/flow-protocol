@@ -125,6 +125,10 @@ void apply_single(const std::string& key, const std::string& value,
         config.rpc_password = value;
     } else if (key == "rpcbind") {
         config.rpc_bind = value;
+    } else if (key == "rpcallowip") {
+        if (!value.empty()) {
+            config.rpc_allowip.push_back(value);
+        }
     } else if (key == "norpc") {
         config.rpc_enabled = false;
     } else if (key == "rpc") {

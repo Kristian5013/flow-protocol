@@ -61,6 +61,7 @@ struct NodeConfig {
     std::string rpc_user;
     std::string rpc_password;
     std::string rpc_bind = "127.0.0.1";
+    std::vector<std::string> rpc_allowip; // CIDR subnets or bare IPs
 
     // -- Wallet --------------------------------------------------------------
     bool wallet_enabled = true;

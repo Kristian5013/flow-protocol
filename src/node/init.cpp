@@ -15,6 +15,7 @@
 #include "core/time.h"
 #include "mempool/mempool.h"
 #include "mempool/policy.h"
+#include "net/address/subnet.h"
 #include "net/manager/net_manager.h"
 
 #include "rpc/server.h"
@@ -218,11 +219,16 @@ core::Result<void> init_rpc(NodeContext& ctx) {
     LOG_INFO(core::LogCategory::RPC, "Initializing RPC server...");
     core::StopWatch sw;
 
-    // Warn if no authentication is configured.
+    // Warn if no authentication is configured and binding non-localhost.
     if (ctx.config.rpc_user.empty() && ctx.config.rpc_password.empty()) {
-        LOG_WARN(core::LogCategory::RPC,
-                 "RPC server has no authentication configured. "
-                 "Set -rpcuser and -rpcpassword for security.");
+        if (ctx.config.rpc_bind != "127.0.0.1" && ctx.config.rpc_bind != "::1") {
+            LOG_WARN(core::LogCategory::RPC,
+                     "RPC server has no authentication configured with non-localhost bind. "
+                     "Cookie auth will be used. Set -rpcuser and -rpcpassword for explicit control.");
+        } else {
+            LOG_INFO(core::LogCategory::RPC,
+                     "Using cookie-based RPC authentication");
+        }
     }
 
     // Build RPC server configuration from node config.
@@ -231,6 +237,20 @@ core::Result<void> init_rpc(NodeContext& ctx) {
     rpc_cfg.port = ctx.config.rpc_port;
     rpc_cfg.rpc_user = ctx.config.rpc_user;
     rpc_cfg.rpc_password = ctx.config.rpc_password;
+    rpc_cfg.data_dir = ctx.config.resolved_datadir().string();
+
+    // Parse rpcallowip subnets.
+    for (const auto& allowip : ctx.config.rpc_allowip) {
+        auto subnet_result = net::Subnet::from_string(allowip);
+        if (subnet_result.ok()) {
+            rpc_cfg.allowed_subnets.push_back(subnet_result.value());
+            LOG_INFO(core::LogCategory::RPC,
+                     "RPC allowip: " + allowip);
+        } else {
+            LOG_WARN(core::LogCategory::RPC,
+                     "Invalid rpcallowip value: " + allowip);
+        }
+    }
 
     auto server = std::make_unique<rpc::RpcServer>(rpc_cfg);
 

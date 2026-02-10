@@ -4,13 +4,18 @@
 
 #include "rpc/server.h"
 #include "rpc/util.h"
+#include "core/hex.h"
 #include "core/logging.h"
+#include "core/random.h"
 #include "core/time.h"
+#include "net/address/netaddress.h"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -63,6 +68,9 @@ core::Result<void> RpcServer::start() {
     if (running_.load()) {
         return core::Error(core::ErrorCode::RPC_ERROR, "RPC server already running");
     }
+
+    // Generate cookie auth if no rpcuser/rpcpassword configured.
+    generate_cookie();
 
     auto net_result = init_network();
     if (!net_result.ok()) return net_result;
@@ -158,6 +166,7 @@ void RpcServer::stop() {
     }
     worker_threads_.clear();
 
+    delete_cookie();
     cleanup_network();
 }
 
@@ -251,26 +260,12 @@ void RpcServer::accept_loop(std::stop_token stoken) {
             break;
         }
 
-        // Per-IP rate limiting
+        // IP allowlist check
         {
             uint32_t ip = ntohl(client_addr.sin_addr.s_addr);
-            int64_t now = core::get_time();
-            auto& bucket = rate_map_[ip];
-            if (bucket.window_start != now) {
-                bucket.window_start = now;
-                bucket.count = 1;
-            } else if (++bucket.count > RATE_LIMIT) {
+            if (!is_client_allowed(ip)) {
                 CLOSE_SOCKET(client);
                 continue;
-            }
-            // Prune stale entries every 256 accepts
-            if ((rate_map_.size() > 256) && (now % 10 == 0)) {
-                for (auto it = rate_map_.begin(); it != rate_map_.end();) {
-                    if (now - it->second.window_start > 60)
-                        it = rate_map_.erase(it);
-                    else
-                        ++it;
-                }
             }
         }
 
@@ -299,17 +294,15 @@ void RpcServer::accept_loop(std::stop_token stoken) {
                 continue;
             }
 
-            // Check auth if configured
-            if (!config_.rpc_user.empty() || !config_.rpc_password.empty()) {
-                if (!verify_auth(http_req.auth_header,
-                                 config_.rpc_user, config_.rpc_password)) {
-                    send_http_response(static_cast<uintptr_t>(client),
-                                       401, "Unauthorized",
-                                       R"({"error":"Unauthorized"})",
-                                       "application/json");
-                    close_socket(static_cast<uintptr_t>(client));
-                    continue;
-                }
+            // Check authentication (rpcuser:rpcpassword or cookie)
+            if (!check_auth(http_req.auth_header)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                send_http_response(static_cast<uintptr_t>(client),
+                                   401, "Unauthorized",
+                                   R"({"error":"Unauthorized"})",
+                                   "application/json");
+                close_socket(static_cast<uintptr_t>(client));
+                continue;
             }
 
             // Only accept POST
@@ -334,8 +327,7 @@ void RpcServer::accept_loop(std::stop_token stoken) {
                 close_socket(static_cast<uintptr_t>(client));
             }
         } catch (const std::exception& e) {
-            LOG_WARN(core::LogCategory::RPC,
-                     std::string("RPC HTTP read error: ") + e.what());
+            // Silently drop — connection closed by client (common with rate-limited or scanning IPs)
             close_socket(static_cast<uintptr_t>(client));
         }
     }
@@ -659,6 +651,101 @@ RpcResponse RpcServer::process_request(const std::string& body) {
 void RpcServer::close_socket(uintptr_t sock) {
     if (sock != static_cast<uintptr_t>(~0)) {
         CLOSE_SOCKET(static_cast<socket_t>(sock));
+    }
+}
+
+// ===========================================================================
+// IP allowlist
+// ===========================================================================
+
+bool RpcServer::is_client_allowed(uint32_t ipv4_host_order) const {
+    // Loopback (127.x.x.x) is always allowed.
+    if ((ipv4_host_order >> 24) == 127) return true;
+
+    // If allowlist is configured, check against it.
+    if (!config_.allowed_subnets.empty()) {
+        auto addr = net::NetAddress::from_ipv4(ipv4_host_order);
+        for (const auto& subnet : config_.allowed_subnets) {
+            if (subnet.contains(addr)) return true;
+        }
+        return false;
+    }
+
+    // No allowlist: only allow if we're bound to localhost.
+    if (config_.bind_address == "127.0.0.1" || config_.bind_address == "::1") {
+        return true;
+    }
+
+    // Bound to 0.0.0.0 with no allowlist — reject non-loopback.
+    return false;
+}
+
+// ===========================================================================
+// Authentication
+// ===========================================================================
+
+bool RpcServer::check_auth(std::string_view auth_header) const {
+    // If no auth is configured at all (no user/pass, no cookie), allow.
+    bool has_creds = !config_.rpc_user.empty() || !config_.rpc_password.empty();
+    bool has_cookie = !cookie_credentials_.empty();
+    if (!has_creds && !has_cookie) return true;
+
+    if (auth_header.empty()) return false;
+
+    // Try rpcuser:rpcpassword first
+    if (has_creds) {
+        if (verify_auth(auth_header, config_.rpc_user, config_.rpc_password)) {
+            return true;
+        }
+    }
+
+    // Try cookie auth: "__cookie__:HEXVALUE"
+    if (has_cookie) {
+        if (verify_auth(auth_header, "__cookie__", cookie_credentials_)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void RpcServer::generate_cookie() {
+    if (!config_.rpc_user.empty() || !config_.rpc_password.empty()) {
+        // Explicit credentials configured — skip cookie generation.
+        return;
+    }
+    if (config_.data_dir.empty()) {
+        LOG_WARN(core::LogCategory::RPC,
+                 "No data directory set, skipping cookie auth generation");
+        return;
+    }
+
+    // Generate 32 random bytes → 64 hex chars.
+    auto random_bytes = core::get_random_bytes_vec(32);
+    std::string hex_cookie = core::to_hex(random_bytes);
+
+    cookie_credentials_ = hex_cookie;
+    cookie_file_path_ = (std::filesystem::path(config_.data_dir) / ".cookie").string();
+
+    // Write cookie file: "__cookie__:HEXVALUE"
+    std::ofstream ofs(cookie_file_path_, std::ios::trunc);
+    if (ofs.is_open()) {
+        ofs << "__cookie__:" << hex_cookie;
+        ofs.close();
+        LOG_INFO(core::LogCategory::RPC,
+                 "RPC cookie authentication file written to " + cookie_file_path_);
+    } else {
+        LOG_WARN(core::LogCategory::RPC,
+                 "Failed to write cookie file: " + cookie_file_path_);
+    }
+}
+
+void RpcServer::delete_cookie() {
+    if (!cookie_file_path_.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(cookie_file_path_, ec);
+        cookie_file_path_.clear();
+        cookie_credentials_.clear();
     }
 }
 
