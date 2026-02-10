@@ -128,6 +128,18 @@ struct MinedBlock {
 static std::vector<MinedBlock> g_block_history;
 
 // ---------------------------------------------------------------------------
+// Difficulty from compact nBits (same formula as the node's RPC)
+// ---------------------------------------------------------------------------
+static double get_difficulty(uint32_t bits) {
+    int shift = (bits >> 24) & 0xFF;
+    double diff = static_cast<double>(0x0000FFFF) /
+                  static_cast<double>(bits & 0x00FFFFFF);
+    while (shift < 29) { diff *= 256.0; ++shift; }
+    while (shift > 29) { diff /= 256.0; --shift; }
+    return diff;
+}
+
+// ---------------------------------------------------------------------------
 // Formatting utilities
 // ---------------------------------------------------------------------------
 static std::string format_hashrate(double hps) {
@@ -491,11 +503,8 @@ int main(int argc, char* argv[]) {
     // ---------------------------------------------------------------
     // Initialize GPU
     // ---------------------------------------------------------------
-    std::cout << "\n";
-    std::cout << color::bold() << color::cyan()
-              << "  +===================================+\n"
-              << "  |       FTC GPU Miner v2.0          |\n"
-              << "  +===================================+"
+    std::cout << "\n  " << color::bold() << color::cyan()
+              << "FTC GPU Miner v2.0"
               << color::reset() << "\n\n";
 
     std::cout << "  Initializing OpenCL..." << std::flush;
@@ -554,27 +563,81 @@ int main(int argc, char* argv[]) {
               << color::reset() << "\n\n";
 
     int blocks_mined = 0;
+    int blocks_rejected = 0;
     auto session_start = std::chrono::steady_clock::now();
     uint64_t session_hashes = 0;
+    int64_t current_mining_height = 0;
+    double current_diff = 0;  // Bitcoin-style difficulty (pow_limit / target)
+
+    // Periodic status line interval (seconds).
+    static constexpr double STATUS_INTERVAL = 10.0;
+    auto last_status_time = std::chrono::steady_clock::now();
+
+    // Format difficulty as a compact string.
+    auto format_diff = [](double d) -> std::string {
+        std::ostringstream oss;
+        oss << std::fixed;
+        if (d >= 1e12)      oss << std::setprecision(1) << (d / 1e12) << "T";
+        else if (d >= 1e9)  oss << std::setprecision(1) << (d / 1e9) << "G";
+        else if (d >= 1e6)  oss << std::setprecision(1) << (d / 1e6) << "M";
+        else if (d >= 1e3)  oss << std::setprecision(1) << (d / 1e3) << "K";
+        else                oss << std::setprecision(2) << d;
+        return oss.str();
+    };
+
+    // Helper: print a periodic hashrate status line (rigel/lolminer style).
+    auto print_status = [&](double hash_rate, int64_t height, bool newline) {
+        auto uptime = std::chrono::steady_clock::now() - session_start;
+        double uptime_s = std::chrono::duration<double>(uptime).count();
+
+        // ETA to next block: expected_hashes = difficulty * 2^32.
+        double expected_hashes = current_diff * 4294967296.0;
+        double eta = (hash_rate > 0 && expected_hashes > 0)
+            ? expected_hashes / hash_rate : 0;
+
+        std::ostringstream line;
+        line << "\r  " << color::dim() << current_timestamp() << color::reset()
+             << "  " << color::cyan() << color::bold()
+             << format_hashrate(hash_rate) << color::reset()
+             << "  " << color::dim() << "|" << color::reset()
+             << " block " << color::bold() << height << color::reset()
+             << "  " << color::dim() << "|" << color::reset()
+             << " diff " << format_diff(current_diff)
+             << "  " << color::dim() << "|" << color::reset()
+             << " eta " << color::yellow()
+             << (eta > 0 ? "~" + format_duration(eta) : "---")
+             << color::reset()
+             << "  " << color::dim() << "|" << color::reset()
+             << " " << color::green() << blocks_mined << color::reset()
+             << " found"
+             << "  " << color::dim() << "|" << color::reset()
+             << " up " << format_duration(uptime_s)
+             << "      ";
+        if (newline) {
+            std::cout << line.str() << std::endl;
+        } else {
+            std::cout << line.str() << std::flush;
+        }
+    };
 
     // Start background height poller to detect new blocks on the network.
     std::thread poller(height_poll_thread, rpc_host, rpc_port);
+
+    std::cout << "  " << color::dim() << current_timestamp() << color::reset()
+              << "  Mining started" << std::endl;
 
     while (!g_stop) {
         // Reset stale flag at the start of each work cycle.
         g_work_stale = false;
         // ---------------------------------------------------------------
-        // 1. Fetch work from node
+        // 1. Fetch work from node (silent — no output on success)
         // ---------------------------------------------------------------
-        std::cout << "  " << color::dim() << "[" << current_timestamp() << "]"
-                  << color::reset() << " Fetching work..." << std::flush;
-
         std::string resp = rpc_call(rpc_host, rpc_port, "getwork",
                                     "[\"" + address + "\"]");
         if (resp.empty()) {
-            std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::red()
-                      << "Failed to connect. Retrying in 5s..."
+            std::cout << "\r  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::red()
+                      << "RPC connection failed, retrying in 5s..."
                       << color::reset() << std::endl;
             for (int i = 0; i < 50 && !g_stop; ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -585,8 +648,8 @@ int main(int argc, char* argv[]) {
         try {
             json = rpc::parse_json(resp);
         } catch (const std::exception& e) {
-            std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::red()
+            std::cout << "\r  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::red()
                       << "JSON error: " << e.what()
                       << color::reset() << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -594,8 +657,8 @@ int main(int argc, char* argv[]) {
         }
 
         if (!json["result"].is_object()) {
-            std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::red()
+            std::cout << "\r  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::red()
                       << "RPC error: " << rpc::json_serialize(json["error"])
                       << color::reset() << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -614,19 +677,37 @@ int main(int argc, char* argv[]) {
         // ---------------------------------------------------------------
         auto header_opt = core::from_hex(header_hex);
         if (!header_opt || header_opt->size() < 80) {
-            std::cerr << "\r  " << color::red()
+            std::cerr << "\r  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::red()
                       << "Invalid header hex" << color::reset() << std::endl;
             continue;
         }
 
         auto target = core::uint256::from_hex(target_hex);
 
-        std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                  << "]" << color::reset() << " " << color::bold()
-                  << "Mining block " << height << color::reset()
-                  << "  " << color::dim() << "target: "
-                  << target_hex.substr(0, 16) << "..."
-                  << color::reset() << std::endl;
+        // Compute Bitcoin-style difficulty from nBits in the header.
+        // nBits is at header bytes [72..75] (little-endian uint32).
+        {
+            auto& hb = *header_opt;
+            uint32_t nbits =
+                static_cast<uint32_t>(hb[72])       |
+                (static_cast<uint32_t>(hb[73]) << 8) |
+                (static_cast<uint32_t>(hb[74]) << 16) |
+                (static_cast<uint32_t>(hb[75]) << 24);
+            current_diff = get_difficulty(nbits);
+        }
+
+        // Log new block height only when it changes.
+        if (height != current_mining_height) {
+            // Clear any inline progress
+            std::cout << "\r" << std::string(100, ' ') << "\r";
+            std::cout << "  " << color::dim() << current_timestamp()
+                      << color::reset() << "  New job: block "
+                      << color::bold() << height << color::reset()
+                      << "  diff " << format_diff(current_diff)
+                      << std::endl;
+            current_mining_height = height;
+        }
 
         // Upload header and target to GPU
         miner.set_header(std::span<const uint8_t>(
@@ -650,10 +731,6 @@ int main(int argc, char* argv[]) {
         // ---------------------------------------------------------------
         // 3. GPU mining loop with timestamp rolling
         // ---------------------------------------------------------------
-        // When all 4.2B nonces are exhausted, increment the timestamp by
-        // 1 second.  This changes the header hash completely, giving a
-        // fresh set of 4.2B nonces without an RPC round-trip.
-        // ---------------------------------------------------------------
         g_chain_height = height;
 
         while (!g_stop && !found && !g_work_stale) {
@@ -669,6 +746,7 @@ int main(int argc, char* argv[]) {
 
                 auto results = miner.mine_batch(base_nonce, this_batch);
                 block_hashes += this_batch;
+                session_hashes += this_batch;
 
                 if (!results.empty()) {
                     for (uint32_t nonce : results) {
@@ -693,27 +771,23 @@ int main(int argc, char* argv[]) {
                 if (next > UINT32_MAX) break;
                 base_nonce = static_cast<uint32_t>(next);
 
-                // Update progress display
+                // Periodic status line every STATUS_INTERVAL seconds.
                 auto now = std::chrono::steady_clock::now();
-                double elapsed = std::chrono::duration<double>(
-                    now - block_start).count();
-                double hash_rate = elapsed > 0.01
-                    ? static_cast<double>(block_hashes) / elapsed : 0;
-
-                std::ostringstream line;
-                line << "\r  " << color::dim() << "  " << color::reset()
-                     << color::cyan() << format_hashrate(hash_rate)
-                     << color::reset()
-                     << "  " << color::dim() << format_number(block_hashes)
-                     << " hashes"
-                     << "  " << format_duration(elapsed)
-                     << color::reset() << "      ";
-                std::cout << line.str() << std::flush;
+                double since_status = std::chrono::duration<double>(
+                    now - last_status_time).count();
+                if (since_status >= STATUS_INTERVAL) {
+                    double elapsed = std::chrono::duration<double>(
+                        now - block_start).count();
+                    double hash_rate = elapsed > 0.01
+                        ? static_cast<double>(block_hashes) / elapsed : 0;
+                    print_status(hash_rate, height, true);
+                    last_status_time = now;
+                }
             }
 
             if (found || g_stop || g_work_stale) break;
 
-            // Nonce space exhausted — roll timestamp and retry.
+            // Nonce space exhausted — roll timestamp silently and retry.
             ++cur_timestamp;
 
             // Safety: don't set timestamp too far into the future.
@@ -731,10 +805,8 @@ int main(int argc, char* argv[]) {
                 hdr_bytes.data(), 80));
         }
 
-        // Clear progress line
-        std::cout << "\r" << std::string(80, ' ') << "\r";
-
-        session_hashes += block_hashes;
+        // Clear inline progress.
+        std::cout << "\r" << std::string(100, ' ') << "\r";
 
         auto block_elapsed = std::chrono::steady_clock::now() - block_start;
         double block_secs = std::chrono::duration<double>(
@@ -744,34 +816,19 @@ int main(int argc, char* argv[]) {
 
         if (!found) {
             if (g_stop) break;
-            if (g_work_stale) {
-                std::cout << "  " << color::dim() << "[" << current_timestamp()
-                          << "]" << color::reset() << " " << color::yellow()
-                          << "New block detected (height "
-                          << g_chain_height.load() << "), switching to fresh work..."
-                          << color::reset() << std::endl;
-            }
-            // Timestamp limit reached — silently fetch new work.
+            // Stale work or timestamp limit — silently fetch new work.
             continue;
         }
-
-        std::cout << "  " << color::dim() << "[" << current_timestamp()
-                  << "]" << color::reset() << " " << color::green()
-                  << color::bold() << "Solution found!"
-                  << color::reset()
-                  << "  nonce=" << winning_nonce
-                  << "  " << color::dim() << format_duration(block_secs)
-                  << color::reset()
-                  << "  " << format_hashrate(block_rate)
-                  << "  " << format_number(block_hashes) << " hashes"
-                  << std::endl;
 
         // ---------------------------------------------------------------
         // 4. Submit solution
         // ---------------------------------------------------------------
-        std::cout << "  " << color::dim() << "[" << current_timestamp()
-                  << "]" << color::reset() << " Submitting block..."
-                  << std::flush;
+        std::cout << "  " << color::dim() << current_timestamp()
+                  << color::reset() << "  " << color::green() << color::bold()
+                  << "BLOCK FOUND" << color::reset()
+                  << "  height " << color::bold() << height << color::reset()
+                  << "  " << format_hashrate(block_rate)
+                  << "  " << format_duration(block_secs) << std::endl;
 
         std::string submit_resp = rpc_call(
             rpc_host, rpc_port, "submitwork",
@@ -780,9 +837,10 @@ int main(int argc, char* argv[]) {
             std::to_string(cur_timestamp) + "]");
 
         if (submit_resp.empty()) {
-            std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::red()
-                      << "Failed to submit. Node unreachable."
+            ++blocks_rejected;
+            std::cout << "  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::red()
+                      << "Submit failed — node unreachable"
                       << color::reset() << std::endl;
             continue;
         }
@@ -791,9 +849,10 @@ int main(int argc, char* argv[]) {
         try {
             submit_json = rpc::parse_json(submit_resp);
         } catch (const std::exception& e) {
-            std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::red()
-                      << "Parse error: " << e.what()
+            ++blocks_rejected;
+            std::cout << "  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::red()
+                      << "Submit parse error: " << e.what()
                       << color::reset() << std::endl;
             continue;
         }
@@ -806,19 +865,18 @@ int main(int argc, char* argv[]) {
                 height, block_hash, block_secs, current_timestamp()
             });
 
-            std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::green()
-                      << color::bold() << "Block accepted!"
-                      << color::reset()
-                      << "  height=" << color::bold() << height
-                      << color::reset()
-                      << "  hash=" << color::dim()
-                      << block_hash.substr(0, 16) << "..."
-                      << color::reset() << std::endl << std::endl;
+            std::cout << "  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::green()
+                      << "Accepted" << color::reset()
+                      << " #" << blocks_mined
+                      << "  " << color::dim()
+                      << block_hash.substr(0, 20) << "..."
+                      << color::reset() << std::endl;
         } else {
-            std::cout << "\r  " << color::dim() << "[" << current_timestamp()
-                      << "]" << color::reset() << " " << color::red()
-                      << color::bold() << "Block rejected: "
+            ++blocks_rejected;
+            std::cout << "  " << color::dim() << current_timestamp()
+                      << color::reset() << "  " << color::red()
+                      << "Rejected: "
                       << rpc::json_serialize(submit_json["error"])
                       << color::reset() << std::endl;
         }
@@ -839,22 +897,22 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\n";
     std::cout << color::bold() << color::cyan()
-              << "  +===================================+\n"
-              << "  |         Session Summary            |\n"
-              << "  +===================================+"
-              << color::reset() << "\n\n";
-
-    std::cout << "  " << color::dim() << "Blocks mined:" << color::reset()
-              << "  " << color::bold() << color::green() << blocks_mined
+              << "  === Session Summary ==="
               << color::reset() << "\n";
-    std::cout << "  " << color::dim() << "Hashes:     " << color::reset()
-              << "  " << format_number(session_hashes) << "\n";
-    std::cout << "  " << color::dim() << "Session time:" << color::reset()
-              << "  " << format_duration(session_secs) << "\n";
-    std::cout << "  " << color::dim() << "Avg rate:   " << color::reset()
-              << "  " << format_hashrate(session_rate) << "\n";
 
-    std::cout << "\n";
+    std::cout << "  " << color::dim() << "Uptime:  " << color::reset()
+              << format_duration(session_secs) << "\n";
+    std::cout << "  " << color::dim() << "Avg rate:" << color::reset()
+              << " " << format_hashrate(session_rate) << "\n";
+    std::cout << "  " << color::dim() << "Hashes:  " << color::reset()
+              << format_number(session_hashes) << "\n";
+    std::cout << "  " << color::dim() << "Found:   " << color::reset()
+              << color::green() << blocks_mined << color::reset();
+    if (blocks_rejected > 0) {
+        std::cout << "  " << color::red() << blocks_rejected
+                  << " rejected" << color::reset();
+    }
+    std::cout << "\n\n";
 
 #ifdef _WIN32
     WSACleanup();
