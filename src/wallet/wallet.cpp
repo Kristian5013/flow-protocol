@@ -672,17 +672,27 @@ core::Result<void> Wallet::scan_block_at_height(int height) {
                            std::to_string(height));
     }
 
-    // Read the block from storage. We need the block store from
-    // the chainstate. Since ChainstateManager doesn't expose the
-    // block store directly, we skip reading the full block here
-    // and instead rely on the chainstate providing the block.
-    // In a production implementation, the block store would be
-    // accessible, or we'd use a dedicated block reading interface.
+    // Read the block from storage.
+    auto block_result = chainstate_.read_block(index);
+    if (!block_result) {
+        return core::Error(core::ErrorCode::STORAGE_ERROR,
+                           "Failed to read block at height " +
+                           std::to_string(height));
+    }
 
-    // For now, log the scan attempt. The actual block reading would
-    // go through chain::storage::BlockStore::read_block(index->data_pos).
-    LOG_TRACE(core::LogCategory::WALLET,
-              "Scanned block at height " + std::to_string(height));
+    // Scan the block for wallet-relevant transactions.
+    auto scan_result = coins_.scan_block(block_result.value(), height);
+    if (!scan_result) {
+        return core::Error(scan_result.error().code(),
+                           scan_result.error().message());
+    }
+
+    auto found = scan_result.value();
+    if (found > 0) {
+        LOG_INFO(core::LogCategory::WALLET,
+                 "Block " + std::to_string(height) + ": found " +
+                 std::to_string(found) + " wallet transaction(s)");
+    }
 
     return core::Result<void>{};
 }
