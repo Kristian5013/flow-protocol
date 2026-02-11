@@ -124,22 +124,19 @@ __constant ulong RC[24] = {
 } while(0)
 
 // -------------------------------------------------------------------------
-// KECCAK_F1600 -- full 24-round permutation (fully unrolled)
+// KECCAK_F1600 -- full 24-round permutation (loop, not unrolled)
+//
+// Using a loop instead of full unroll reduces register pressure on
+// Ada Lovelace / Ampere GPUs while scalar variables still prevent
+// dead-store elimination on Blackwell.  #pragma unroll 1 ensures the
+// compiler doesn't unroll and blow up register usage.
 // -------------------------------------------------------------------------
 
 #define KECCAK_F1600() do {                                                \
-    KECCAK_ROUND(RC[ 0]); KECCAK_ROUND(RC[ 1]);                           \
-    KECCAK_ROUND(RC[ 2]); KECCAK_ROUND(RC[ 3]);                           \
-    KECCAK_ROUND(RC[ 4]); KECCAK_ROUND(RC[ 5]);                           \
-    KECCAK_ROUND(RC[ 6]); KECCAK_ROUND(RC[ 7]);                           \
-    KECCAK_ROUND(RC[ 8]); KECCAK_ROUND(RC[ 9]);                           \
-    KECCAK_ROUND(RC[10]); KECCAK_ROUND(RC[11]);                           \
-    KECCAK_ROUND(RC[12]); KECCAK_ROUND(RC[13]);                           \
-    KECCAK_ROUND(RC[14]); KECCAK_ROUND(RC[15]);                           \
-    KECCAK_ROUND(RC[16]); KECCAK_ROUND(RC[17]);                           \
-    KECCAK_ROUND(RC[18]); KECCAK_ROUND(RC[19]);                           \
-    KECCAK_ROUND(RC[20]); KECCAK_ROUND(RC[21]);                           \
-    KECCAK_ROUND(RC[22]); KECCAK_ROUND(RC[23]);                           \
+    _Pragma("unroll 1")                                                    \
+    for (int _kf_r = 0; _kf_r < 24; ++_kf_r) {                           \
+        KECCAK_ROUND(RC[_kf_r]);                                          \
+    }                                                                      \
 } while(0)
 
 #endif // KECCAK256_CL
