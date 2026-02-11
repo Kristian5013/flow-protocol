@@ -128,13 +128,15 @@ __constant ulong RC[24] = {
 //
 // Using a loop instead of full unroll reduces register pressure on
 // Ada Lovelace / Ampere GPUs while scalar variables still prevent
-// dead-store elimination on Blackwell.  #pragma unroll 1 ensures the
-// compiler doesn't unroll and blow up register usage.
+// dead-store elimination on Blackwell.
+//
+// The loop variable is declared volatile to guarantee the compiler cannot
+// unroll the loop on ANY architecture.  #pragma unroll 1 alone is ignored
+// by some NVIDIA OpenCL compilers (observed on Blackwell RTX 5070 Ti).
 // -------------------------------------------------------------------------
 
 #define KECCAK_F1600() do {                                                \
-    _Pragma("unroll 1")                                                    \
-    for (int _kf_r = 0; _kf_r < 24; ++_kf_r) {                           \
+    for (volatile int _kf_r = 0; _kf_r < 24; ++_kf_r) {                  \
         KECCAK_ROUND(RC[_kf_r]);                                          \
     }                                                                      \
 } while(0)
