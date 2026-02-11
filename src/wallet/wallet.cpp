@@ -613,6 +613,11 @@ void Wallet::scanner_loop() {
     LOG_INFO(core::LogCategory::WALLET,
              "Wallet scanner thread started");
 
+    // Force a full rescan from block 0 on every startup to ensure
+    // no blocks are missed.  At current chain heights (~22K blocks)
+    // this takes only a few seconds.
+    last_scanned_height_ = 0;
+
     while (scanner_running_.load()) {
         {
             std::lock_guard lock(mutex_);
