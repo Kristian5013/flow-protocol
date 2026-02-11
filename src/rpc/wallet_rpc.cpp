@@ -278,6 +278,25 @@ RpcResponse rpc_dumpprivkey(const RpcRequest& req, wallet::Wallet* wallet) {
 // importprivkey
 // ===========================================================================
 
+RpcResponse rpc_rescanwallet(const RpcRequest& req, wallet::Wallet* wallet) {
+    RpcResponse err;
+    if (!check_wallet(wallet, req, err)) return err;
+
+    int from_height = static_cast<int>(param_int(req.params, 0, 0));
+
+    auto result = wallet->rescan(from_height);
+    if (!result.ok()) {
+        return make_error(RpcError::WALLET_ERROR,
+                          "Rescan failed: " + result.error().message(),
+                          req.id);
+    }
+
+    JsonValue obj(JsonValue::Object{});
+    obj["start_height"] = JsonValue(static_cast<int64_t>(from_height));
+    obj["stop_height"] = JsonValue(static_cast<int64_t>(wallet->last_scanned_height()));
+    return make_result(obj, req.id);
+}
+
 RpcResponse rpc_importprivkey(const RpcRequest& req, wallet::Wallet* wallet) {
     RpcResponse err;
     if (!check_wallet(wallet, req, err)) return err;
@@ -349,6 +368,12 @@ void register_wallet_rpcs(RpcServer& server, wallet::Wallet* wallet) {
          "importprivkey \"privkey\" ( \"label\" rescan )\n"
          "Adds a private key (WIF format) to your wallet.\n"
          "rescan: rescan the blockchain for transactions (default true).",
+         "wallet"},
+
+        {"rescanwallet",
+         [wallet](const RpcRequest& r) { return rpc_rescanwallet(r, wallet); },
+         "rescanwallet ( start_height )\n"
+         "Rescans the blockchain for wallet transactions starting from the given height (default 0).",
          "wallet"},
     });
 }
