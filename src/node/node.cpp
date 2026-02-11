@@ -158,11 +158,9 @@ core::Result<void> Node::init() {
     if (config_.wallet_enabled) {
         auto wallet_result = init_wallet(ctx_);
         if (!wallet_result.ok()) {
-            LOG_ERROR(core::LogCategory::WALLET,
-                      "Wallet initialization failed: " +
-                      wallet_result.error().message());
-            shutdown_all(ctx_);
-            return wallet_result.error();
+            LOG_WARN(core::LogCategory::WALLET,
+                     "Wallet initialization failed, continuing without wallet: " +
+                     wallet_result.error().message());
         }
         if (ctx_.wallet) {
             wallet_.reset(ctx_.wallet);
