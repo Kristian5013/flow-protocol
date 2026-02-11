@@ -64,7 +64,7 @@ struct NodeConfig {
     std::vector<std::string> rpc_allowip; // CIDR subnets or bare IPs
 
     // -- Wallet --------------------------------------------------------------
-    bool wallet_enabled = true;
+    bool wallet_enabled = false;
     std::string wallet_file = "wallet.dat";
 
     // -- Mining --------------------------------------------------------------
