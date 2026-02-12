@@ -505,6 +505,23 @@ static bool run_keccak_test(gpu::GpuMiner& miner) {
 // ---------------------------------------------------------------------------
 // TUI — cgminer-style static dashboard (multi-GPU)
 // ---------------------------------------------------------------------------
+
+// ANSI color helpers — emit codes only when g_ansi is true
+#define C_RESET   (g_ansi ? "\033[0m"    : "")
+#define C_BOLD    (g_ansi ? "\033[1m"    : "")
+#define C_DIM     (g_ansi ? "\033[2m"    : "")
+#define C_RED     (g_ansi ? "\033[31m"   : "")
+#define C_GREEN   (g_ansi ? "\033[32m"   : "")
+#define C_YELLOW  (g_ansi ? "\033[33m"   : "")
+#define C_BLUE    (g_ansi ? "\033[34m"   : "")
+#define C_CYAN    (g_ansi ? "\033[36m"   : "")
+#define C_WHITE   (g_ansi ? "\033[37m"   : "")
+#define C_BGREEN  (g_ansi ? "\033[1;32m" : "")
+#define C_BYELLOW (g_ansi ? "\033[1;33m" : "")
+#define C_BCYAN   (g_ansi ? "\033[1;36m" : "")
+#define C_BWHITE  (g_ansi ? "\033[1;37m" : "")
+#define C_BRED    (g_ansi ? "\033[1;31m" : "")
+
 static std::vector<std::string> g_tui_log;
 static constexpr size_t TUI_MAX_LOG = 50;
 
@@ -592,8 +609,9 @@ static void tui_redraw(TuiState& st) {
 
     if (g_ansi) buf << "\033[H";  // cursor home
 
-    // Line 1: title
-    buf << "FTC Miner v2.3 (multi-GPU) - Started: [" << st.start_time << "]";
+    // Line 1: title bar
+    buf << C_BCYAN << "FTC Miner v2.3" << C_RESET
+        << C_DIM << " - Started: [" << st.start_time << "]" << C_RESET;
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
@@ -602,27 +620,34 @@ static void tui_redraw(TuiState& st) {
     buf << "\n";
 
     // Line 3: hashrate + stats
-    buf << "(10s):" << format_hashrate(rate)
-        << " (avg):" << format_hashrate(avg)
-        << " | Found:" << st.blocks_found
-        << " R:" << st.blocks_rejected
-        << " | Up:" << format_duration(up);
+    buf << C_WHITE << "(10s):" << C_BGREEN << format_hashrate(rate) << C_RESET
+        << C_WHITE << " (avg):" << C_GREEN << format_hashrate(avg) << C_RESET
+        << C_DIM << " | " << C_RESET
+        << C_WHITE << "Found:" << C_BGREEN << st.blocks_found << C_RESET
+        << " " << C_WHITE << "R:" << C_RESET;
+    if (st.blocks_rejected > 0)
+        buf << C_BRED << st.blocks_rejected << C_RESET;
+    else
+        buf << C_DIM << "0" << C_RESET;
+    buf << C_DIM << " | " << C_RESET
+        << C_WHITE << "Up:" << C_CYAN << format_duration(up) << C_RESET;
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
     // Line 4: block info
-    buf << "Block:" << st.height
-        << "  Diff:" << format_diff(st.difficulty)
-        << "  ETA:" << (eta > 0 ? "~" + format_duration(eta) : "---");
+    buf << C_WHITE << "Block:" << C_BWHITE << st.height << C_RESET
+        << "  " << C_WHITE << "Diff:" << C_YELLOW << format_diff(st.difficulty) << C_RESET
+        << "  " << C_WHITE << "ETA:" << C_BYELLOW
+        << (eta > 0 ? "~" + format_duration(eta) : "---") << C_RESET;
     if (st.power_pct < 100)
-        buf << "  Power:" << st.power_pct << "%";
+        buf << "  " << C_WHITE << "Power:" << C_YELLOW << st.power_pct << "%" << C_RESET;
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
     // Line 5: connection info
-    buf << "Node:" << st.node
+    buf << C_DIM << "Node:" << st.node
         << "  Auth:" << st.auth_mode
-        << "  Addr:" << st.address;
+        << "  Addr:" << st.address << C_RESET;
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
@@ -632,31 +657,49 @@ static void tui_redraw(TuiState& st) {
 
     // Lines 7+: per-GPU status
     for (auto* w : st.workers) {
-        buf << "GPU " << w->gpu_index << ": " << w->info.name
-            << " | " << (w->info.global_mem / (1024*1024)) << " MB  "
-            << w->info.compute_units << " CUs"
-            << " | " << format_hashrate(w->window_rate)
-            << "  Batch:" << format_number(w->batch_size);
+        buf << C_BWHITE << "GPU " << w->gpu_index << C_RESET
+            << C_DIM << ": " << C_RESET
+            << C_CYAN << w->info.name << C_RESET
+            << C_DIM << " | " << C_RESET
+            << C_WHITE << (w->info.global_mem / (1024*1024)) << " MB  "
+            << w->info.compute_units << " CUs" << C_RESET
+            << C_DIM << " | " << C_RESET
+            << C_BGREEN << format_hashrate(w->window_rate) << C_RESET
+            << "  " << C_DIM << "Batch:" << format_number(w->batch_size) << C_RESET;
         if (g_ansi) buf << "\033[K";
         buf << "\n";
     }
 
-    // Total line
+    // Total line (multi-GPU only)
     if (st.workers.size() > 1) {
-        buf << "Total: " << st.workers.size() << " GPUs | "
-            << format_hashrate(rate);
+        buf << C_BWHITE << "Total: " << st.workers.size() << " GPUs" << C_RESET
+            << C_DIM << " | " << C_RESET
+            << C_BGREEN << format_hashrate(rate) << C_RESET;
         if (g_ansi) buf << "\033[K";
         buf << "\n";
     }
 
     // Separator
-    buf << std::string(72, '-');
+    buf << C_DIM << std::string(72, '-') << C_RESET;
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
     // Event log
     for (const auto& line : g_tui_log) {
-        buf << line;
+        // Colorize important log events
+        if (line.find("BLOCK FOUND") != std::string::npos ||
+            line.find("Accepted") != std::string::npos) {
+            buf << C_BGREEN << line << C_RESET;
+        } else if (line.find("Rejected") != std::string::npos ||
+                   line.find("failed") != std::string::npos ||
+                   line.find("error") != std::string::npos ||
+                   line.find("Error") != std::string::npos) {
+            buf << C_BRED << line << C_RESET;
+        } else if (line.find("New job") != std::string::npos) {
+            buf << C_DIM << line << C_RESET;
+        } else {
+            buf << C_WHITE << line << C_RESET;
+        }
         if (g_ansi) buf << "\033[K";
         buf << "\n";
     }
