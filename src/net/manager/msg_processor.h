@@ -123,11 +123,34 @@ private:
     std::unordered_map<uint64_t, std::unordered_set<core::uint256>>
         peer_announced_txs_;
 
-    // -- Block download parameters -------------------------------------------
+    // -- Block download parameters (Bitcoin Core style) ----------------------
+
     static constexpr int64_t STALE_TIP_CHECK_INTERVAL = 30;     // seconds
     static constexpr int64_t STALE_TIP_THRESHOLD = 30 * 60;     // 30 minutes
-    static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 10;       // seconds
     static constexpr int     MAX_BLOCKS_IN_TRANSIT_PER_PEER = 128;
+
+    /// Stalling timeout: when a peer is blocking the download pipeline for
+    /// other peers, disconnect after this many seconds.  Uses exponential
+    /// backoff (doubles on each disconnect, decays by 0.85x on chain tip
+    /// advance) to prevent cascading disconnections when our own bandwidth
+    /// is the bottleneck.  Matches Bitcoin Core's m_block_stalling_timeout.
+    static constexpr int64_t BLOCK_STALLING_TIMEOUT_DEFAULT = 2;
+    static constexpr int64_t BLOCK_STALLING_TIMEOUT_MAX = 64;
+    int64_t block_stalling_timeout_ = BLOCK_STALLING_TIMEOUT_DEFAULT;
+
+    /// Slow per-block download timeout: disconnect a peer if its oldest
+    /// in-flight block has not arrived in this many seconds.  Matches
+    /// Bitcoin Core's BLOCK_DOWNLOAD_TIMEOUT_BASE concept (1x block interval)
+    /// but uses a shorter value since our network is small.
+    static constexpr int64_t BLOCK_DOWNLOAD_TIMEOUT = 60;
+
+    /// Per-peer stalling state.  Records the time when a peer was identified
+    /// as blocking the download pipeline (0 = not stalling).  Set in
+    /// request_blocks() when another peer finds all blocks in the window
+    /// already in-flight from this peer.  Cleared when any block arrives
+    /// from the peer.  Matches Bitcoin Core's CNodeState::m_stalling_since.
+    std::unordered_map<uint64_t, int64_t> peer_stalling_since_;
+
     int64_t last_stale_check_ = 0;
     int64_t last_header_probe_ = 0;
     int64_t last_block_catchup_ = 0;
