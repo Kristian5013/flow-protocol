@@ -408,6 +408,18 @@ bool AddrMan::add(const AddressWithPort& addr, const NetAddress& source) {
             if (addr.services != 0) {
                 it->second.addr.services |= addr.services;
             }
+            // If this address is terrible but someone (DNS seeds, peer gossip)
+            // is telling us about it again with a fresh timestamp, give it
+            // another chance by resetting the attempt counter.
+            int64_t now = core::get_time();
+            if (it->second.is_terrible(now) && addr.timestamp > 0 &&
+                (now - addr.timestamp) < SECONDS_PER_DAY) {
+                it->second.attempts = 0;
+                it->second.last_try = 0;
+                LOG_DEBUG(core::LogCategory::NET,
+                          "AddrMan: reset attempts for re-added address " +
+                          addr.to_string());
+            }
         }
         return false;
     }

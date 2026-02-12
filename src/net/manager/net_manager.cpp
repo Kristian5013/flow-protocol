@@ -502,7 +502,29 @@ void NetManager::dns_seed_lookup() {
         }
     }
 
-    // After seeding the address manager, try to open outbound connections.
+    // When isolated (no outbound connections), connect directly to the
+    // resolved addresses instead of relying on AddrMan random bucket
+    // selection.  With only a few addresses in a 65K-slot table, random
+    // selection has an extremely low hit rate and frequently fails.
+    if (conn_manager_->outbound_count() == 0) {
+        auto all_addrs = addrman_.get_addr_all(50);
+        for (const auto& addr : all_addrs) {
+            if (static_cast<int>(conn_manager_->outbound_count()) >=
+                config_.conn_config.max_outbound) {
+                break;
+            }
+            std::string host = addr.addr.to_string();
+            uint16_t port = addr.port;
+            auto result = conn_manager_->connect_to(host, port);
+            if (result.ok()) {
+                LOG_INFO(core::LogCategory::NET,
+                         "Direct connection to seed " + host + ":" +
+                         std::to_string(port));
+            }
+        }
+    }
+
+    // Also try AddrMan-based selection for additional connections.
     open_outbound_connections();
 }
 
