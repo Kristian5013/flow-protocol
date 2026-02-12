@@ -58,40 +58,24 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// ANSI color codes
+// Terminal support
 // ---------------------------------------------------------------------------
-namespace color {
+static bool g_ansi = false;  // true if terminal supports ANSI cursor codes
 
-static bool g_enabled = true;
-
-inline const char* reset()   { return g_enabled ? "\033[0m"    : ""; }
-inline const char* bold()    { return g_enabled ? "\033[1m"    : ""; }
-inline const char* dim()     { return g_enabled ? "\033[2m"    : ""; }
-inline const char* red()     { return g_enabled ? "\033[31m"   : ""; }
-inline const char* green()   { return g_enabled ? "\033[32m"   : ""; }
-inline const char* yellow()  { return g_enabled ? "\033[33m"   : ""; }
-inline const char* blue()    { return g_enabled ? "\033[34m"   : ""; }
-inline const char* magenta() { return g_enabled ? "\033[35m"   : ""; }
-inline const char* cyan()    { return g_enabled ? "\033[36m"   : ""; }
-
-void init() {
+static void term_init() {
 #ifdef _WIN32
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     if (h != INVALID_HANDLE_VALUE) {
         DWORD mode = 0;
         if (GetConsoleMode(h, &mode)) {
-            mode |= 0x0004;
-            if (!SetConsoleMode(h, mode)) g_enabled = false;
-        } else {
-            g_enabled = false;
+            mode |= 0x0004;  // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            g_ansi = SetConsoleMode(h, mode);
         }
     }
 #else
-    if (!isatty(fileno(stdout))) g_enabled = false;
+    g_ansi = isatty(fileno(stdout));
 #endif
 }
-
-} // namespace color
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -106,8 +90,6 @@ static std::atomic<bool> g_work_stale{false};    // set when height changes
 static BOOL WINAPI console_handler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT) {
         g_stop = true;
-        std::cout << "\n" << color::yellow() << "Stopping miner..."
-                  << color::reset() << std::endl;
         return TRUE;
     }
     return FALSE;
@@ -191,6 +173,17 @@ static std::string format_duration(double seconds) {
     return std::to_string(hours) + "h " + std::to_string(mins) + "m";
 }
 
+static std::string format_diff(double d) {
+    std::ostringstream oss;
+    oss << std::fixed;
+    if (d >= 1e12)      oss << std::setprecision(1) << (d / 1e12) << "T";
+    else if (d >= 1e9)  oss << std::setprecision(1) << (d / 1e9) << "G";
+    else if (d >= 1e6)  oss << std::setprecision(1) << (d / 1e6) << "M";
+    else if (d >= 1e3)  oss << std::setprecision(1) << (d / 1e3) << "K";
+    else                oss << std::setprecision(2) << d;
+    return oss.str();
+}
+
 static std::string current_timestamp() {
     auto now = std::chrono::system_clock::now();
     auto t = std::chrono::system_clock::to_time_t(now);
@@ -202,6 +195,20 @@ static std::string current_timestamp() {
 #endif
     char buf[20];
     std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm_buf);
+    return std::string(buf);
+}
+
+static std::string current_datetime() {
+    auto now = std::chrono::system_clock::now();
+    auto t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf{};
+#ifdef _WIN32
+    localtime_s(&tm_buf, &t);
+#else
+    localtime_r(&t, &tm_buf);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
     return std::string(buf);
 }
 
@@ -229,7 +236,6 @@ static std::string base64_encode(const std::string& input) {
 // Cookie-based auth: auto-read .cookie from default data directory
 // ---------------------------------------------------------------------------
 static bool try_load_cookie() {
-    // Determine the default data directory (same logic as core::fs).
     std::filesystem::path datadir;
 #ifdef _WIN32
     const char* appdata = std::getenv("APPDATA");
@@ -257,7 +263,6 @@ static bool try_load_cookie() {
     std::string line;
     if (!std::getline(ifs, line)) return false;
 
-    // Format: "__cookie__:HEXVALUE"
     auto colon = line.find(':');
     if (colon == std::string::npos) return false;
 
@@ -368,7 +373,6 @@ static void height_poll_thread(const std::string& host, uint16_t port) {
                 }
             } catch (...) {}
         }
-        // Poll every 500ms — fast enough to catch new blocks promptly.
         for (int i = 0; i < 5 && !g_stop; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -402,26 +406,18 @@ static bool has_arg(int argc, char* argv[], const std::string& name) {
 static bool run_keccak_test(gpu::GpuMiner& miner) {
     std::cout << "  Running Keccak256d GPU validation...\n";
 
-    // We test by mining with a very easy target (all 0xFF)
-    // and checking that the nonces we find produce hashes that
-    // also pass on the CPU.
-
     int passed = 0;
     int total = 10;
 
     for (int t = 0; t < total; ++t) {
-        // Create a pseudo-random 80-byte header
         std::array<uint8_t, 80> header{};
         for (int i = 0; i < 80; ++i)
             header[i] = static_cast<uint8_t>((t * 137 + i * 31) & 0xFF);
-
-        // Set nonce to 0
         header[76] = header[77] = header[78] = header[79] = 0;
 
-        // Easy target: 00FF... (anything with first byte < 0xFF passes)
         std::array<uint8_t, 32> target{};
         std::memset(target.data(), 0xFF, 32);
-        target[31] = 0x00;  // MSB = 0 means hash must have byte[31] = 0
+        target[31] = 0x00;
         target[30] = 0xFF;
 
         miner.set_header(std::span<const uint8_t>(header.data(), 80));
@@ -434,7 +430,6 @@ static bool run_keccak_test(gpu::GpuMiner& miner) {
             continue;
         }
 
-        // Verify first result on CPU
         uint32_t nonce = results[0];
         header[76] = nonce & 0xFF;
         header[77] = (nonce >> 8) & 0xFF;
@@ -443,7 +438,6 @@ static bool run_keccak_test(gpu::GpuMiner& miner) {
 
         auto cpu_hash = crypto::keccak256d(
             std::span<const uint8_t>(header.data(), 80));
-
         auto cpu_target = core::uint256::from_bytes(
             std::span<const uint8_t, 32>(target.data(), 32));
 
@@ -455,14 +449,150 @@ static bool run_keccak_test(gpu::GpuMiner& miner) {
         }
     }
 
-    std::cout << "  Keccak256d test: " << passed << "/" << total;
-    if (passed == total) {
-        std::cout << " " << color::green() << "PASSED" << color::reset();
-    } else {
-        std::cout << " " << color::red() << "FAILED" << color::reset();
-    }
-    std::cout << "\n";
+    std::cout << "  Keccak256d test: " << passed << "/" << total
+              << (passed == total ? " PASSED" : " FAILED") << "\n";
     return passed == total;
+}
+
+// ---------------------------------------------------------------------------
+// TUI — cgminer-style static dashboard
+// ---------------------------------------------------------------------------
+static std::vector<std::string> g_tui_log;
+static constexpr size_t TUI_MAX_LOG = 50;
+
+static void tui_log(const std::string& msg) {
+    g_tui_log.push_back("[" + current_timestamp() + "] " + msg);
+    if (g_tui_log.size() > TUI_MAX_LOG)
+        g_tui_log.erase(g_tui_log.begin());
+}
+
+struct TuiState {
+    // Static info (set once)
+    std::string gpu_name;
+    int gpu_mem_mb = 0;
+    int gpu_cus = 0;
+    std::string address;
+    std::string node;
+    std::string auth_mode;
+    std::string start_time;
+    uint32_t batch_size = 0;
+    int power_pct = 100;
+
+    // Dynamic info (updated during mining)
+    int64_t height = 0;
+    double difficulty = 0;
+    int blocks_found = 0;
+    int blocks_rejected = 0;
+
+    // Hashrate tracking
+    uint64_t session_hashes = 0;
+    std::chrono::steady_clock::time_point session_start;
+    uint64_t window_hashes = 0;
+    std::chrono::steady_clock::time_point window_start;
+    double window_rate = 0;
+
+    void add_hashes(uint64_t n) {
+        session_hashes += n;
+        window_hashes += n;
+    }
+
+    double avg_hashrate() const {
+        double s = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - session_start).count();
+        return s > 0.5 ? static_cast<double>(session_hashes) / s : 0;
+    }
+
+    double current_hashrate() {
+        auto now = std::chrono::steady_clock::now();
+        double s = std::chrono::duration<double>(now - window_start).count();
+        if (s >= 10.0) {
+            window_rate = static_cast<double>(window_hashes) / s;
+            window_hashes = 0;
+            window_start = now;
+        }
+        return window_rate > 0 ? window_rate
+            : (s > 0.5 ? static_cast<double>(window_hashes) / s : 0);
+    }
+
+    double uptime() const {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - session_start).count();
+    }
+};
+
+static void tui_redraw(TuiState& st) {
+    double rate = st.current_hashrate();
+    double avg = st.avg_hashrate();
+    double up = st.uptime();
+    double expected = st.difficulty * 4294967296.0;
+    double eta = (rate > 0 && expected > 0) ? expected / rate : 0;
+
+    std::ostringstream buf;
+
+    if (g_ansi) buf << "\033[H";  // cursor home
+
+    // Line 1: title
+    buf << "FTC Miner v2.2 - Started: [" << st.start_time << "]";
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Line 2: blank
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Line 3: hashrate + stats
+    buf << "(10s):" << format_hashrate(rate)
+        << " (avg):" << format_hashrate(avg)
+        << " | Found:" << st.blocks_found
+        << " R:" << st.blocks_rejected
+        << " | Up:" << format_duration(up);
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Line 4: block info
+    buf << "Block:" << st.height
+        << "  Diff:" << format_diff(st.difficulty)
+        << "  ETA:" << (eta > 0 ? "~" + format_duration(eta) : "---");
+    if (st.power_pct < 100)
+        buf << "  Power:" << st.power_pct << "%";
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Line 5: connection info
+    buf << "Node:" << st.node
+        << "  Auth:" << st.auth_mode
+        << "  Addr:" << st.address;
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Line 6: blank
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Line 7: GPU status
+    buf << "GPU 0: " << st.gpu_name
+        << " | " << st.gpu_mem_mb << " MB  " << st.gpu_cus << " CUs"
+        << " | " << format_hashrate(rate)
+        << "  Batch:" << format_number(st.batch_size);
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Line 8: separator
+    buf << std::string(72, '-');
+    if (g_ansi) buf << "\033[K";
+    buf << "\n";
+
+    // Lines 9+: event log
+    for (const auto& line : g_tui_log) {
+        buf << line;
+        if (g_ansi) buf << "\033[K";
+        buf << "\n";
+    }
+
+    // Clear any stale content below
+    if (g_ansi) buf << "\033[J";
+
+    std::cout << buf.str() << std::flush;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +610,7 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signal_handler);
 #endif
 
-    color::init();
+    term_init();
 
     // --gpu-list: enumerate and exit
     if (has_arg(argc, argv, "gpu-list")) {
@@ -492,8 +622,7 @@ int main(int argc, char* argv[]) {
         std::cout << "\nAvailable GPU devices:\n\n";
         for (const auto& d : devices) {
             std::cout << "  [" << d.platform_index << ":" << d.device_index
-                      << "] " << color::bold() << d.name << color::reset()
-                      << "\n"
+                      << "] " << d.name << "\n"
                       << "      Vendor: " << d.vendor
                       << "  Memory: " << (d.global_mem / (1024*1024)) << " MB"
                       << "  CUs: " << d.compute_units
@@ -503,8 +632,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (has_arg(argc, argv, "help") || argc < 2) {
-        std::cout << color::bold() << color::cyan()
-                  << "FTC GPU Miner v2.1" << color::reset() << "\n\n"
+        std::cout << "FTC GPU Miner v2.2\n\n"
                   << "Usage: ftc-miner-gpu --address=ADDR [options]\n\n"
                   << "Options:\n"
                   << "  --address=ADDR       Mining reward address (required)\n"
@@ -515,23 +643,21 @@ int main(int argc, char* argv[]) {
                   << "  --gpu-platform=N     OpenCL platform index (default: 0)\n"
                   << "  --gpu-device=N       GPU device index (default: 0)\n"
                   << "  --batch-size=N       Nonces per GPU dispatch (default: auto-tune)\n"
+                  << "  --power=N            GPU power limit 1-100% (default: 100)\n"
+                  << "                       Use 60-80 on laptops to prevent overheating\n"
                   << "  --gpu-list           List available GPU devices and exit\n"
                   << "  --test-keccak        Validate GPU Keccak256d against CPU\n"
-                  << "  --no-color           Disable colored output\n"
                   << "  --help               Show this help\n\n"
                   << "Example:\n"
-                  << "  ftc-miner-gpu --address=1A73WPJ... --rpc-host=seed.flowprotocol.net\n";
+                  << "  ftc-miner-gpu --address=1A73WPJ... --rpc-host=seed.flowprotocol.net\n"
+                  << "  ftc-miner-gpu --address=1A73WPJ... --power=70  (laptop mode)\n";
         return 0;
     }
-
-    if (has_arg(argc, argv, "no-color")) color::g_enabled = false;
 
     std::string address  = get_arg(argc, argv, "address");
     std::string rpc_host = get_arg(argc, argv, "rpc-host", "127.0.0.1");
     uint16_t rpc_port    = static_cast<uint16_t>(
         std::atoi(get_arg(argc, argv, "rpc-port", "9332").c_str()));
-    // RPC credentials: if user explicitly provides --rpc-user/--rpc-pass, use
-    // those.  Otherwise auto-read the .cookie file from the default data dir.
     bool explicit_creds = has_arg(argc, argv, "rpc-user") ||
                           has_arg(argc, argv, "rpc-pass");
     if (explicit_creds) {
@@ -539,7 +665,6 @@ int main(int argc, char* argv[]) {
         g_rpc_pass = get_arg(argc, argv, "rpc-pass");
     } else {
         if (!try_load_cookie()) {
-            // No cookie file found — leave empty; server may allow no-auth.
             g_rpc_user.clear();
             g_rpc_pass.clear();
         }
@@ -553,85 +678,68 @@ int main(int argc, char* argv[]) {
         ? static_cast<uint32_t>(
               std::atoi(get_arg(argc, argv, "batch-size", "0").c_str()))
         : 0;  // 0 = auto-tune
+    int power_pct = std::atoi(
+        get_arg(argc, argv, "power", "100").c_str());
+    if (power_pct < 1) power_pct = 1;
+    if (power_pct > 100) power_pct = 100;
 
     // Suppress internal logging
     auto& logger = core::Logger::instance();
     logger.set_print_to_console(false);
 
     // ---------------------------------------------------------------
-    // Initialize GPU
+    // Initialize GPU (plain text startup)
     // ---------------------------------------------------------------
-    std::cout << "\n  " << color::bold() << color::cyan()
-              << "FTC GPU Miner v2.1"
-              << color::reset() << "\n\n";
+    std::cout << "\n  FTC Miner v2.2\n\n";
 
     std::cout << "  Initializing OpenCL..." << std::flush;
 
     gpu::OpenCLContext ctx;
     if (!ctx.init(gpu_platform, gpu_device)) {
-        std::cout << " " << color::red() << "FAILED" << color::reset()
-                  << "\n  No suitable GPU found. Use --gpu-list to see devices.\n";
+        std::cout << " FAILED\n  No suitable GPU found. Use --gpu-list.\n";
         return 1;
     }
 
     auto dev = ctx.device_info();
-    std::cout << " " << color::green() << "OK" << color::reset() << "\n";
-    std::cout << "  " << color::dim() << "GPU:    " << color::reset()
-              << "  " << color::bold() << dev.name << color::reset() << "\n";
-    std::cout << "  " << color::dim() << "Memory: " << color::reset()
-              << "  " << (dev.global_mem / (1024*1024)) << " MB"
+    std::cout << " OK\n";
+    std::cout << "  GPU:      " << dev.name << "\n";
+    std::cout << "  Memory:   " << (dev.global_mem / (1024*1024)) << " MB"
               << "  CUs: " << dev.compute_units << "\n";
 
     gpu::GpuMiner miner(ctx);
 
     if (!miner.init()) {
-        std::cout << "  " << color::red()
-                  << "Failed to initialize GPU miner"
-                  << color::reset() << "\n";
+        std::cout << "  Failed to initialize GPU miner\n";
         std::string log = ctx.get_build_log();
-        if (!log.empty()) {
-            std::cout << "  Build log:\n" << log << "\n";
-        }
+        if (!log.empty()) std::cout << "  Build log:\n" << log << "\n";
         return 1;
     }
 
-    std::cout << "  " << color::green() << "GPU miner initialized"
-              << color::reset() << "\n";
+    std::cout << "  GPU miner initialized\n";
 
     // ---------------------------------------------------------------
-    // Auto-tune batch size (when not manually specified)
+    // Auto-tune batch size
     // ---------------------------------------------------------------
     if (batch_size == 0) {
-        std::cout << "  " << color::dim() << "Auto-tuning batch size..."
-                  << color::reset() << std::flush;
+        std::cout << "  Auto-tuning batch size..." << std::flush;
 
-        // Prepare a dummy header+target for benchmarking.
         std::array<uint8_t, 80> dummy_hdr{};
         for (int i = 0; i < 80; ++i)
             dummy_hdr[i] = static_cast<uint8_t>((i * 37) & 0xFF);
-        // Impossible target (all zeros) — no matches, pure throughput test.
         std::array<uint8_t, 32> dummy_target{};
         miner.set_header(std::span<const uint8_t>(dummy_hdr.data(), 80));
         miner.set_target(std::span<const uint8_t>(dummy_target.data(), 32));
 
-        // Candidate batch sizes: 256K to 32M in powers of two.
         static constexpr uint32_t candidates[] = {
-            1u << 18,  // 256K
-            1u << 19,  // 512K
-            1u << 20,  // 1M
-            1u << 21,  // 2M
-            1u << 22,  // 4M
-            1u << 23,  // 8M
-            1u << 24,  // 16M
-            1u << 25,  // 32M
+            1u << 18, 1u << 19, 1u << 20, 1u << 21,
+            1u << 22, 1u << 23, 1u << 24, 1u << 25,
         };
         static constexpr int N_CANDIDATES =
             static_cast<int>(sizeof(candidates) / sizeof(candidates[0]));
 
         double best_rate = 0;
-        uint32_t best_size = 1u << 22;  // fallback
+        uint32_t best_size = 1u << 22;
 
-        // Warmup: one dispatch at 1M to prime GPU caches and JIT.
         miner.set_batch_size(1u << 20);
         miner.mine_batch(0, 1u << 20);
 
@@ -639,12 +747,11 @@ int main(int argc, char* argv[]) {
             uint32_t sz = candidates[i];
             miner.set_batch_size(sz);
 
-            // Run 2 dispatches, measure the second (avoids cold-start).
             miner.mine_batch(0, sz);
             if (miner.last_kernel_error() != 0) continue;
 
             auto t0 = std::chrono::steady_clock::now();
-            miner.mine_batch(sz, sz);  // offset to avoid cache reuse
+            miner.mine_batch(sz, sz);
             auto t1 = std::chrono::steady_clock::now();
 
             if (miner.last_kernel_error() != 0) continue;
@@ -657,24 +764,16 @@ int main(int argc, char* argv[]) {
                 best_size = sz;
             }
 
-            // If a single dispatch takes > 4s, skip larger sizes
-            // (latency too high for responsive mining).
             if (secs > 4.0) break;
         }
 
         batch_size = best_size;
-        std::cout << " " << color::green() << format_number(batch_size)
-                  << " nonces/dispatch"
-                  << color::reset()
-                  << color::dim() << " ("
-                  << format_hashrate(best_rate) << ")"
-                  << color::reset() << "\n";
+        std::cout << " " << format_number(batch_size)
+                  << " nonces/dispatch (" << format_hashrate(best_rate)
+                  << ")\n";
     }
 
     miner.set_batch_size(batch_size);
-    std::cout << "  " << color::dim() << "Batch:  " << color::reset()
-              << "  " << format_number(batch_size) << " nonces/dispatch"
-              << (manual_batch ? "" : " (auto)") << "\n";
 
     // --test-keccak: validate and exit
     if (has_arg(argc, argv, "test-keccak")) {
@@ -683,99 +782,53 @@ int main(int argc, char* argv[]) {
     }
 
     if (address.empty()) {
-        std::cerr << color::red() << "Error: --address is required"
-                  << color::reset() << "\n";
+        std::cerr << "Error: --address is required\n";
         return 1;
     }
 
-    std::cout << "  " << color::dim() << "Address:" << color::reset()
-              << "  " << color::bold() << address << color::reset() << "\n";
-    std::cout << "  " << color::dim() << "Node:   " << color::reset()
-              << "  " << rpc_host << ":" << rpc_port << "\n";
-    std::cout << "  " << color::dim() << "Auth:   " << color::reset()
-              << "  " << (g_rpc_user == "__cookie__" ? "cookie (auto)"
-                         : g_rpc_user.empty() ? "none"
-                         : "rpcuser") << "\n";
-    std::cout << "  " << color::dim() << "Press Ctrl+C to stop"
-              << color::reset() << "\n\n";
+    // ---------------------------------------------------------------
+    // Prepare TUI state
+    // ---------------------------------------------------------------
+    TuiState state;
+    state.gpu_name = dev.name;
+    state.gpu_mem_mb = static_cast<int>(dev.global_mem / (1024*1024));
+    state.gpu_cus = static_cast<int>(dev.compute_units);
+    state.address = address;
+    state.node = rpc_host + ":" + std::to_string(rpc_port);
+    state.auth_mode = (g_rpc_user == "__cookie__") ? "cookie"
+                    : g_rpc_user.empty() ? "none" : "rpcuser";
+    state.start_time = current_datetime();
+    state.batch_size = batch_size;
+    state.power_pct = power_pct;
+    auto now = std::chrono::steady_clock::now();
+    state.session_start = now;
+    state.window_start = now;
 
-    int blocks_mined = 0;
-    int blocks_rejected = 0;
-    auto session_start = std::chrono::steady_clock::now();
-    uint64_t session_hashes = 0;
-    int64_t current_mining_height = 0;
-    double current_diff = 0;  // Bitcoin-style difficulty (pow_limit / target)
-
-    // Periodic status line interval (seconds).
-    static constexpr double STATUS_INTERVAL = 10.0;
-    auto last_status_time = std::chrono::steady_clock::now();
-
-    // Format difficulty as a compact string.
-    auto format_diff = [](double d) -> std::string {
-        std::ostringstream oss;
-        oss << std::fixed;
-        if (d >= 1e12)      oss << std::setprecision(1) << (d / 1e12) << "T";
-        else if (d >= 1e9)  oss << std::setprecision(1) << (d / 1e9) << "G";
-        else if (d >= 1e6)  oss << std::setprecision(1) << (d / 1e6) << "M";
-        else if (d >= 1e3)  oss << std::setprecision(1) << (d / 1e3) << "K";
-        else                oss << std::setprecision(2) << d;
-        return oss.str();
-    };
-
-    // Helper: print a periodic hashrate status line (rigel/lolminer style).
-    auto print_status = [&](double hash_rate, int64_t height, bool newline) {
-        auto uptime = std::chrono::steady_clock::now() - session_start;
-        double uptime_s = std::chrono::duration<double>(uptime).count();
-
-        // ETA to next block: expected_hashes = difficulty * 2^32.
-        double expected_hashes = current_diff * 4294967296.0;
-        double eta = (hash_rate > 0 && expected_hashes > 0)
-            ? expected_hashes / hash_rate : 0;
-
-        std::ostringstream line;
-        line << "\r  " << color::dim() << current_timestamp() << color::reset()
-             << "  " << color::cyan() << color::bold()
-             << format_hashrate(hash_rate) << color::reset()
-             << "  " << color::dim() << "|" << color::reset()
-             << " block " << color::bold() << height << color::reset()
-             << "  " << color::dim() << "|" << color::reset()
-             << " diff " << format_diff(current_diff)
-             << "  " << color::dim() << "|" << color::reset()
-             << " eta " << color::yellow()
-             << (eta > 0 ? "~" + format_duration(eta) : "---")
-             << color::reset()
-             << "  " << color::dim() << "|" << color::reset()
-             << " " << color::green() << blocks_mined << color::reset()
-             << " found"
-             << "  " << color::dim() << "|" << color::reset()
-             << " up " << format_duration(uptime_s)
-             << "      ";
-        if (newline) {
-            std::cout << line.str() << std::endl;
-        } else {
-            std::cout << line.str() << std::flush;
-        }
-    };
-
-    // Start background height poller to detect new blocks on the network.
+    // Start background height poller
     std::thread poller(height_poll_thread, rpc_host, rpc_port);
 
-    std::cout << "  " << color::dim() << current_timestamp() << color::reset()
-              << "  Mining started" << std::endl;
+    // Clear screen and enter TUI mode
+    if (g_ansi) std::cout << "\033[2J\033[H" << std::flush;
 
+    tui_log("Mining started");
+    tui_redraw(state);
+
+    // Periodic TUI refresh interval
+    auto last_redraw = std::chrono::steady_clock::now();
+    static constexpr double REDRAW_INTERVAL = 1.0;
+
+    // ---------------------------------------------------------------
+    // Mining loop
+    // ---------------------------------------------------------------
     while (!g_stop) {
-        // Reset stale flag at the start of each work cycle.
         g_work_stale = false;
-        // ---------------------------------------------------------------
-        // 1. Fetch work from node (silent — no output on success)
-        // ---------------------------------------------------------------
+
+        // 1. Fetch work
         std::string resp = rpc_call(rpc_host, rpc_port, "getwork",
                                     "[\"" + address + "\"]");
         if (resp.empty()) {
-            std::cout << "\r  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::red()
-                      << "RPC connection failed, retrying in 5s..."
-                      << color::reset() << std::endl;
+            tui_log("RPC connection failed, retrying in 5s...");
+            tui_redraw(state);
             for (int i = 0; i < 50 && !g_stop; ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
@@ -785,19 +838,15 @@ int main(int argc, char* argv[]) {
         try {
             json = rpc::parse_json(resp);
         } catch (const std::exception& e) {
-            std::cout << "\r  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::red()
-                      << "JSON error: " << e.what()
-                      << color::reset() << std::endl;
+            tui_log(std::string("JSON error: ") + e.what());
+            tui_redraw(state);
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
 
         if (!json["result"].is_object()) {
-            std::cout << "\r  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::red()
-                      << "RPC error: " << rpc::json_serialize(json["error"])
-                      << color::reset() << std::endl;
+            tui_log("RPC error: " + rpc::json_serialize(json["error"]));
+            tui_redraw(state);
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
@@ -809,21 +858,17 @@ int main(int argc, char* argv[]) {
         int64_t work_id = result["work_id"].is_int()
             ? result["work_id"].get_int() : 0;
 
-        // ---------------------------------------------------------------
         // 2. Deserialize header and target
-        // ---------------------------------------------------------------
         auto header_opt = core::from_hex(header_hex);
         if (!header_opt || header_opt->size() < 80) {
-            std::cerr << "\r  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::red()
-                      << "Invalid header hex" << color::reset() << std::endl;
+            tui_log("Invalid header hex from RPC");
+            tui_redraw(state);
             continue;
         }
 
         auto target = core::uint256::from_hex(target_hex);
 
-        // Compute Bitcoin-style difficulty from nBits in the header.
-        // nBits is at header bytes [72..75] (little-endian uint32).
+        // Compute difficulty from nBits
         {
             auto& hb = *header_opt;
             uint32_t nbits =
@@ -831,19 +876,15 @@ int main(int argc, char* argv[]) {
                 (static_cast<uint32_t>(hb[73]) << 8) |
                 (static_cast<uint32_t>(hb[74]) << 16) |
                 (static_cast<uint32_t>(hb[75]) << 24);
-            current_diff = get_difficulty(nbits);
+            state.difficulty = get_difficulty(nbits);
         }
 
-        // Log new block height only when it changes.
-        if (height != current_mining_height) {
-            // Clear any inline progress
-            std::cout << "\r" << std::string(100, ' ') << "\r";
-            std::cout << "  " << color::dim() << current_timestamp()
-                      << color::reset() << "  New job: block "
-                      << color::bold() << height << color::reset()
-                      << "  diff " << format_diff(current_diff)
-                      << std::endl;
-            current_mining_height = height;
+        // Log new block height
+        if (height != state.height) {
+            state.height = height;
+            tui_log("New job  block " + std::to_string(height) +
+                    "  diff " + format_diff(state.difficulty));
+            tui_redraw(state);
         }
 
         // Upload header and target to GPU
@@ -857,7 +898,7 @@ int main(int argc, char* argv[]) {
         uint32_t winning_nonce = 0;
         uint64_t block_hashes = 0;
 
-        // Read initial timestamp from header bytes [68..71] (little-endian).
+        // Read initial timestamp from header bytes [68..71]
         auto& hdr_bytes = *header_opt;
         uint32_t cur_timestamp =
             static_cast<uint32_t>(hdr_bytes[68])       |
@@ -865,13 +906,10 @@ int main(int argc, char* argv[]) {
             (static_cast<uint32_t>(hdr_bytes[70]) << 16) |
             (static_cast<uint32_t>(hdr_bytes[71]) << 24);
 
-        // ---------------------------------------------------------------
         // 3. GPU mining loop with timestamp rolling
-        // ---------------------------------------------------------------
         g_chain_height = height;
 
         while (!g_stop && !found && !g_work_stale) {
-            // Inner loop: grind nonces for the current timestamp
             for (uint32_t base_nonce = 0;
                  !g_stop && !found && !g_work_stale; ) {
                 uint64_t remaining64 =
@@ -881,26 +919,35 @@ int main(int argc, char* argv[]) {
                     std::min(static_cast<uint64_t>(batch_size), remaining64));
                 if (this_batch == 0) break;
 
+                auto dispatch_t0 = std::chrono::steady_clock::now();
                 auto results = miner.mine_batch(base_nonce, this_batch);
+                auto dispatch_t1 = std::chrono::steady_clock::now();
+
+                // Power throttle
+                if (power_pct < 100) {
+                    double dispatch_ms = std::chrono::duration<double,
+                        std::milli>(dispatch_t1 - dispatch_t0).count();
+                    double sleep_ms = dispatch_ms *
+                        (100.0 - power_pct) / power_pct;
+                    if (sleep_ms > 1.0) {
+                        std::this_thread::sleep_for(
+                            std::chrono::microseconds(
+                                static_cast<int64_t>(sleep_ms * 1000)));
+                    }
+                }
 
                 if (miner.last_kernel_error() != 0) {
-                    // Kernel dispatch failed — show error once and abort.
-                    std::cout << "\r" << std::string(100, ' ') << "\r";
-                    std::cout << "  " << color::dim() << current_timestamp()
-                              << color::reset() << "  " << color::red()
-                              << "GPU kernel error (OpenCL code "
-                              << miner.last_kernel_error()
-                              << "). Hashes NOT computed — hashrate was "
-                              << "inflated. Try --batch-size=1048576 or a "
-                              << "different --gpu-device."
-                              << color::reset() << std::endl;
+                    tui_log("GPU kernel error (OpenCL code " +
+                        std::to_string(miner.last_kernel_error()) +
+                        "). Try --batch-size=1048576");
+                    tui_redraw(state);
                     found = false;
                     g_stop = true;
                     break;
                 }
 
                 block_hashes += this_batch;
-                session_hashes += this_batch;
+                state.add_hashes(this_batch);
 
                 if (!results.empty()) {
                     for (uint32_t nonce : results) {
@@ -925,64 +972,46 @@ int main(int argc, char* argv[]) {
                 if (next > UINT32_MAX) break;
                 base_nonce = static_cast<uint32_t>(next);
 
-                // Periodic status line every STATUS_INTERVAL seconds.
-                auto now = std::chrono::steady_clock::now();
-                double since_status = std::chrono::duration<double>(
-                    now - last_status_time).count();
-                if (since_status >= STATUS_INTERVAL) {
-                    double elapsed = std::chrono::duration<double>(
-                        now - block_start).count();
-                    double hash_rate = elapsed > 0.01
-                        ? static_cast<double>(block_hashes) / elapsed : 0;
-                    print_status(hash_rate, height, true);
-                    last_status_time = now;
+                // Periodic TUI refresh
+                auto tnow = std::chrono::steady_clock::now();
+                double since_redraw = std::chrono::duration<double>(
+                    tnow - last_redraw).count();
+                if (since_redraw >= REDRAW_INTERVAL) {
+                    tui_redraw(state);
+                    last_redraw = tnow;
                 }
             }
 
             if (found || g_stop || g_work_stale) break;
 
-            // Nonce space exhausted — roll timestamp silently and retry.
+            // Nonce space exhausted — roll timestamp
             ++cur_timestamp;
 
-            // Safety: don't set timestamp too far into the future.
             auto real_time = static_cast<uint32_t>(std::time(nullptr));
             if (cur_timestamp > real_time + 30) break;
 
-            // Write new timestamp into header bytes (little-endian).
             hdr_bytes[68] = cur_timestamp & 0xFF;
             hdr_bytes[69] = (cur_timestamp >> 8) & 0xFF;
             hdr_bytes[70] = (cur_timestamp >> 16) & 0xFF;
             hdr_bytes[71] = (cur_timestamp >> 24) & 0xFF;
 
-            // Re-upload modified header to GPU.
             miner.set_header(std::span<const uint8_t>(
                 hdr_bytes.data(), 80));
         }
 
-        // Clear inline progress.
-        std::cout << "\r" << std::string(100, ' ') << "\r";
-
         auto block_elapsed = std::chrono::steady_clock::now() - block_start;
         double block_secs = std::chrono::duration<double>(
             block_elapsed).count();
-        double block_rate = block_secs > 0.01
-            ? static_cast<double>(block_hashes) / block_secs : 0;
 
         if (!found) {
             if (g_stop) break;
-            // Stale work or timestamp limit — silently fetch new work.
             continue;
         }
 
-        // ---------------------------------------------------------------
         // 4. Submit solution
-        // ---------------------------------------------------------------
-        std::cout << "  " << color::dim() << current_timestamp()
-                  << color::reset() << "  " << color::green() << color::bold()
-                  << "BLOCK FOUND" << color::reset()
-                  << "  height " << color::bold() << height << color::reset()
-                  << "  " << format_hashrate(block_rate)
-                  << "  " << format_duration(block_secs) << std::endl;
+        tui_log("BLOCK FOUND  height " + std::to_string(height) +
+                "  solve " + format_duration(block_secs));
+        tui_redraw(state);
 
         std::string submit_resp = rpc_call(
             rpc_host, rpc_port, "submitwork",
@@ -991,11 +1020,9 @@ int main(int argc, char* argv[]) {
             std::to_string(cur_timestamp) + "]");
 
         if (submit_resp.empty()) {
-            ++blocks_rejected;
-            std::cout << "  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::red()
-                      << "Submit failed — node unreachable"
-                      << color::reset() << std::endl;
+            ++state.blocks_rejected;
+            tui_log("Submit failed -- node unreachable");
+            tui_redraw(state);
             continue;
         }
 
@@ -1003,68 +1030,51 @@ int main(int argc, char* argv[]) {
         try {
             submit_json = rpc::parse_json(submit_resp);
         } catch (const std::exception& e) {
-            ++blocks_rejected;
-            std::cout << "  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::red()
-                      << "Submit parse error: " << e.what()
-                      << color::reset() << std::endl;
+            ++state.blocks_rejected;
+            tui_log(std::string("Submit parse error: ") + e.what());
+            tui_redraw(state);
             continue;
         }
 
         if (submit_json["result"].is_string()) {
-            ++blocks_mined;
+            ++state.blocks_found;
             std::string block_hash = submit_json["result"].get_string();
 
             g_block_history.push_back({
                 height, block_hash, block_secs, current_timestamp()
             });
 
-            std::cout << "  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::green()
-                      << "Accepted" << color::reset()
-                      << " #" << blocks_mined
-                      << "  " << color::dim()
-                      << block_hash.substr(0, 20) << "..."
-                      << color::reset() << std::endl;
+            tui_log("Accepted #" + std::to_string(state.blocks_found) +
+                    "  " + block_hash.substr(0, 24) + "...");
         } else {
-            ++blocks_rejected;
-            std::cout << "  " << color::dim() << current_timestamp()
-                      << color::reset() << "  " << color::red()
-                      << "Rejected: "
-                      << rpc::json_serialize(submit_json["error"])
-                      << color::reset() << std::endl;
+            ++state.blocks_rejected;
+            tui_log("Rejected: " +
+                    rpc::json_serialize(submit_json["error"]));
         }
+        tui_redraw(state);
     }
 
-    // Stop the height poller thread.
+    // Stop the height poller thread
     g_stop = true;
     if (poller.joinable()) poller.join();
 
     // ---------------------------------------------------------------
-    // Session summary
+    // Session summary (below TUI)
     // ---------------------------------------------------------------
-    auto session_elapsed = std::chrono::steady_clock::now() - session_start;
-    double session_secs = std::chrono::duration<double>(
-        session_elapsed).count();
+    tui_redraw(state);  // final update
+
+    double session_secs = state.uptime();
     double session_rate = session_secs > 0.01
-        ? static_cast<double>(session_hashes) / session_secs : 0;
+        ? static_cast<double>(state.session_hashes) / session_secs : 0;
 
-    std::cout << "\n";
-    std::cout << color::bold() << color::cyan()
-              << "  === Session Summary ==="
-              << color::reset() << "\n";
-
-    std::cout << "  " << color::dim() << "Uptime:  " << color::reset()
-              << format_duration(session_secs) << "\n";
-    std::cout << "  " << color::dim() << "Avg rate:" << color::reset()
-              << " " << format_hashrate(session_rate) << "\n";
-    std::cout << "  " << color::dim() << "Hashes:  " << color::reset()
-              << format_number(session_hashes) << "\n";
-    std::cout << "  " << color::dim() << "Found:   " << color::reset()
-              << color::green() << blocks_mined << color::reset();
-    if (blocks_rejected > 0) {
-        std::cout << "  " << color::red() << blocks_rejected
-                  << " rejected" << color::reset();
+    std::cout << "\n"
+              << "=== Session Summary ===\n"
+              << "Uptime:   " << format_duration(session_secs) << "\n"
+              << "Avg rate: " << format_hashrate(session_rate) << "\n"
+              << "Hashes:   " << format_number(state.session_hashes) << "\n"
+              << "Found:    " << state.blocks_found;
+    if (state.blocks_rejected > 0) {
+        std::cout << "  Rejected: " << state.blocks_rejected;
     }
     std::cout << "\n\n";
 
