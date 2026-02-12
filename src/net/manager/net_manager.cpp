@@ -159,7 +159,7 @@ void NetManager::broadcast_tx(const primitives::Transaction& tx) {
                                             std::move(payload));
     conn_manager_->broadcast(msg);
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Broadcast tx " + txid.to_hex().substr(0, 16) + "...");
 }
 
@@ -171,7 +171,7 @@ void NetManager::broadcast_block(const primitives::Block& block) {
 
     core::uint256 block_hash = block.hash();
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Broadcasting block " + block_hash.to_hex().substr(0, 16) +
              "... to " + std::to_string(conn_manager_->peer_count()) +
              " peers");
@@ -228,7 +228,7 @@ const AddrMan& NetManager::addr_manager() const {
 void NetManager::dispatch_event(PeerEvent& event) {
     switch (event.type) {
     case PeerEventType::CONNECTED:
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Event: peer " + std::to_string(event.peer_id) +
                  " connected (" + event.remote_addr +
                  (event.inbound ? ", inbound)" : ", outbound)"));
@@ -237,7 +237,7 @@ void NetManager::dispatch_event(PeerEvent& event) {
         break;
 
     case PeerEventType::DISCONNECTED:
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Event: peer " + std::to_string(event.peer_id) +
                  " disconnected (reason: " +
                  std::string(disconnect_reason_name(
@@ -258,7 +258,7 @@ void NetManager::dispatch_event(PeerEvent& event) {
 }
 
 void NetManager::event_loop(std::stop_token stoken) {
-    LOG_INFO(core::LogCategory::NET, "Event loop thread started");
+    LOG_DEBUG(core::LogCategory::NET, "Event loop thread started");
 
     // Track when we started for delayed DNS seeding.
     int64_t start_time = core::get_time();
@@ -316,7 +316,7 @@ void NetManager::event_loop(std::stop_token stoken) {
                 } else if (conn_manager_->outbound_count() == 0 &&
                            (now - last_dns_reseed_) >= DNS_RESEED_INTERVAL) {
                     last_dns_reseed_ = now;
-                    LOG_INFO(core::LogCategory::NET,
+                    LOG_DEBUG(core::LogCategory::NET,
                              "No outbound peers — re-querying DNS seeds");
                     dns_seed_lookup();
                 }
@@ -330,7 +330,7 @@ void NetManager::event_loop(std::stop_token stoken) {
         }
     }
 
-    LOG_INFO(core::LogCategory::NET, "Event loop thread exiting");
+    LOG_DEBUG(core::LogCategory::NET, "Event loop thread exiting");
 }
 
 // ===========================================================================
@@ -340,7 +340,7 @@ void NetManager::event_loop(std::stop_token stoken) {
 void NetManager::seed_connections() {
     // -connect= peers: connect ONLY to these peers (exclusive mode).
     if (!config_.connect_nodes.empty()) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Connecting to " +
                  std::to_string(config_.connect_nodes.size()) +
                  " configured connect-only peers");
@@ -381,7 +381,7 @@ void NetManager::seed_connections() {
 
             auto result = conn_manager_->connect_to(host, port);
             if (result.ok()) {
-                LOG_INFO(core::LogCategory::NET,
+                LOG_DEBUG(core::LogCategory::NET,
                          "Connected to configured peer " + node +
                          " (peer " + std::to_string(result.value()) + ")");
             } else {
@@ -424,7 +424,7 @@ void NetManager::seed_connections() {
 
         auto result = conn_manager_->connect_to(host, port);
         if (result.ok()) {
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "Connected to addnode peer " + node +
                      " (peer " + std::to_string(result.value()) + ")");
         } else {
@@ -436,7 +436,7 @@ void NetManager::seed_connections() {
 }
 
 void NetManager::dns_seed_lookup() {
-    LOG_INFO(core::LogCategory::NET, "Starting DNS seed lookup...");
+    LOG_DEBUG(core::LogCategory::NET, "Starting DNS seed lookup...");
 
     // Resolve all DNS seeds.
     auto addresses = net::resolve_all_dns_seeds();
@@ -485,7 +485,7 @@ void NetManager::dns_seed_lookup() {
             }
         }
     } else {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "DNS seeds returned " + std::to_string(addresses.size()) +
                  " addresses");
 
@@ -517,7 +517,7 @@ void NetManager::dns_seed_lookup() {
             uint16_t port = addr.port;
             auto result = conn_manager_->connect_to(host, port);
             if (result.ok()) {
-                LOG_INFO(core::LogCategory::NET,
+                LOG_DEBUG(core::LogCategory::NET,
                          "Direct connection to seed " + host + ":" +
                          std::to_string(port));
             }
@@ -580,7 +580,7 @@ void NetManager::open_outbound_connections() {
         auto result = conn_manager_->connect_to(host, port);
         if (result.ok()) {
             ++current_outbound;
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "Opened outbound connection to " +
                      host + ":" + std::to_string(port) +
                      " (peer " + std::to_string(result.value()) + ")");
@@ -629,7 +629,7 @@ void NetManager::reconnect_configured_peers() {
         if (!already_connected) {
             auto result = conn_manager_->connect_to(host, port);
             if (result.ok()) {
-                LOG_INFO(core::LogCategory::NET,
+                LOG_DEBUG(core::LogCategory::NET,
                          "Reconnected to configured peer " + node +
                          " (peer " + std::to_string(result.value()) + ")");
             }

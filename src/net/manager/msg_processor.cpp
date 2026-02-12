@@ -51,7 +51,7 @@ MsgProcessor::MsgProcessor(chain::ChainstateManager& chainstate,
 // ===========================================================================
 
 void MsgProcessor::on_peer_connected(uint64_t peer_id, bool inbound) {
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Processing new connection: peer " + std::to_string(peer_id) +
              (inbound ? " (inbound)" : " (outbound)"));
 
@@ -63,13 +63,13 @@ void MsgProcessor::on_peer_connected(uint64_t peer_id, bool inbound) {
 }
 
 void MsgProcessor::on_peer_disconnected(uint64_t peer_id) {
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Peer " + std::to_string(peer_id) + " disconnected");
 
     // If the disconnected peer was our sync peer, try to find a new one.
     if (sync_peer_id_ == peer_id) {
         sync_peer_id_ = 0;
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Sync peer disconnected, will try to find a new one");
     }
 
@@ -413,7 +413,7 @@ void MsgProcessor::on_tick(int64_t now) {
             }
         }
         if (!timed_out.empty()) {
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "Clearing " + std::to_string(timed_out.size()) +
                      " block requests (download timeout " +
                      std::to_string(BLOCK_DOWNLOAD_TIMEOUT) + "s)");
@@ -493,7 +493,7 @@ void MsgProcessor::handle_version(uint64_t peer_id,
 
     const auto& ver = result.value();
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Received VERSION from peer " + std::to_string(peer_id) +
              ": version=" + std::to_string(ver.version) +
              " services=" + std::to_string(ver.services) +
@@ -558,7 +558,7 @@ void MsgProcessor::handle_verack(uint64_t peer_id) {
     Peer* peer = conn_manager_.get_peer(peer_id);
     if (!peer) return;
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Received VERACK from peer " + std::to_string(peer_id));
 
     // Transition to ACTIVE state.
@@ -566,7 +566,7 @@ void MsgProcessor::handle_verack(uint64_t peer_id) {
         peer->state == PeerState::VERSION_SENT) {
         peer->state = PeerState::ACTIVE;
 
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Peer " + std::to_string(peer_id) +
                  " handshake complete, now ACTIVE" +
                  " (version=" + std::to_string(peer->version) +
@@ -606,7 +606,7 @@ void MsgProcessor::handle_verack(uint64_t peer_id) {
         // this explicit request.
         int our_height = chainstate_.active_chain().height();
         if (peer->inbound && peer->start_height > our_height) {
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "Inbound peer " + std::to_string(peer_id) +
                      " has higher chain (height=" +
                      std::to_string(peer->start_height) +
@@ -970,7 +970,7 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
     }
 
     if (new_headers > 0) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Accepted " + std::to_string(accepted) + "/" +
                  std::to_string(count) + " headers (" +
                  std::to_string(new_headers) + " new) from peer " +
@@ -993,7 +993,7 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
     // misses a few blocks will keep receiving tip announcements it cannot
     // connect and never catch up.
     if (accepted == 0 && count > 0) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "All " + std::to_string(count) +
                  " headers rejected from peer " +
                  std::to_string(peer_id) +
@@ -1006,7 +1006,7 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
     // If we received fewer than a full batch, headers sync is complete.
     // Clear the sync peer so future maybe_start_sync() can pick a new one.
     if (count < MAX_HEADERS && peer_id == sync_peer_id_) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Headers sync complete with peer " +
                  std::to_string(sync_peer_id_));
         sync_peer_id_ = 0;
@@ -1017,7 +1017,7 @@ void MsgProcessor::handle_headers(uint64_t peer_id,
     // so that block downloads are pipelined with header downloads.
     auto activate_result = chainstate_.activate_best_chain();
     if (activate_result.ok() && activate_result.value()) {
-        LOG_INFO(core::LogCategory::NET, "Chain tip updated");
+        LOG_DEBUG(core::LogCategory::NET, "Chain tip updated");
     }
 
     // Request block data if our best header is ahead of our active tip.
@@ -1051,7 +1051,7 @@ void MsgProcessor::handle_block(uint64_t peer_id,
     primitives::Block block = std::move(result).value();
     core::uint256 block_hash = block.hash();
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Received block " + block_hash.to_hex().substr(0, 16) +
              "... (" + std::to_string(block.tx_count()) +
              " txs) from peer " + std::to_string(peer_id));
@@ -1497,7 +1497,7 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
         if (nf_peer) {
             int our_height = chainstate_.active_chain().height();
             if (nf_peer->start_height > our_height) {
-                LOG_INFO(core::LogCategory::NET,
+                LOG_DEBUG(core::LogCategory::NET,
                          "Peer " + std::to_string(peer_id) +
                          " NOTFOUND blocks, lowering start_height from " +
                          std::to_string(nf_peer->start_height) +
@@ -1518,7 +1518,7 @@ void MsgProcessor::handle_notfound(uint64_t peer_id,
                 Peer* p = conn_manager_.get_peer(pid);
                 if (!p || !peer_state_is_operational(p->state)) continue;
                 if (p->start_height <= chainstate_.active_chain().height()) continue;
-                LOG_INFO(core::LogCategory::NET,
+                LOG_DEBUG(core::LogCategory::NET,
                          "NOTFOUND retry: requesting blocks from peer " +
                          std::to_string(pid));
                 request_blocks(pid);
@@ -1589,7 +1589,7 @@ void MsgProcessor::maybe_start_sync() {
 
     sync_peer_id_ = best_peer;
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Starting headers sync with peer " +
              std::to_string(sync_peer_id_) +
              " (their height=" + std::to_string(best_height) +
@@ -1681,7 +1681,7 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
         return;
     }
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "request_blocks: best_header h=" +
              std::to_string(best_header->height) +
              " tip h=" + std::to_string(active_chain.height()) +
@@ -1812,7 +1812,7 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
         auto [it, inserted] = peer_stalling_since_.try_emplace(
             node_staller, now);
         if (inserted) {
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "Peer " + std::to_string(node_staller) +
                      " blocking download pipeline, marked as stalling");
         }
@@ -1836,7 +1836,7 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 
         last_block_request_ = now;
 
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Requested " +
                  std::to_string(to_request.size()) +
                  " blocks (in_flight=" +

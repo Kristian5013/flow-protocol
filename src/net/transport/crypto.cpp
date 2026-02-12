@@ -331,7 +331,7 @@ core::Result<void> TransportCrypto::initialize(
     recv_nonce_ = 0;
     initialized_ = true;
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "V2 transport session established (role=" +
              std::string(initiator ? "initiator" : "responder") + ")");
 

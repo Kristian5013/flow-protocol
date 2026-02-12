@@ -43,7 +43,7 @@ void HeadersSync::start_sync(uint64_t peer_id, int32_t peer_height) {
 
     // Log if we are replacing an existing sync peer.
     if (syncing_ && sync_peer_ != peer_id) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Replacing sync peer " + std::to_string(sync_peer_)
             + " with peer " + std::to_string(peer_id));
     }
@@ -62,7 +62,7 @@ void HeadersSync::start_sync(uint64_t peer_id, int32_t peer_height) {
     last_progress_log_time_ = 0;
     syncing_                = true;
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
         "Starting headers sync from peer " + std::to_string(peer_id)
         + " (reported height " + std::to_string(peer_height) + ")");
 }
@@ -127,7 +127,7 @@ core::Result<std::vector<primitives::BlockHeader>> HeadersSync::process_headers(
     // This can happen when we are fully synced with the peer, or when
     // the peer's chain is shorter than ours.
     if (headers.empty()) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Peer " + std::to_string(peer_id)
             + " sent empty headers -- sync complete at height "
             + std::to_string(current_height)
@@ -313,7 +313,7 @@ core::Result<std::vector<primitives::BlockHeader>> HeadersSync::process_headers(
                   / static_cast<double>(elapsed)
                 : 0.0;
 
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                 "Headers sync complete with peer "
                 + std::to_string(peer_id)
                 + " at height " + std::to_string(expected_new_height)
@@ -432,7 +432,7 @@ void HeadersSync::peer_disconnected(uint64_t peer_id) {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (syncing_ && peer_id == sync_peer_) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Sync peer " + std::to_string(peer_id)
             + " disconnected -- resetting header sync"
             + " (had received " + std::to_string(total_headers_received_)
@@ -528,7 +528,7 @@ void HeadersSync::reset() {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (syncing_) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Resetting header sync (was syncing from peer "
             + std::to_string(sync_peer_)
             + ", received " + std::to_string(total_headers_received_)
@@ -584,7 +584,7 @@ void HeadersSync::log_progress_locked(int current_height, int64_t now) {
         ? static_cast<int64_t>(static_cast<double>(remaining_headers) / rate)
         : 0;
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
         "Headers sync progress: height " + std::to_string(current_height)
         + "/" + std::to_string(peer_height_)
         + " (" + std::to_string(static_cast<int>(pct)) + "%"

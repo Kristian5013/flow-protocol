@@ -117,7 +117,7 @@ bool OrphanBlockPool::add(const primitives::Block& block,
     // Update the parent index.
     by_parent_[prev_hash].push_back(hash);
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
         "Added orphan block " + hash.to_hex().substr(0, 16)
         + "... (parent: " + prev_hash.to_hex().substr(0, 16)
         + "..., from peer " + std::to_string(from_peer)
@@ -188,7 +188,7 @@ std::vector<OrphanBlockPool::OrphanBlock> OrphanBlockPool::get_children(
     }
 
     if (!children.empty()) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Retrieved " + std::to_string(children.size())
             + " orphan children of block "
             + parent_hash.to_hex().substr(0, 16)
@@ -333,7 +333,7 @@ void OrphanBlockPool::erase_for_peer(uint64_t peer_id) {
     }
 
     if (!to_remove.empty()) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Removed " + std::to_string(to_remove.size())
             + " orphan blocks from peer " + std::to_string(peer_id)
             + " (pool size: " + std::to_string(orphans_.size())
@@ -373,7 +373,7 @@ void OrphanBlockPool::expire(int64_t now) {
     }
 
     if (!expired.empty()) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Expired " + std::to_string(expired.size())
             + " orphan blocks older than "
             + std::to_string(ORPHAN_BLOCK_EXPIRY)
@@ -404,7 +404,7 @@ void OrphanBlockPool::limit_size() {
     }
 
     if (removed_count > 0) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Orphan pool size limit enforced: removed "
             + std::to_string(removed_count) + " oldest orphans (pool size: "
             + std::to_string(orphans_.size()) + "/"

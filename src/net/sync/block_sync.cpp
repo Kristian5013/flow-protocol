@@ -272,7 +272,7 @@ std::vector<core::uint256> BlockSync::get_blocks_to_download(
             }
         }
 
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Requesting " + std::to_string(total_assigned)
             + " blocks from peer " + std::to_string(peer_id)
             + " (heights " + std::to_string(min_assigned_height)
@@ -381,7 +381,7 @@ void BlockSync::peer_disconnected(uint64_t peer_id) {
     }
 
     if (!to_requeue.empty()) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Peer " + std::to_string(peer_id)
             + " disconnected: re-queued "
             + std::to_string(to_requeue.size())
@@ -562,7 +562,7 @@ void BlockSync::clear() {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!in_flight_.empty() || !download_queue_.empty()) {
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
             "Clearing block sync state: "
             + std::to_string(in_flight_.size()) + " in-flight, "
             + std::to_string(download_queue_.size()) + " queued");

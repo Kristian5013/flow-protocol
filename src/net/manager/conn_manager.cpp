@@ -72,7 +72,7 @@ core::Result<void> ConnManager::start() {
                                bind_result.error().message());
         }
 
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "P2P listener bound to " + config_.bind_address +
                  ":" + std::to_string(config_.port));
     }
@@ -86,7 +86,7 @@ core::Result<void> ConnManager::start() {
         });
     }
 
-    LOG_INFO(core::LogCategory::NET, "Connection manager started");
+    LOG_DEBUG(core::LogCategory::NET, "Connection manager started");
     return core::make_ok();
 }
 
@@ -95,7 +95,7 @@ void ConnManager::stop() {
         return;  // Already stopped.
     }
 
-    LOG_INFO(core::LogCategory::NET, "Connection manager stopping...");
+    LOG_DEBUG(core::LogCategory::NET, "Connection manager stopping...");
 
     // Close the listen socket to unblock accept().
     listen_socket_.close();
@@ -132,7 +132,7 @@ void ConnManager::stop() {
     // ~Peer destructors join read threads here, without the lock.
     peers_to_destroy.clear();
 
-    LOG_INFO(core::LogCategory::NET, "Connection manager stopped");
+    LOG_DEBUG(core::LogCategory::NET, "Connection manager stopped");
 }
 
 // ===========================================================================
@@ -192,7 +192,7 @@ core::Result<uint64_t> ConnManager::connect_to(const std::string& host,
                            "Invalid port number 0");
     }
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Connecting to " + host + ":" + std::to_string(port));
 
     // Create socket and connect with a 5-second timeout.
@@ -243,7 +243,7 @@ core::Result<uint64_t> ConnManager::connect_to(const std::string& host,
     event.inbound = false;
     push_event(std::move(event));
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Outbound connection established: peer " +
              std::to_string(peer_id) + " (" + remote + ")");
 
@@ -266,7 +266,7 @@ void ConnManager::disconnect(uint64_t peer_id, DisconnectReason reason) {
         return;
     }
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Disconnecting peer " + std::to_string(peer_id) +
              " (" + peer.conn.remote_address() +
              "): " + std::string(disconnect_reason_name(reason)));
@@ -454,7 +454,7 @@ void ConnManager::broadcast_if(
 // ===========================================================================
 
 void ConnManager::listen_loop(std::stop_token stoken) {
-    LOG_INFO(core::LogCategory::NET, "Listen thread started");
+    LOG_DEBUG(core::LogCategory::NET, "Listen thread started");
 
     while (!stoken.stop_requested() &&
            running_.load(std::memory_order_relaxed)) {
@@ -481,7 +481,7 @@ void ConnManager::listen_loop(std::stop_token stoken) {
         handle_accept(std::move(result).value());
     }
 
-    LOG_INFO(core::LogCategory::NET, "Listen thread exiting");
+    LOG_DEBUG(core::LogCategory::NET, "Listen thread exiting");
 }
 
 void ConnManager::handle_accept(net::Socket socket) {
@@ -546,7 +546,7 @@ void ConnManager::handle_accept(net::Socket socket) {
             }
         }
         if (evict_id != 0) {
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "Evicting inbound peer " + std::to_string(evict_id) +
                      " to make room for " + remote);
             disconnect(evict_id, DisconnectReason::TOO_MANY_CONNECTIONS);
@@ -567,7 +567,7 @@ void ConnManager::handle_accept(net::Socket socket) {
         return;
     }
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Accepted inbound connection from " + remote);
 
     // Set socket options.
@@ -727,7 +727,7 @@ void ConnManager::push_event(PeerEvent event) {
 void ConnManager::mark_self_address(const std::string& addr) {
     std::lock_guard lock(self_addr_mutex_);
     self_addresses_.insert(addr);
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Marked " + addr + " as self-address");
 }
 

@@ -546,7 +546,7 @@ core::Result<bool> ChainstateManager::accept_block(
 
     index->raise_validity(BlockIndex::BLOCK_VALID_TRANSACTIONS);
 
-    LOG_INFO(core::LogCategory::CHAIN,
+    LOG_DEBUG(core::LogCategory::CHAIN,
              "Accepted block " + index->block_hash.to_hex() +
              " at height " + std::to_string(index->height) +
              " (" + std::to_string(txs.size()) + " txs)");
@@ -638,7 +638,7 @@ core::Result<bool> ChainstateManager::activate_best_chain() {
         // Log progress: first, last, and every 100 blocks.
         if (connected_count == 0 || connected_count % 100 == 0 ||
             connected_count == total_to_connect - 1) {
-            LOG_INFO(core::LogCategory::CHAIN,
+            LOG_DEBUG(core::LogCategory::CHAIN,
                      "Connecting block at height " + std::to_string(bi->height) +
                      " (" + std::to_string(connected_count + 1) + "/" +
                      std::to_string(total_to_connect) + ")");
@@ -675,7 +675,7 @@ core::Result<bool> ChainstateManager::activate_best_chain() {
         ++connected_count;
     }
 
-    LOG_INFO(core::LogCategory::CHAIN,
+    LOG_DEBUG(core::LogCategory::CHAIN,
              "Best chain activated: tip " +
              (active_chain_.tip()
                  ? active_chain_.tip()->block_hash.to_hex()
@@ -1134,7 +1134,7 @@ core::Result<int64_t> ChainstateManager::get_disk_usage() const {
 // ===========================================================================
 
 core::Result<void> ChainstateManager::flush() {
-    LOG_INFO(core::LogCategory::CHAIN, "Flushing chainstate to disk");
+    LOG_DEBUG(core::LogCategory::CHAIN, "Flushing chainstate to disk");
 
     // Flush block store.
     if (block_store_) {
@@ -1172,7 +1172,7 @@ core::Result<void> ChainstateManager::flush() {
                       "Failed to save block index: " +
                       save_result.error().message());
         } else {
-            LOG_INFO(core::LogCategory::CHAIN,
+            LOG_DEBUG(core::LogCategory::CHAIN,
                      "Block index saved: " +
                      std::to_string(entries.size()) + " entries");
         }
@@ -1186,13 +1186,13 @@ core::Result<void> ChainstateManager::flush() {
                       "Failed to save UTXO snapshot: " +
                       save_result.error().message());
         } else {
-            LOG_INFO(core::LogCategory::CHAIN,
+            LOG_DEBUG(core::LogCategory::CHAIN,
                      "UTXO snapshot saved: " +
                      std::to_string(utxo_cache_->size()) + " coins");
         }
     }
 
-    LOG_INFO(core::LogCategory::CHAIN, "Chainstate flush complete");
+    LOG_DEBUG(core::LogCategory::CHAIN, "Chainstate flush complete");
     return core::make_ok();
 }
 
