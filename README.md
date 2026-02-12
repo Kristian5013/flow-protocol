@@ -6,7 +6,7 @@
 
 <p align="center">
   Decentralized cryptocurrency built from scratch in C++20.<br>
-  81,418 lines of original code &bull; 333 files &bull; 11 modules &bull; 184+ tests &bull; 0 dependencies on Bitcoin Core
+  81,637 lines of original code &bull; 316 files &bull; 12 modules &bull; 184+ tests &bull; 0 dependencies on Bitcoin Core
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ The entire codebase — core libraries, cryptography, networking, consensus, wal
 - **Keccak-256d (SHA-3)** instead of SHA-256d — fundamentally stronger hash construction
 - **Keccak-256d PoW** — memory-bandwidth bound, ASIC-resistant, GPU-friendly mining
 - **Actor model P2P** — lock-free message passing, no deadlocks
-- **81,418 lines of original C++20 code** — not a fork, fully verifiable on GitHub
+- **81,637 lines of original C++20 code** — not a fork, fully verifiable on GitHub
 - **Zero Bitcoin Core dependencies** — independent implementation of every subsystem
 
 ## Key Specifications
@@ -54,7 +54,7 @@ The entire codebase — core libraries, cryptography, networking, consensus, wal
 | Domain | Location | IP |
 |---|---|---|
 | seed.flowcoin.org | Virginia, USA | 44.221.81.40 |
-| seed.flowprotocol.net | Seoul, South Korea | 3.35.208.160 |
+| seed.flowprotocol.net | Seoul, South Korea | 52.78.231.127 |
 
 ## Building from Source
 
@@ -63,6 +63,7 @@ The entire codebase — core libraries, cryptography, networking, consensus, wal
 - C++20 compiler (GCC 13+, Clang 16+, MSVC 2022)
 - CMake 3.20+
 - OpenSSL 3.0+
+- OpenCL 1.2+ (optional, for GPU mining)
 
 ### Linux (Ubuntu/Debian)
 
@@ -75,6 +76,9 @@ cd flow-protocol
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j$(nproc)
+
+# With GPU miner (requires OpenCL):
+# cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_GPU=ON
 ```
 
 ### Windows (MSYS2)
@@ -87,6 +91,9 @@ cd flow-protocol
 mkdir build && cd build
 cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j8
+
+# With GPU miner (requires OpenCL SDK):
+# cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DENABLE_GPU=ON
 ```
 
 ### Build Outputs
@@ -95,6 +102,7 @@ cmake --build . -j8
 |---|---|
 | `ftcd` | Full node daemon |
 | `ftc-miner` | CPU miner |
+| `ftc-miner-gpu` | GPU miner (OpenCL, requires `-DENABLE_GPU=ON`) |
 | `ftc-wallet` | Wallet CLI utility |
 | `ftc_tests` | Test suite (184 tests, 791 checks) |
 
@@ -173,7 +181,36 @@ WantedBy=multi-user.target
 
 FTC uses **Keccak-256d** (double Keccak-256) — a memory-bandwidth bound, ASIC-resistant proof-of-work algorithm. The external miner communicates with the node via `getwork`/`submitwork` RPC calls.
 
-### External Miner
+### GPU Miner (Recommended)
+
+The GPU miner uses OpenCL to mine on NVIDIA and AMD GPUs. It features auto-tuned batch sizes, a cgminer-style TUI dashboard, and a power limiter for laptops.
+
+```bash
+./ftc-miner-gpu \
+  --rpcuser=myuser \
+  --rpcpassword=mypass \
+  --rpchost=127.0.0.1 \
+  --rpcport=9332 \
+  --address=<your_FTC_address>
+```
+
+#### GPU Miner Options
+
+```
+--address=<addr>      FTC address for coinbase reward (required)
+--rpchost=<host>      RPC host (default: 127.0.0.1)
+--rpcport=<port>      RPC port (default: 9332)
+--rpcuser=<user>      RPC username
+--rpcpassword=<pass>  RPC password
+--batch=<n>           Batch size in millions (default: auto-tune)
+--power=<1-100>       Power limit percentage (default: 100)
+                      Use 60-80 on laptops to prevent thermal shutdown
+--device=<n>          OpenCL device index (default: 0)
+```
+
+The `--power` option uses duty-cycle throttling to reduce GPU load. For example, `--power=70` keeps the GPU active ~70% of the time, reducing heat and power draw while maintaining proportional hashrate.
+
+### CPU Miner
 
 ```bash
 ./ftc-miner \
@@ -231,12 +268,12 @@ Parameters: none
 ```json
 {
   "chain": "main",
-  "blocks": 6,
-  "headers": 6,
-  "bestblockhash": "00064a5c...",
-  "difficulty": 0.0000019073,
-  "mediantime": 1770459231,
-  "chainwork": "000...0e000",
+  "blocks": 22837,
+  "headers": 22837,
+  "bestblockhash": "0000000a...",
+  "difficulty": 321776.8,
+  "mediantime": 1739382400,
+  "chainwork": "000...3a7f800",
   "pruned": false,
   "initialblockdownload": false,
   "verificationprogress": 1.0
@@ -388,9 +425,9 @@ Parameters: none
 
 ```json
 {
-  "blocks": 6,
-  "difficulty": 0.0000019073,
-  "networkhashps": 42.5,
+  "blocks": 22837,
+  "difficulty": 321776.8,
+  "networkhashps": 7330000000,
   "pooledtx": 0,
   "chain": "main"
 }
@@ -447,7 +484,7 @@ Parameters:
 {
   "header": "0100000042a3...",
   "target": "0007ffff000000...",
-  "height": 7
+  "height": 22838
 }
 ```
 
@@ -496,14 +533,14 @@ Parameters: none
 [
   {
     "id": 1,
-    "addr": "3.35.208.160:9333",
+    "addr": "52.78.231.127:9333",
     "version": 70015,
     "subver": "/FTC:1.0.0/",
-    "inbound": true,
-    "startingheight": 0,
+    "inbound": false,
+    "startingheight": 22830,
     "banscore": 0,
-    "synced_headers": 6,
-    "synced_blocks": 6,
+    "synced_headers": 22837,
+    "synced_blocks": 22837,
     "pingtime": 0.178
   }
 ]
@@ -828,18 +865,23 @@ Available categories: `net`, `mempool`, `validation`, `mining`, `rpc`, `wallet`,
 
 ```
 src/
-  core/         Core types, serialization, streams, logging, threading
-  crypto/       Keccak-256, secp256k1, Schnorr, BIP32/39, AES, ChaCha20
-  primitives/   Transactions, blocks, scripts, addresses, fees
-  consensus/    Consensus rules, PoW validation, block/tx verification
-  chain/        Block index, chain state, UTXO set, block storage
-  mempool/      Transaction memory pool, fee estimation, RBF
-  net/          P2P networking, peer management, block/tx relay
-  rpc/          JSON-RPC server with 51 commands
-  wallet/       Key management, HD wallet, coin selection, signing
-  miner/        Block template construction, PoW solver
-  node/         Node lifecycle, initialization, shutdown
-  test/         Test suite (184 tests across 12 test files)
+  core/           Core types, serialization, streams, logging, threading
+  crypto/         Keccak-256, secp256k1, Schnorr, BIP32/39, AES, ChaCha20
+  primitives/     Transactions, blocks, scripts, addresses, fees
+  consensus/      Consensus rules, PoW validation, block/tx verification
+  chain/          Block index, chain state, UTXO set, block storage
+  mempool/        Transaction memory pool, fee estimation, RBF
+  net/            P2P networking, peer management, block/tx relay
+  rpc/            JSON-RPC server with 51 commands
+  wallet/         Key management, HD wallet, coin selection, signing
+  miner/          Block template construction, PoW solver
+  node/           Node lifecycle, initialization, shutdown
+  gpu/kernels/    OpenCL Keccak-256d mining kernels (fully unrolled)
+  test/           Test suite (184 tests across 12 test files)
+tools/
+  miner_gpu.cpp   GPU miner with OpenCL, auto-tune, power limiter
+  miner.cpp       CPU miner
+  wallet_tool.cpp Wallet CLI utility
 ```
 
 ## Genesis Block
@@ -947,7 +989,7 @@ FTC uses **Keccak-256** (SHA-3), not SHA-256:
 
 - SHA-256 cryptanalysis (17-24 rounds, novel distinguisher at 23R)
 - Pressure Ontology
-- Built Flow Protocol from scratch — 81,418 lines of C++20
+- Built Flow Protocol from scratch — 81,637 lines of C++20
 
 ## License
 
