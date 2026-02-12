@@ -504,7 +504,7 @@ int main(int argc, char* argv[]) {
 
     if (has_arg(argc, argv, "help") || argc < 2) {
         std::cout << color::bold() << color::cyan()
-                  << "FTC GPU Miner v2.0" << color::reset() << "\n\n"
+                  << "FTC GPU Miner v2.1" << color::reset() << "\n\n"
                   << "Usage: ftc-miner-gpu --address=ADDR [options]\n\n"
                   << "Options:\n"
                   << "  --address=ADDR       Mining reward address (required)\n"
@@ -514,7 +514,7 @@ int main(int argc, char* argv[]) {
                   << "  --rpc-pass=PASS      RPC password (default: auto from .cookie)\n"
                   << "  --gpu-platform=N     OpenCL platform index (default: 0)\n"
                   << "  --gpu-device=N       GPU device index (default: 0)\n"
-                  << "  --batch-size=N       Nonces per GPU dispatch (default: 4194304)\n"
+                  << "  --batch-size=N       Nonces per GPU dispatch (default: auto-tune)\n"
                   << "  --gpu-list           List available GPU devices and exit\n"
                   << "  --test-keccak        Validate GPU Keccak256d against CPU\n"
                   << "  --no-color           Disable colored output\n"
@@ -548,8 +548,11 @@ int main(int argc, char* argv[]) {
         get_arg(argc, argv, "gpu-platform", "0").c_str());
     int gpu_device       = std::atoi(
         get_arg(argc, argv, "gpu-device", "0").c_str());
-    uint32_t batch_size  = static_cast<uint32_t>(
-        std::atoi(get_arg(argc, argv, "batch-size", "4194304").c_str()));
+    bool manual_batch    = has_arg(argc, argv, "batch-size");
+    uint32_t batch_size  = manual_batch
+        ? static_cast<uint32_t>(
+              std::atoi(get_arg(argc, argv, "batch-size", "0").c_str()))
+        : 0;  // 0 = auto-tune
 
     // Suppress internal logging
     auto& logger = core::Logger::instance();
@@ -559,7 +562,7 @@ int main(int argc, char* argv[]) {
     // Initialize GPU
     // ---------------------------------------------------------------
     std::cout << "\n  " << color::bold() << color::cyan()
-              << "FTC GPU Miner v2.0"
+              << "FTC GPU Miner v2.1"
               << color::reset() << "\n\n";
 
     std::cout << "  Initializing OpenCL..." << std::flush;
@@ -580,7 +583,6 @@ int main(int argc, char* argv[]) {
               << "  CUs: " << dev.compute_units << "\n";
 
     gpu::GpuMiner miner(ctx);
-    miner.set_batch_size(batch_size);
 
     if (!miner.init()) {
         std::cout << "  " << color::red()
@@ -595,8 +597,84 @@ int main(int argc, char* argv[]) {
 
     std::cout << "  " << color::green() << "GPU miner initialized"
               << color::reset() << "\n";
+
+    // ---------------------------------------------------------------
+    // Auto-tune batch size (when not manually specified)
+    // ---------------------------------------------------------------
+    if (batch_size == 0) {
+        std::cout << "  " << color::dim() << "Auto-tuning batch size..."
+                  << color::reset() << std::flush;
+
+        // Prepare a dummy header+target for benchmarking.
+        std::array<uint8_t, 80> dummy_hdr{};
+        for (int i = 0; i < 80; ++i)
+            dummy_hdr[i] = static_cast<uint8_t>((i * 37) & 0xFF);
+        // Impossible target (all zeros) — no matches, pure throughput test.
+        std::array<uint8_t, 32> dummy_target{};
+        miner.set_header(std::span<const uint8_t>(dummy_hdr.data(), 80));
+        miner.set_target(std::span<const uint8_t>(dummy_target.data(), 32));
+
+        // Candidate batch sizes: 256K to 32M in powers of two.
+        static constexpr uint32_t candidates[] = {
+            1u << 18,  // 256K
+            1u << 19,  // 512K
+            1u << 20,  // 1M
+            1u << 21,  // 2M
+            1u << 22,  // 4M
+            1u << 23,  // 8M
+            1u << 24,  // 16M
+            1u << 25,  // 32M
+        };
+        static constexpr int N_CANDIDATES =
+            static_cast<int>(sizeof(candidates) / sizeof(candidates[0]));
+
+        double best_rate = 0;
+        uint32_t best_size = 1u << 22;  // fallback
+
+        // Warmup: one dispatch at 1M to prime GPU caches and JIT.
+        miner.set_batch_size(1u << 20);
+        miner.mine_batch(0, 1u << 20);
+
+        for (int i = 0; i < N_CANDIDATES; ++i) {
+            uint32_t sz = candidates[i];
+            miner.set_batch_size(sz);
+
+            // Run 2 dispatches, measure the second (avoids cold-start).
+            miner.mine_batch(0, sz);
+            if (miner.last_kernel_error() != 0) continue;
+
+            auto t0 = std::chrono::steady_clock::now();
+            miner.mine_batch(sz, sz);  // offset to avoid cache reuse
+            auto t1 = std::chrono::steady_clock::now();
+
+            if (miner.last_kernel_error() != 0) continue;
+
+            double secs = std::chrono::duration<double>(t1 - t0).count();
+            double rate = static_cast<double>(sz) / secs;
+
+            if (rate > best_rate) {
+                best_rate = rate;
+                best_size = sz;
+            }
+
+            // If a single dispatch takes > 4s, skip larger sizes
+            // (latency too high for responsive mining).
+            if (secs > 4.0) break;
+        }
+
+        batch_size = best_size;
+        std::cout << " " << color::green() << format_number(batch_size)
+                  << " nonces/dispatch"
+                  << color::reset()
+                  << color::dim() << " ("
+                  << format_hashrate(best_rate) << ")"
+                  << color::reset() << "\n";
+    }
+
+    miner.set_batch_size(batch_size);
     std::cout << "  " << color::dim() << "Batch:  " << color::reset()
-              << "  " << format_number(batch_size) << " nonces/dispatch\n";
+              << "  " << format_number(batch_size) << " nonces/dispatch"
+              << (manual_batch ? "" : " (auto)") << "\n";
 
     // --test-keccak: validate and exit
     if (has_arg(argc, argv, "test-keccak")) {
