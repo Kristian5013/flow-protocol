@@ -439,33 +439,17 @@ static void cmd_newaddress(const std::string& wallet_file) {
 }
 
 // ---------------------------------------------------------------------------
-// importkey — accepts WIF or raw hex private key (64 hex chars)
+// importkey — accepts WIF private key
 // ---------------------------------------------------------------------------
 static void cmd_importkey(const std::string& wallet_file,
                           const std::string& key_str) {
     std::array<uint8_t, 32> secret;
-    bool decoded = false;
 
-    // Try WIF first.
-    if (wif_decode(key_str, secret)) {
-        decoded = true;
-    }
-
-    // Try raw hex (64 hex characters = 32 bytes).
-    if (!decoded && key_str.size() == 64 && core::is_hex(key_str)) {
-        auto bytes = core::from_hex(key_str);
-        if (bytes && bytes->size() == 32) {
-            std::copy(bytes->begin(), bytes->end(), secret.begin());
-            decoded = true;
-        }
-    }
-
-    if (!decoded) {
-        std::cerr << "Error: invalid private key." << std::endl;
-        std::cerr << "Accepted formats:" << std::endl;
-        std::cerr << "  - WIF (Base58Check, starts with '5', 'K', or 'L')"
+    if (!wif_decode(key_str, secret)) {
+        std::cerr << "Error: invalid private key (WIF format expected)."
                   << std::endl;
-        std::cerr << "  - Raw hex (64 hex characters)" << std::endl;
+        std::cerr << "WIF keys start with '5', 'K', or 'L' (Base58Check)."
+                  << std::endl;
         std::exit(1);
     }
 

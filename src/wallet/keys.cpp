@@ -108,22 +108,14 @@ core::Result<std::string> KeyManager::import_key(std::string_view key_str) {
                            "KeyManager not initialized");
     }
 
-    // Try WIF first, then raw hex (64 hex characters = 32 bytes).
+    // Decode WIF private key.
     std::array<uint8_t, 32> secret{};
     auto secret_result = decode_wif(key_str);
     if (secret_result.ok()) {
         secret = secret_result.value();
-    } else if (key_str.size() == 64 && core::is_hex(std::string(key_str))) {
-        auto bytes = core::from_hex(std::string(key_str));
-        if (bytes && bytes->size() == 32) {
-            std::copy(bytes->begin(), bytes->end(), secret.begin());
-        } else {
-            return core::Error(core::ErrorCode::PARSE_BAD_FORMAT,
-                               "Invalid hex key");
-        }
     } else {
         return core::Error(core::ErrorCode::PARSE_BAD_FORMAT,
-                           "Invalid private key (not WIF or 64-char hex): " +
+                           "Invalid private key (WIF format expected): " +
                            secret_result.error().message());
     }
 
