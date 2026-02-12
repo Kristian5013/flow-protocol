@@ -43,7 +43,7 @@ public:
     static constexpr int64_t HORIZON_DAYS    = 30;
 
     /// Maximum number of connection attempts before an address is discarded.
-    static constexpr int MAX_RETRIES         = 3;
+    static constexpr int MAX_RETRIES         = 10;
 
     /// Minimum interval between connection retries (seconds).
     static constexpr int64_t RETRY_DELAY_BASE = 600;  // 10 minutes

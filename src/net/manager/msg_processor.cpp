@@ -521,6 +521,21 @@ void MsgProcessor::handle_verack(uint64_t peer_id) {
         // Send a PING to establish baseline latency.
         send_ping(peer_id);
 
+        // Mark outbound peer addresses as good in the address manager.
+        // This promotes them to the "tried" table and records last_success,
+        // preventing them from becoming "terrible" after future failures.
+        if (!peer->inbound) {
+            auto addr_result = NetAddress::from_string(
+                peer->conn.remote_address());
+            if (addr_result.ok()) {
+                AddressWithPort awp;
+                awp.addr = addr_result.value();
+                awp.port = peer->conn.remote_port();
+                awp.timestamp = core::get_time();
+                addrman_.mark_good(awp, core::get_time());
+            }
+        }
+
         // If this inbound peer claims a higher chain than ours, request
         // headers from them so we can learn about blocks they have mined.
         // maybe_start_sync() only considers outbound peers, so inbound
