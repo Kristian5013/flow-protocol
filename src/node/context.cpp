@@ -194,6 +194,10 @@ void apply_config(const core::Config& cfg, NodeConfig& nc) {
     if (!addnode_list.empty()) {
         nc.add_nodes = std::move(addnode_list);
     }
+    auto allowip_list = cfg.get_list("rpcallowip");
+    if (!allowip_list.empty()) {
+        nc.rpc_allowip = std::move(allowip_list);
+    }
 }
 
 } // anonymous namespace

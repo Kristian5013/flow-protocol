@@ -9,6 +9,7 @@
 #include "core/random.h"
 #include "core/time.h"
 #include "net/address/netaddress.h"
+#include "net/address/subnet.h"
 
 #include <algorithm>
 #include <cassert>
@@ -28,7 +29,7 @@
     #endif
     #include <winsock2.h>
     #include <ws2tcpip.h>
-    #pragma comment(lib, "Ws2_32.lib")
+    // Ws2_32.lib linked via CMakeLists.txt
     using socket_t = SOCKET;
     static constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
     #define CLOSE_SOCKET closesocket
@@ -199,6 +200,13 @@ RpcServer::Config RpcServer::from_node_config(const core::Config& cfg) {
     c.rpc_user = cfg.get_or(core::CONF_RPCUSER, "");
     c.rpc_password = cfg.get_or(core::CONF_RPCPASSWORD, "");
     c.num_threads = static_cast<int>(cfg.get_int("rpcthreads", 4));
+
+    // Parse rpcallowip entries (CIDR notation, e.g. "192.168.1.0/24")
+    for (const auto& s : cfg.get_list("rpcallowip")) {
+        auto sub = net::Subnet::from_string(s);
+        if (sub.has_value()) c.allowed_subnets.push_back(sub.value());
+    }
+
     return c;
 }
 
