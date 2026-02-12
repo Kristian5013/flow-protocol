@@ -702,7 +702,7 @@ void AddrMan::clear() {
         std::fill(bucket.begin(), bucket.end(), -1);
     }
 
-    LOG_INFO(core::LogCategory::NET, "AddrMan: cleared all addresses");
+    LOG_DEBUG(core::LogCategory::NET, "AddrMan: cleared all addresses");
 }
 
 }  // namespace net

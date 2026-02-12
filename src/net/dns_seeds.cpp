@@ -165,7 +165,7 @@ std::vector<std::string> resolve_dns_seed(const std::string& hostname) {
     std::sort(results.begin(), results.end());
     results.erase(std::unique(results.begin(), results.end()), results.end());
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Resolved " + std::to_string(results.size()) +
              " addresses from DNS seed " + hostname);
 
@@ -178,7 +178,7 @@ std::vector<std::string> resolve_all_dns_seeds() {
 
     const auto& seeds = get_dns_seeds();
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "Resolving " + std::to_string(seeds.size()) + " DNS seeds");
 
     for (const auto& seed : seeds) {
@@ -191,7 +191,7 @@ std::vector<std::string> resolve_all_dns_seeds() {
         }
     }
 
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "DNS seed resolution complete: " +
              std::to_string(all_addresses.size()) +
              " unique addresses from " +

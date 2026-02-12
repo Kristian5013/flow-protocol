@@ -457,7 +457,7 @@ core::Result<void> Socket::connect(const std::string& host, uint16_t port,
             set_nonblocking_impl(fd_, false);
             ::freeaddrinfo(result);
 
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "connected to " + host + ":" + port_str +
                      " (immediate)");
             return core::make_ok();
@@ -503,7 +503,7 @@ core::Result<void> Socket::connect(const std::string& host, uint16_t port,
         set_nonblocking_impl(fd_, false);
         ::freeaddrinfo(result);
 
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "connected to " + host + ":" + port_str +
                  " (attempt " + std::to_string(attempt) + ")");
         return core::make_ok();
@@ -588,7 +588,7 @@ core::Result<void> Socket::bind_listen(const std::string& host,
 
         ::freeaddrinfo(result);
 
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "listening on " +
                  (host.empty() ? std::string("0.0.0.0") : host) +
                  ":" + port_str + " (backlog=" +

@@ -98,7 +98,7 @@ ReorgPath compute_reorg_path(const Chain& active_chain, BlockIndex* new_tip) {
     // order).
     std::reverse(path.to_connect.begin(), path.to_connect.end());
 
-    LOG_INFO(core::LogCategory::CHAIN,
+    LOG_DEBUG(core::LogCategory::CHAIN,
              "Reorg path: disconnect " +
              std::to_string(path.to_disconnect.size()) + " blocks, connect " +
              std::to_string(path.to_connect.size()) + " blocks, fork at height " +

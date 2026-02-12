@@ -94,7 +94,7 @@ Connection::Connection(Socket socket, ConnDir direction, uint64_t id)
 
     std::string dir_str = (direction_ == ConnDir::INBOUND)
                           ? "inbound" : "outbound";
-    LOG_INFO(core::LogCategory::NET,
+    LOG_DEBUG(core::LogCategory::NET,
              "connection " + std::to_string(id_) + " established (" +
              dir_str + ") with " + socket_.remote_address() + ":" +
              std::to_string(socket_.remote_port()));
