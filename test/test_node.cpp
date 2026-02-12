@@ -30,7 +30,7 @@ TEST_CASE(Node, ConfigDefaults) {
     CHECK_EQ(cfg.rpc_bind, std::string("127.0.0.1"));
 
     // Wallet defaults.
-    CHECK(!cfg.wallet_enabled);
+    CHECK(cfg.wallet_enabled);
     CHECK_EQ(cfg.wallet_file, std::string("wallet.dat"));
 
     // Mining defaults.
