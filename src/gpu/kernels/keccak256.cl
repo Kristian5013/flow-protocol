@@ -8,29 +8,13 @@
 //
 // Scalar-variable implementation: all 25 state lanes live in individual
 // registers (s00..s44) to prevent dead-store elimination by the compiler.
-// A volatile loop counter ensures no unrolling across all GPU vendors.
+// All 24 rounds are fully unrolled with compile-time round constants.
 //
 // Naming: sXY  =>  state[X + 5*Y]   (X = column, Y = row)
 // =========================================================================
 
 #ifndef KECCAK256_CL
 #define KECCAK256_CL
-
-// Round constants (Keccak-f[1600])
-__constant ulong RC[24] = {
-    0x0000000000000001UL, 0x0000000000008082UL,
-    0x800000000000808AUL, 0x8000000080008000UL,
-    0x000000000000808BUL, 0x0000000080000001UL,
-    0x8000000080008081UL, 0x8000000000008009UL,
-    0x000000000000008AUL, 0x0000000000000088UL,
-    0x0000000080008009UL, 0x000000008000000AUL,
-    0x000000008000808BUL, 0x800000000000008BUL,
-    0x8000000000008089UL, 0x8000000000008003UL,
-    0x8000000000008002UL, 0x8000000000000080UL,
-    0x000000000000800AUL, 0x800000008000000AUL,
-    0x8000000080008081UL, 0x8000000000008080UL,
-    0x0000000080000001UL, 0x8000000080008008UL
-};
 
 #define ROL64(x, n) (((x) << (n)) | ((x) >> (64 - (n))))
 
@@ -103,13 +87,35 @@ __constant ulong RC[24] = {
 
 // -------------------------------------------------------------------------
 // Full 24-round Keccak-f[1600] permutation.
-// Volatile loop counter prevents unrolling on all GPU architectures.
+// Fully unrolled with compile-time constants for maximum throughput.
+// Each round constant is an immediate operand — no memory loads from RC[].
 // -------------------------------------------------------------------------
 
 #define KECCAK_F1600() do {                                                \
-    for (volatile int _kf_r = 0; _kf_r < 24; ++_kf_r) {                  \
-        KECCAK_ROUND(RC[_kf_r]);                                          \
-    }                                                                      \
+    KECCAK_ROUND(0x0000000000000001UL);                                    \
+    KECCAK_ROUND(0x0000000000008082UL);                                    \
+    KECCAK_ROUND(0x800000000000808AUL);                                    \
+    KECCAK_ROUND(0x8000000080008000UL);                                    \
+    KECCAK_ROUND(0x000000000000808BUL);                                    \
+    KECCAK_ROUND(0x0000000080000001UL);                                    \
+    KECCAK_ROUND(0x8000000080008081UL);                                    \
+    KECCAK_ROUND(0x8000000000008009UL);                                    \
+    KECCAK_ROUND(0x000000000000008AUL);                                    \
+    KECCAK_ROUND(0x0000000000000088UL);                                    \
+    KECCAK_ROUND(0x0000000080008009UL);                                    \
+    KECCAK_ROUND(0x000000008000000AUL);                                    \
+    KECCAK_ROUND(0x000000008000808BUL);                                    \
+    KECCAK_ROUND(0x800000000000008BUL);                                    \
+    KECCAK_ROUND(0x8000000000008089UL);                                    \
+    KECCAK_ROUND(0x8000000000008003UL);                                    \
+    KECCAK_ROUND(0x8000000000008002UL);                                    \
+    KECCAK_ROUND(0x8000000000000080UL);                                    \
+    KECCAK_ROUND(0x000000000000800AUL);                                    \
+    KECCAK_ROUND(0x800000008000000AUL);                                    \
+    KECCAK_ROUND(0x8000000080008081UL);                                    \
+    KECCAK_ROUND(0x8000000000008080UL);                                    \
+    KECCAK_ROUND(0x0000000080000001UL);                                    \
+    KECCAK_ROUND(0x8000000080008008UL);                                    \
 } while(0)
 
 #endif // KECCAK256_CL
