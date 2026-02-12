@@ -77,6 +77,7 @@ void MsgProcessor::on_peer_disconnected(uint64_t peer_id) {
     peer_announced_blocks_.erase(peer_id);
     peer_announced_txs_.erase(peer_id);
     last_header_from_peer_.erase(peer_id);
+    peer_stalling_since_.erase(peer_id);
 
     // Clean up any in-flight block requests from this peer.
     std::vector<core::uint256> to_remove;
@@ -349,7 +350,60 @@ void MsgProcessor::on_tick(int64_t now) {
     }
 
     // ------------------------------------------------------------------
-    // 3. Block download timeout — per-block stalling detection.
+    // 3. Pipeline stalling detection (Bitcoin Core style).
+    //
+    // A peer is "stalling" if it is holding the lowest in-flight block
+    // and preventing other peers from advancing the download window.
+    // peer_stalling_since_[pid] is set by request_blocks() when it
+    // identifies a pipeline blocker.
+    //
+    // If a peer has been stalling for > block_stalling_timeout_:
+    //   - Disconnect the peer (it will reconnect automatically).
+    //   - Double the timeout (exponential backoff) to prevent cascade
+    //     disconnects when our own bandwidth is the bottleneck.
+    // The timeout decays by 0.85x whenever the chain tip advances.
+    // ------------------------------------------------------------------
+    {
+        std::vector<uint64_t> to_disconnect;
+        for (const auto& [pid, stall_time] : peer_stalling_since_) {
+            if (stall_time == 0) continue;
+            int64_t elapsed = now - stall_time;
+            if (elapsed > block_stalling_timeout_) {
+                to_disconnect.push_back(pid);
+            }
+        }
+        for (uint64_t pid : to_disconnect) {
+            LOG_WARN(core::LogCategory::NET,
+                     "Peer " + std::to_string(pid) +
+                     " stalling block download for " +
+                     std::to_string(now - peer_stalling_since_[pid]) +
+                     "s (timeout=" +
+                     std::to_string(block_stalling_timeout_) +
+                     "s), disconnecting");
+            peer_stalling_since_.erase(pid);
+            conn_manager_.disconnect(pid, DisconnectReason::TIMEOUT);
+
+            // Exponential backoff: double the timeout to avoid cascading
+            // disconnects when our bandwidth is the real bottleneck.
+            int64_t new_timeout = std::min(
+                block_stalling_timeout_ * 2, BLOCK_STALLING_TIMEOUT_MAX);
+            if (new_timeout != block_stalling_timeout_) {
+                LOG_INFO(core::LogCategory::NET,
+                         "Block stalling timeout increased: " +
+                         std::to_string(block_stalling_timeout_) +
+                         "s -> " + std::to_string(new_timeout) + "s");
+                block_stalling_timeout_ = new_timeout;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 3b. Slow block download timeout.
+    //
+    // Independent of the fast stalling detection above.  If any single
+    // block request has been outstanding for > BLOCK_DOWNLOAD_TIMEOUT
+    // (60s), cancel it and request from other peers.  This handles the
+    // case where no alternate peer triggered stalling detection.
     // ------------------------------------------------------------------
     {
         std::vector<core::uint256> timed_out;
@@ -361,14 +415,23 @@ void MsgProcessor::on_tick(int64_t now) {
         if (!timed_out.empty()) {
             LOG_INFO(core::LogCategory::NET,
                      "Clearing " + std::to_string(timed_out.size()) +
-                     " stale block requests (timeout)");
+                     " block requests (download timeout " +
+                     std::to_string(BLOCK_DOWNLOAD_TIMEOUT) + "s)");
             for (const auto& hash : timed_out) {
                 cancel_block_request(hash);
             }
             sync_peer_id_ = 0;
 
+            // Re-request from any operational peer.
             for (uint64_t pid : get_outbound_peers()) {
                 request_blocks(pid);
+            }
+            auto all_peers = conn_manager_.get_peer_ids();
+            for (uint64_t pid : all_peers) {
+                Peer* p = conn_manager_.get_peer(pid);
+                if (p && p->inbound && peer_state_is_operational(p->state)) {
+                    request_blocks(pid);
+                }
             }
         }
     }
@@ -995,6 +1058,8 @@ void MsgProcessor::handle_block(uint64_t peer_id,
 
     // Remove from in-flight tracking.
     cancel_block_request(block_hash);
+    // Peer delivered a block — clear stalling flag (Bitcoin Core style).
+    peer_stalling_since_.erase(peer_id);
     known_blocks_.insert(block_hash);
 
     // Accept the block into chainstate.
@@ -1040,6 +1105,16 @@ void MsgProcessor::handle_block(uint64_t peer_id,
             }
             last_tip_update_ = core::get_time();
             relay_block(block_hash);
+
+            // Decay the stalling timeout toward default (Bitcoin Core style).
+            // Successful chain advancement means the network is healthy,
+            // so gradually become less tolerant of stalling again.
+            if (block_stalling_timeout_ > BLOCK_STALLING_TIMEOUT_DEFAULT) {
+                int64_t decayed = static_cast<int64_t>(
+                    block_stalling_timeout_ * 0.85);
+                block_stalling_timeout_ = std::max(
+                    decayed, BLOCK_STALLING_TIMEOUT_DEFAULT);
+            }
         }
     }
 
@@ -1645,11 +1720,10 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     bool downloading_fork = (start_height <= active_chain.height());
 
     if (!downloading_fork) {
-        // Linear extension — prefer outbound peers, but fall back to
-        // any operational peer (including inbound) that claims higher height.
-        // This allows seed nodes to accept blocks from inbound miners.
+        // Select the best peer: highest start_height among outbound,
+        // then inbound.  Simple selection — stalling is handled
+        // separately via the nodeStaller pattern below.
         int best_height = 0;
-        // First pass: outbound peers (preferred).
         for (uint64_t pid : get_outbound_peers()) {
             Peer* p = conn_manager_.get_peer(pid);
             if (!p) continue;
@@ -1658,7 +1732,6 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
                 best_peer = pid;
             }
         }
-        // Second pass: if no outbound peer has what we need, try inbound.
         if (best_height < start_height) {
             auto all_peers = conn_manager_.get_peer_ids();
             for (uint64_t pid : all_peers) {
@@ -1673,8 +1746,6 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     }
 
     // Walk from start_height to best_header, requesting blocks we don't have.
-    // Use a single backward walk from best_header instead of calling
-    // get_ancestor(h) per height (O(n) each → O(n*k) total).
     std::vector<net::protocol::InvItem> to_request;
     static constexpr int MAX_BLOCKS_REQUEST = 128;
 
@@ -1688,7 +1759,6 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     // to start_height.  Reverse to get ascending order.
     int scan_end = best_header->height;
     int scan_begin = start_height;
-    // Limit how far we scan ahead (at most 2x pipeline depth).
     if (scan_end - scan_begin > MAX_BLOCKS_IN_TRANSIT_PER_PEER * 2) {
         scan_end = scan_begin + MAX_BLOCKS_IN_TRANSIT_PER_PEER * 2;
     }
@@ -1702,6 +1772,11 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
     }
     std::reverse(candidates.begin(), candidates.end());
 
+    // Bitcoin Core "nodeStaller" pattern: when we can't assign any blocks
+    // to this peer because another peer already has them in-flight, record
+    // that other peer as the potential pipeline blocker.
+    uint64_t node_staller = 0;
+
     int64_t now = core::get_time();
     for (auto* index : candidates) {
         if (static_cast<int>(to_request.size()) >= MAX_BLOCKS_REQUEST) break;
@@ -1709,30 +1784,37 @@ void MsgProcessor::request_blocks(uint64_t peer_id) {
 
         if (index->has_data()) continue;
 
-        bool already_in_flight = is_block_in_flight(index->block_hash);
-
-        // Re-request if stale: works even with a single peer.
-        // After half the timeout, re-request regardless of which peer
-        // originally requested it.
-        bool stale_request = false;
-        if (already_in_flight) {
-            auto it = block_requests_.find(index->block_hash);
-            if (it != block_requests_.end()) {
-                int64_t elapsed = now - it->second.request_time;
-                if (elapsed > BLOCK_DOWNLOAD_TIMEOUT / 2) {
-                    stale_request = true;
+        if (is_block_in_flight(index->block_hash)) {
+            // Block already requested from someone.  Record the first
+            // such peer as the potential staller (they are blocking us).
+            if (node_staller == 0) {
+                auto it = block_requests_.find(index->block_hash);
+                if (it != block_requests_.end() &&
+                    it->second.peer_id != best_peer) {
+                    node_staller = it->second.peer_id;
                 }
             }
+            continue;
         }
 
-        if (!already_in_flight || stale_request) {
-            net::protocol::InvItem item;
-            item.type = net::protocol::InvType::BLOCK;
-            item.hash = index->block_hash;
-            to_request.push_back(item);
+        net::protocol::InvItem item;
+        item.type = net::protocol::InvType::BLOCK;
+        item.hash = index->block_hash;
+        to_request.push_back(item);
+        block_requests_[index->block_hash] = {best_peer, now};
+        ++peer_in_flight;
+    }
 
-            block_requests_[index->block_hash] = {best_peer, now};
-            ++peer_in_flight;
+    // If we couldn't assign ANY new blocks because another peer has them
+    // all in-flight, mark that peer as stalling (if not already marked).
+    // The on_tick() handler will disconnect after block_stalling_timeout_.
+    if (to_request.empty() && node_staller != 0) {
+        auto [it, inserted] = peer_stalling_since_.try_emplace(
+            node_staller, now);
+        if (inserted) {
+            LOG_INFO(core::LogCategory::NET,
+                     "Peer " + std::to_string(node_staller) +
+                     " blocking download pipeline, marked as stalling");
         }
     }
 
