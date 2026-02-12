@@ -3,13 +3,13 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 // ---------------------------------------------------------------------------
-// ftc-miner-gpu — standalone GPU-accelerated FTC miner
+// ftc-miner-gpu — standalone multi-GPU-accelerated FTC miner
 //
 // Same RPC protocol as ftc-miner (getwork/submitwork), but uses OpenCL
-// to grind nonces on the GPU.  PoW: keccak256d(header_80bytes) <= target.
+// to grind nonces on one or more GPUs.  PoW: keccak256d(header_80bytes) <= target.
 //
 // Usage:
-//   ftc-miner-gpu --address=ADDR [--rpc-host=HOST] [--gpu-device=N]
+//   ftc-miner-gpu --address=ADDR [--rpc-host=HOST] [--gpu-devices=all]
 // ---------------------------------------------------------------------------
 
 #include "core/hex.h"
@@ -31,6 +31,8 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -86,6 +88,13 @@ static std::atomic<bool> g_stop{false};
 static std::atomic<int64_t> g_chain_height{0};  // updated by poll thread
 static std::atomic<bool> g_work_stale{false};    // set when height changes
 
+// Multi-GPU solution sharing
+static std::atomic<bool> g_solution_found{false};
+static std::atomic<uint32_t> g_solution_nonce{0};
+static std::atomic<uint32_t> g_solution_timestamp{0};
+static std::atomic<int> g_solution_gpu{-1};
+static std::atomic<int> g_active_threads{0};  // tracks running GPU threads
+
 #ifdef _WIN32
 static BOOL WINAPI console_handler(DWORD signal) {
     if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT) {
@@ -110,6 +119,26 @@ struct MinedBlock {
 };
 
 static std::vector<MinedBlock> g_block_history;
+
+// ---------------------------------------------------------------------------
+// Per-GPU worker state
+// ---------------------------------------------------------------------------
+struct GpuWorker {
+    gpu::OpenCLContext ctx;
+    std::unique_ptr<gpu::GpuMiner> miner;
+    gpu::DeviceInfo info;
+    uint32_t batch_size = 0;
+    int gpu_index = 0;        // sequential index (0, 1, 2...)
+    int device_index = 0;     // OpenCL device index
+    int platform_index = 0;   // OpenCL platform index
+
+    // Per-GPU hashrate tracking (atomics for thread safety)
+    std::atomic<uint64_t> session_hashes{0};
+    std::atomic<uint64_t> window_hashes{0};
+    std::chrono::steady_clock::time_point window_start;
+    double window_rate = 0;
+    int power_pct = 100;
+};
 
 // ---------------------------------------------------------------------------
 // Difficulty from compact nBits (same formula as the node's RPC)
@@ -401,6 +430,25 @@ static bool has_arg(int argc, char* argv[], const std::string& name) {
 }
 
 // ---------------------------------------------------------------------------
+// Parse --gpu-devices argument: "all", "0", "0,2,3", etc.
+// ---------------------------------------------------------------------------
+static std::vector<int> parse_gpu_devices(const std::string& arg,
+                                          int total_devices) {
+    std::vector<int> result;
+    if (arg.empty() || arg == "all") {
+        for (int i = 0; i < total_devices; ++i) result.push_back(i);
+        return result;
+    }
+    std::istringstream ss(arg);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        int idx = std::atoi(token.c_str());
+        if (idx >= 0 && idx < total_devices) result.push_back(idx);
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // Keccak256d test mode: validate GPU double-hash against CPU
 // ---------------------------------------------------------------------------
 static bool run_keccak_test(gpu::GpuMiner& miner) {
@@ -455,7 +503,7 @@ static bool run_keccak_test(gpu::GpuMiner& miner) {
 }
 
 // ---------------------------------------------------------------------------
-// TUI — cgminer-style static dashboard
+// TUI — cgminer-style static dashboard (multi-GPU)
 // ---------------------------------------------------------------------------
 static std::vector<std::string> g_tui_log;
 static constexpr size_t TUI_MAX_LOG = 50;
@@ -467,51 +515,63 @@ static void tui_log(const std::string& msg) {
 }
 
 struct TuiState {
-    // Static info (set once)
-    std::string gpu_name;
-    int gpu_mem_mb = 0;
-    int gpu_cus = 0;
+    // Static info
     std::string address;
     std::string node;
     std::string auth_mode;
     std::string start_time;
-    uint32_t batch_size = 0;
     int power_pct = 100;
 
-    // Dynamic info (updated during mining)
+    // Dynamic info
     int64_t height = 0;
     double difficulty = 0;
     int blocks_found = 0;
     int blocks_rejected = 0;
 
-    // Hashrate tracking
-    uint64_t session_hashes = 0;
-    std::chrono::steady_clock::time_point session_start;
-    uint64_t window_hashes = 0;
-    std::chrono::steady_clock::time_point window_start;
-    double window_rate = 0;
+    // Workers
+    std::vector<GpuWorker*> workers;
 
-    void add_hashes(uint64_t n) {
-        session_hashes += n;
-        window_hashes += n;
+    // Session timing
+    std::chrono::steady_clock::time_point session_start;
+
+    uint64_t total_session_hashes() const {
+        uint64_t total = 0;
+        for (auto* w : workers)
+            total += w->session_hashes.load(std::memory_order_relaxed);
+        return total;
     }
 
     double avg_hashrate() const {
         double s = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - session_start).count();
-        return s > 0.5 ? static_cast<double>(session_hashes) / s : 0;
+        return s > 0.5 ? static_cast<double>(total_session_hashes()) / s : 0;
     }
 
-    double current_hashrate() {
-        auto now = std::chrono::steady_clock::now();
-        double s = std::chrono::duration<double>(now - window_start).count();
-        if (s >= 10.0) {
-            window_rate = static_cast<double>(window_hashes) / s;
-            window_hashes = 0;
-            window_start = now;
+    double total_current_hashrate() const {
+        double total = 0;
+        for (auto* w : workers) {
+            // Use the cached window_rate
+            total += w->window_rate;
         }
-        return window_rate > 0 ? window_rate
-            : (s > 0.5 ? static_cast<double>(window_hashes) / s : 0);
+        return total;
+    }
+
+    void update_window_rates() {
+        auto now = std::chrono::steady_clock::now();
+        for (auto* w : workers) {
+            double s = std::chrono::duration<double>(
+                now - w->window_start).count();
+            if (s >= 10.0) {
+                uint64_t wh = w->window_hashes.exchange(0,
+                    std::memory_order_relaxed);
+                w->window_rate = static_cast<double>(wh) / s;
+                w->window_start = now;
+            } else if (w->window_rate == 0 && s > 0.5) {
+                // Initial estimate before first window
+                w->window_rate = static_cast<double>(
+                    w->window_hashes.load(std::memory_order_relaxed)) / s;
+            }
+        }
     }
 
     double uptime() const {
@@ -521,7 +581,8 @@ struct TuiState {
 };
 
 static void tui_redraw(TuiState& st) {
-    double rate = st.current_hashrate();
+    st.update_window_rates();
+    double rate = st.total_current_hashrate();
     double avg = st.avg_hashrate();
     double up = st.uptime();
     double expected = st.difficulty * 4294967296.0;
@@ -532,7 +593,7 @@ static void tui_redraw(TuiState& st) {
     if (g_ansi) buf << "\033[H";  // cursor home
 
     // Line 1: title
-    buf << "FTC Miner v2.2 - Started: [" << st.start_time << "]";
+    buf << "FTC Miner v2.3 (multi-GPU) - Started: [" << st.start_time << "]";
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
@@ -569,20 +630,31 @@ static void tui_redraw(TuiState& st) {
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
-    // Line 7: GPU status
-    buf << "GPU 0: " << st.gpu_name
-        << " | " << st.gpu_mem_mb << " MB  " << st.gpu_cus << " CUs"
-        << " | " << format_hashrate(rate)
-        << "  Batch:" << format_number(st.batch_size);
-    if (g_ansi) buf << "\033[K";
-    buf << "\n";
+    // Lines 7+: per-GPU status
+    for (auto* w : st.workers) {
+        buf << "GPU " << w->gpu_index << ": " << w->info.name
+            << " | " << (w->info.global_mem / (1024*1024)) << " MB  "
+            << w->info.compute_units << " CUs"
+            << " | " << format_hashrate(w->window_rate)
+            << "  Batch:" << format_number(w->batch_size);
+        if (g_ansi) buf << "\033[K";
+        buf << "\n";
+    }
 
-    // Line 8: separator
+    // Total line
+    if (st.workers.size() > 1) {
+        buf << "Total: " << st.workers.size() << " GPUs | "
+            << format_hashrate(rate);
+        if (g_ansi) buf << "\033[K";
+        buf << "\n";
+    }
+
+    // Separator
     buf << std::string(72, '-');
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
-    // Lines 9+: event log
+    // Event log
     for (const auto& line : g_tui_log) {
         buf << line;
         if (g_ansi) buf << "\033[K";
@@ -593,6 +665,174 @@ static void tui_redraw(TuiState& st) {
     if (g_ansi) buf << "\033[J";
 
     std::cout << buf.str() << std::flush;
+}
+
+// ---------------------------------------------------------------------------
+// GPU mining thread function
+// ---------------------------------------------------------------------------
+static void gpu_mine_thread(GpuWorker& worker,
+                            const std::vector<uint8_t>& header_bytes,
+                            const core::uint256& target,
+                            uint32_t nonce_start,
+                            uint32_t nonce_count,
+                            uint32_t timestamp) {
+    // RAII guard to decrement active thread count on exit
+    struct ThreadGuard {
+        ~ThreadGuard() { g_active_threads.fetch_sub(1, std::memory_order_release); }
+    } guard;
+
+    auto& miner = *worker.miner;
+
+    // Each thread gets its own copy of the header for timestamp rolling
+    auto hdr = header_bytes;
+
+    // Set header and target on this GPU
+    miner.set_header(std::span<const uint8_t>(hdr.data(), 80));
+    miner.set_target(std::span<const uint8_t>(target.data(), 32));
+
+    uint32_t cur_timestamp = timestamp;
+    uint32_t batch = worker.batch_size;
+
+    while (!g_stop && !g_solution_found && !g_work_stale) {
+        // Mine through the nonce range for this GPU
+        for (uint64_t offset = 0;
+             !g_stop && !g_solution_found && !g_work_stale; ) {
+
+            uint64_t abs_nonce = static_cast<uint64_t>(nonce_start) + offset;
+            if (abs_nonce > UINT32_MAX) break;
+
+            uint64_t remaining = static_cast<uint64_t>(nonce_count) - offset;
+            if (remaining == 0) break;
+
+            uint32_t this_batch = static_cast<uint32_t>(
+                std::min(static_cast<uint64_t>(batch), remaining));
+            if (this_batch == 0) break;
+
+            auto dispatch_t0 = std::chrono::steady_clock::now();
+            auto results = miner.mine_batch(
+                static_cast<uint32_t>(abs_nonce), this_batch);
+            auto dispatch_t1 = std::chrono::steady_clock::now();
+
+            // Power throttle
+            if (worker.power_pct < 100) {
+                double dispatch_ms = std::chrono::duration<double,
+                    std::milli>(dispatch_t1 - dispatch_t0).count();
+                double sleep_ms = dispatch_ms *
+                    (100.0 - worker.power_pct) / worker.power_pct;
+                if (sleep_ms > 1.0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::microseconds(
+                            static_cast<int64_t>(sleep_ms * 1000)));
+                }
+            }
+
+            if (miner.last_kernel_error() != 0) {
+                // GPU error — stop this thread
+                g_stop = true;
+                break;
+            }
+
+            // Update hash counters
+            worker.session_hashes.fetch_add(this_batch,
+                std::memory_order_relaxed);
+            worker.window_hashes.fetch_add(this_batch,
+                std::memory_order_relaxed);
+
+            // Check results
+            if (!results.empty()) {
+                for (uint32_t nonce : results) {
+                    // CPU-verify the result
+                    auto verify_hdr = hdr;
+                    verify_hdr[76] = nonce & 0xFF;
+                    verify_hdr[77] = (nonce >> 8) & 0xFF;
+                    verify_hdr[78] = (nonce >> 16) & 0xFF;
+                    verify_hdr[79] = (nonce >> 24) & 0xFF;
+
+                    auto cpu_hash = crypto::keccak256d(
+                        std::span<const uint8_t>(verify_hdr.data(), 80));
+
+                    if (cpu_hash <= target) {
+                        // Found a valid solution!
+                        bool expected = false;
+                        if (g_solution_found.compare_exchange_strong(
+                                expected, true)) {
+                            g_solution_nonce = nonce;
+                            g_solution_timestamp = cur_timestamp;
+                            g_solution_gpu = worker.gpu_index;
+                        }
+                        return;
+                    }
+                }
+            }
+
+            offset += this_batch;
+        }
+
+        // Nonce range exhausted for this GPU — roll timestamp
+        ++cur_timestamp;
+        auto real_time = static_cast<uint32_t>(std::time(nullptr));
+        if (cur_timestamp > real_time + 30) break;
+
+        hdr[68] = cur_timestamp & 0xFF;
+        hdr[69] = (cur_timestamp >> 8) & 0xFF;
+        hdr[70] = (cur_timestamp >> 16) & 0xFF;
+        hdr[71] = (cur_timestamp >> 24) & 0xFF;
+
+        miner.set_header(std::span<const uint8_t>(hdr.data(), 80));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-tune batch size for a single GPU
+// ---------------------------------------------------------------------------
+static uint32_t auto_tune_gpu(gpu::GpuMiner& miner) {
+    std::array<uint8_t, 80> dummy_hdr{};
+    for (int i = 0; i < 80; ++i)
+        dummy_hdr[i] = static_cast<uint8_t>((i * 37) & 0xFF);
+    std::array<uint8_t, 32> dummy_target{};
+    miner.set_header(std::span<const uint8_t>(dummy_hdr.data(), 80));
+    miner.set_target(std::span<const uint8_t>(dummy_target.data(), 32));
+
+    static constexpr uint32_t candidates[] = {
+        1u << 18, 1u << 19, 1u << 20, 1u << 21,
+        1u << 22, 1u << 23, 1u << 24, 1u << 25,
+    };
+    static constexpr int N_CANDIDATES =
+        static_cast<int>(sizeof(candidates) / sizeof(candidates[0]));
+
+    double best_rate = 0;
+    uint32_t best_size = 1u << 22;
+
+    // Warm up
+    miner.set_batch_size(1u << 20);
+    miner.mine_batch(0, 1u << 20);
+
+    for (int i = 0; i < N_CANDIDATES; ++i) {
+        uint32_t sz = candidates[i];
+        miner.set_batch_size(sz);
+
+        miner.mine_batch(0, sz);
+        if (miner.last_kernel_error() != 0) continue;
+
+        auto t0 = std::chrono::steady_clock::now();
+        miner.mine_batch(sz, sz);
+        auto t1 = std::chrono::steady_clock::now();
+
+        if (miner.last_kernel_error() != 0) continue;
+
+        double secs = std::chrono::duration<double>(t1 - t0).count();
+        double rate_val = static_cast<double>(sz) / secs;
+
+        if (rate_val > best_rate) {
+            best_rate = rate_val;
+            best_size = sz;
+        }
+
+        if (secs > 4.0) break;
+    }
+
+    miner.set_batch_size(best_size);
+    return best_size;
 }
 
 // ---------------------------------------------------------------------------
@@ -620,9 +860,11 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         std::cout << "\nAvailable GPU devices:\n\n";
-        for (const auto& d : devices) {
-            std::cout << "  [" << d.platform_index << ":" << d.device_index
-                      << "] " << d.name << "\n"
+        for (size_t i = 0; i < devices.size(); ++i) {
+            auto& d = devices[i];
+            std::cout << "  [" << i << "] " << d.name
+                      << "  (platform:" << d.platform_index
+                      << " device:" << d.device_index << ")\n"
                       << "      Vendor: " << d.vendor
                       << "  Memory: " << (d.global_mem / (1024*1024)) << " MB"
                       << "  CUs: " << d.compute_units
@@ -632,7 +874,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (has_arg(argc, argv, "help") || argc < 2) {
-        std::cout << "FTC GPU Miner v2.2\n\n"
+        std::cout << "FTC GPU Miner v2.3 (multi-GPU)\n\n"
                   << "Usage: ftc-miner-gpu --address=ADDR [options]\n\n"
                   << "Options:\n"
                   << "  --address=ADDR       Mining reward address (required)\n"
@@ -640,16 +882,18 @@ int main(int argc, char* argv[]) {
                   << "  --rpc-port=PORT      RPC server port (default: 9332)\n"
                   << "  --rpc-user=USER      RPC username (default: auto from .cookie)\n"
                   << "  --rpc-pass=PASS      RPC password (default: auto from .cookie)\n"
-                  << "  --gpu-platform=N     OpenCL platform index (default: 0)\n"
-                  << "  --gpu-device=N       GPU device index (default: 0)\n"
+                  << "  --gpu-devices=LIST   GPU devices: 'all' or comma-separated indices\n"
+                  << "                       (default: all). Use --gpu-list for indices.\n"
+                  << "  --gpu-device=N       Use single GPU N (backward compat)\n"
                   << "  --batch-size=N       Nonces per GPU dispatch (default: auto-tune)\n"
                   << "  --power=N            GPU power limit 1-100% (default: 100)\n"
                   << "                       Use 60-80 on laptops to prevent overheating\n"
                   << "  --gpu-list           List available GPU devices and exit\n"
                   << "  --test-keccak        Validate GPU Keccak256d against CPU\n"
                   << "  --help               Show this help\n\n"
-                  << "Example:\n"
-                  << "  ftc-miner-gpu --address=1A73WPJ... --rpc-host=seed.flowprotocol.net\n"
+                  << "Examples:\n"
+                  << "  ftc-miner-gpu --address=1A73WPJ...  (use all GPUs)\n"
+                  << "  ftc-miner-gpu --address=1A73WPJ... --gpu-devices=0,2,3\n"
                   << "  ftc-miner-gpu --address=1A73WPJ... --power=70  (laptop mode)\n";
         return 0;
     }
@@ -669,10 +913,7 @@ int main(int argc, char* argv[]) {
             g_rpc_pass.clear();
         }
     }
-    int gpu_platform     = std::atoi(
-        get_arg(argc, argv, "gpu-platform", "0").c_str());
-    int gpu_device       = std::atoi(
-        get_arg(argc, argv, "gpu-device", "0").c_str());
+
     bool manual_batch    = has_arg(argc, argv, "batch-size");
     uint32_t batch_size  = manual_batch
         ? static_cast<uint32_t>(
@@ -688,96 +929,98 @@ int main(int argc, char* argv[]) {
     logger.set_print_to_console(false);
 
     // ---------------------------------------------------------------
-    // Initialize GPU (plain text startup)
+    // Enumerate and select GPUs
     // ---------------------------------------------------------------
-    std::cout << "\n  FTC Miner v2.2\n\n";
+    std::cout << "\n  FTC Miner v2.3 (multi-GPU)\n\n";
 
-    std::cout << "  Initializing OpenCL..." << std::flush;
-
-    gpu::OpenCLContext ctx;
-    if (!ctx.init(gpu_platform, gpu_device)) {
-        std::cout << " FAILED\n  No suitable GPU found. Use --gpu-list.\n";
+    auto all_devices = gpu::OpenCLContext::list_devices();
+    if (all_devices.empty()) {
+        std::cout << "  No OpenCL GPU devices found.\n";
         return 1;
     }
 
-    auto dev = ctx.device_info();
-    std::cout << " OK\n";
-    std::cout << "  GPU:      " << dev.name << "\n";
-    std::cout << "  Memory:   " << (dev.global_mem / (1024*1024)) << " MB"
-              << "  CUs: " << dev.compute_units << "\n";
+    // Determine which GPUs to use
+    std::vector<int> selected_indices;
+    if (has_arg(argc, argv, "gpu-devices")) {
+        selected_indices = parse_gpu_devices(
+            get_arg(argc, argv, "gpu-devices", "all"),
+            static_cast<int>(all_devices.size()));
+    } else if (has_arg(argc, argv, "gpu-device")) {
+        // Backward compat: --gpu-device=N selects single GPU
+        int idx = std::atoi(get_arg(argc, argv, "gpu-device", "0").c_str());
+        if (idx >= 0 && idx < static_cast<int>(all_devices.size()))
+            selected_indices.push_back(idx);
+    } else {
+        // Default: all GPUs
+        for (int i = 0; i < static_cast<int>(all_devices.size()); ++i)
+            selected_indices.push_back(i);
+    }
 
-    gpu::GpuMiner miner(ctx);
-
-    if (!miner.init()) {
-        std::cout << "  Failed to initialize GPU miner\n";
-        std::string log = ctx.get_build_log();
-        if (!log.empty()) std::cout << "  Build log:\n" << log << "\n";
+    if (selected_indices.empty()) {
+        std::cout << "  No valid GPU indices selected. Use --gpu-list.\n";
         return 1;
     }
 
-    std::cout << "  GPU miner initialized\n";
-
     // ---------------------------------------------------------------
-    // Auto-tune batch size
+    // Initialize GPU workers
     // ---------------------------------------------------------------
-    if (batch_size == 0) {
-        std::cout << "  Auto-tuning batch size..." << std::flush;
+    std::vector<std::unique_ptr<GpuWorker>> workers;
 
-        std::array<uint8_t, 80> dummy_hdr{};
-        for (int i = 0; i < 80; ++i)
-            dummy_hdr[i] = static_cast<uint8_t>((i * 37) & 0xFF);
-        std::array<uint8_t, 32> dummy_target{};
-        miner.set_header(std::span<const uint8_t>(dummy_hdr.data(), 80));
-        miner.set_target(std::span<const uint8_t>(dummy_target.data(), 32));
+    for (int sel_idx : selected_indices) {
+        auto& dev_info = all_devices[sel_idx];
+        auto worker = std::make_unique<GpuWorker>();
+        worker->gpu_index = static_cast<int>(workers.size());
+        worker->device_index = dev_info.device_index;
+        worker->platform_index = dev_info.platform_index;
+        worker->power_pct = power_pct;
 
-        static constexpr uint32_t candidates[] = {
-            1u << 18, 1u << 19, 1u << 20, 1u << 21,
-            1u << 22, 1u << 23, 1u << 24, 1u << 25,
-        };
-        static constexpr int N_CANDIDATES =
-            static_cast<int>(sizeof(candidates) / sizeof(candidates[0]));
+        std::cout << "  Initializing GPU " << worker->gpu_index
+                  << " [" << sel_idx << "]..." << std::flush;
 
-        double best_rate = 0;
-        uint32_t best_size = 1u << 22;
-
-        miner.set_batch_size(1u << 20);
-        miner.mine_batch(0, 1u << 20);
-
-        for (int i = 0; i < N_CANDIDATES; ++i) {
-            uint32_t sz = candidates[i];
-            miner.set_batch_size(sz);
-
-            miner.mine_batch(0, sz);
-            if (miner.last_kernel_error() != 0) continue;
-
-            auto t0 = std::chrono::steady_clock::now();
-            miner.mine_batch(sz, sz);
-            auto t1 = std::chrono::steady_clock::now();
-
-            if (miner.last_kernel_error() != 0) continue;
-
-            double secs = std::chrono::duration<double>(t1 - t0).count();
-            double rate = static_cast<double>(sz) / secs;
-
-            if (rate > best_rate) {
-                best_rate = rate;
-                best_size = sz;
-            }
-
-            if (secs > 4.0) break;
+        if (!worker->ctx.init(dev_info.platform_index, dev_info.device_index)) {
+            std::cout << " FAILED (OpenCL init)\n";
+            continue;
         }
 
-        batch_size = best_size;
-        std::cout << " " << format_number(batch_size)
-                  << " nonces/dispatch (" << format_hashrate(best_rate)
-                  << ")\n";
+        worker->info = worker->ctx.device_info();
+        worker->miner = std::make_unique<gpu::GpuMiner>(worker->ctx);
+
+        if (!worker->miner->init()) {
+            std::cout << " FAILED (miner init)\n";
+            std::string log = worker->ctx.get_build_log();
+            if (!log.empty()) std::cout << "  Build log:\n" << log << "\n";
+            continue;
+        }
+
+        std::cout << " OK  " << worker->info.name
+                  << "  " << (worker->info.global_mem / (1024*1024)) << " MB"
+                  << "  " << worker->info.compute_units << " CUs\n";
+
+        // Auto-tune or set manual batch size
+        if (batch_size == 0) {
+            std::cout << "  Auto-tuning GPU " << worker->gpu_index
+                      << "..." << std::flush;
+            worker->batch_size = auto_tune_gpu(*worker->miner);
+            std::cout << " " << format_number(worker->batch_size)
+                      << " nonces/dispatch\n";
+        } else {
+            worker->batch_size = batch_size;
+            worker->miner->set_batch_size(batch_size);
+        }
+
+        workers.push_back(std::move(worker));
     }
 
-    miner.set_batch_size(batch_size);
+    if (workers.empty()) {
+        std::cout << "  No GPUs initialized successfully.\n";
+        return 1;
+    }
 
-    // --test-keccak: validate and exit
+    std::cout << "  " << workers.size() << " GPU(s) ready\n";
+
+    // --test-keccak: validate first GPU and exit
     if (has_arg(argc, argv, "test-keccak")) {
-        bool ok = run_keccak_test(miner);
+        bool ok = run_keccak_test(*workers[0]->miner);
         return ok ? 0 : 1;
     }
 
@@ -790,19 +1033,19 @@ int main(int argc, char* argv[]) {
     // Prepare TUI state
     // ---------------------------------------------------------------
     TuiState state;
-    state.gpu_name = dev.name;
-    state.gpu_mem_mb = static_cast<int>(dev.global_mem / (1024*1024));
-    state.gpu_cus = static_cast<int>(dev.compute_units);
     state.address = address;
     state.node = rpc_host + ":" + std::to_string(rpc_port);
     state.auth_mode = (g_rpc_user == "__cookie__") ? "cookie"
                     : g_rpc_user.empty() ? "none" : "rpcuser";
     state.start_time = current_datetime();
-    state.batch_size = batch_size;
     state.power_pct = power_pct;
     auto now = std::chrono::steady_clock::now();
     state.session_start = now;
-    state.window_start = now;
+
+    for (auto& w : workers) {
+        w->window_start = now;
+        state.workers.push_back(w.get());
+    }
 
     // Start background height poller
     std::thread poller(height_poll_thread, rpc_host, rpc_port);
@@ -810,18 +1053,24 @@ int main(int argc, char* argv[]) {
     // Clear screen and enter TUI mode
     if (g_ansi) std::cout << "\033[2J\033[H" << std::flush;
 
-    tui_log("Mining started");
+    tui_log("Mining started with " + std::to_string(workers.size()) + " GPU(s)");
     tui_redraw(state);
 
     // Periodic TUI refresh interval
     auto last_redraw = std::chrono::steady_clock::now();
     static constexpr double REDRAW_INTERVAL = 1.0;
 
+    int num_gpus = static_cast<int>(workers.size());
+
     // ---------------------------------------------------------------
     // Mining loop
     // ---------------------------------------------------------------
     while (!g_stop) {
         g_work_stale = false;
+        g_solution_found = false;
+        g_solution_nonce = 0;
+        g_solution_timestamp = 0;
+        g_solution_gpu = -1;
 
         // 1. Fetch work
         std::string resp = rpc_call(rpc_host, rpc_port, "getwork",
@@ -887,17 +1136,6 @@ int main(int argc, char* argv[]) {
             tui_redraw(state);
         }
 
-        // Upload header and target to GPU
-        miner.set_header(std::span<const uint8_t>(
-            header_opt->data(), 80));
-        miner.set_target(std::span<const uint8_t>(
-            target.data(), 32));
-
-        auto block_start = std::chrono::steady_clock::now();
-        bool found = false;
-        uint32_t winning_nonce = 0;
-        uint64_t block_hashes = 0;
-
         // Read initial timestamp from header bytes [68..71]
         auto& hdr_bytes = *header_opt;
         uint32_t cur_timestamp =
@@ -906,110 +1144,76 @@ int main(int argc, char* argv[]) {
             (static_cast<uint32_t>(hdr_bytes[70]) << 16) |
             (static_cast<uint32_t>(hdr_bytes[71]) << 24);
 
-        // 3. GPU mining loop with timestamp rolling
+        // 3. Partition nonce space and launch GPU threads
         g_chain_height = height;
+        auto block_start = std::chrono::steady_clock::now();
 
-        while (!g_stop && !found && !g_work_stale) {
-            for (uint32_t base_nonce = 0;
-                 !g_stop && !found && !g_work_stale; ) {
-                uint64_t remaining64 =
-                    static_cast<uint64_t>(UINT32_MAX) - base_nonce + 1;
-                if (remaining64 == 0) break;
-                uint32_t this_batch = static_cast<uint32_t>(
-                    std::min(static_cast<uint64_t>(batch_size), remaining64));
-                if (this_batch == 0) break;
+        // Each GPU gets UINT32_MAX / num_gpus nonces
+        // Use uint64_t to avoid overflow
+        uint64_t total_nonces = static_cast<uint64_t>(UINT32_MAX) + 1;
+        uint64_t stride = total_nonces / num_gpus;
 
-                auto dispatch_t0 = std::chrono::steady_clock::now();
-                auto results = miner.mine_batch(base_nonce, this_batch);
-                auto dispatch_t1 = std::chrono::steady_clock::now();
+        std::vector<std::thread> gpu_threads;
+        gpu_threads.reserve(num_gpus);
+        g_active_threads = num_gpus;
 
-                // Power throttle
-                if (power_pct < 100) {
-                    double dispatch_ms = std::chrono::duration<double,
-                        std::milli>(dispatch_t1 - dispatch_t0).count();
-                    double sleep_ms = dispatch_ms *
-                        (100.0 - power_pct) / power_pct;
-                    if (sleep_ms > 1.0) {
-                        std::this_thread::sleep_for(
-                            std::chrono::microseconds(
-                                static_cast<int64_t>(sleep_ms * 1000)));
-                    }
-                }
+        for (int i = 0; i < num_gpus; ++i) {
+            uint32_t nonce_start = static_cast<uint32_t>(
+                static_cast<uint64_t>(i) * stride);
+            uint32_t nonce_count = (i == num_gpus - 1)
+                ? static_cast<uint32_t>(total_nonces - i * stride)
+                : static_cast<uint32_t>(stride);
 
-                if (miner.last_kernel_error() != 0) {
-                    tui_log("GPU kernel error (OpenCL code " +
-                        std::to_string(miner.last_kernel_error()) +
-                        "). Try --batch-size=1048576");
-                    tui_redraw(state);
-                    found = false;
-                    g_stop = true;
-                    break;
-                }
+            gpu_threads.emplace_back(gpu_mine_thread,
+                std::ref(*workers[i]),
+                std::cref(*header_opt),
+                std::cref(target),
+                nonce_start,
+                nonce_count,
+                cur_timestamp);
+        }
 
-                block_hashes += this_batch;
-                state.add_hashes(this_batch);
+        // 4. Wait for threads, refreshing TUI periodically
+        while (!g_stop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-                if (!results.empty()) {
-                    for (uint32_t nonce : results) {
-                        auto hdr = hdr_bytes;
-                        hdr[76] = nonce & 0xFF;
-                        hdr[77] = (nonce >> 8) & 0xFF;
-                        hdr[78] = (nonce >> 16) & 0xFF;
-                        hdr[79] = (nonce >> 24) & 0xFF;
+            // Check termination conditions
+            if (g_solution_found || g_work_stale || g_stop) break;
 
-                        auto cpu_hash = crypto::keccak256d(
-                            std::span<const uint8_t>(hdr.data(), 80));
+            // All threads finished (nonce space exhausted)
+            if (g_active_threads.load(std::memory_order_acquire) == 0) break;
 
-                        if (cpu_hash <= target) {
-                            found = true;
-                            winning_nonce = nonce;
-                            break;
-                        }
-                    }
-                }
-
-                uint64_t next = static_cast<uint64_t>(base_nonce) + this_batch;
-                if (next > UINT32_MAX) break;
-                base_nonce = static_cast<uint32_t>(next);
-
-                // Periodic TUI refresh
-                auto tnow = std::chrono::steady_clock::now();
-                double since_redraw = std::chrono::duration<double>(
-                    tnow - last_redraw).count();
-                if (since_redraw >= REDRAW_INTERVAL) {
-                    tui_redraw(state);
-                    last_redraw = tnow;
-                }
+            // TUI refresh
+            auto tnow = std::chrono::steady_clock::now();
+            double since_redraw = std::chrono::duration<double>(
+                tnow - last_redraw).count();
+            if (since_redraw >= REDRAW_INTERVAL) {
+                tui_redraw(state);
+                last_redraw = tnow;
             }
+        }
 
-            if (found || g_stop || g_work_stale) break;
-
-            // Nonce space exhausted — roll timestamp
-            ++cur_timestamp;
-
-            auto real_time = static_cast<uint32_t>(std::time(nullptr));
-            if (cur_timestamp > real_time + 30) break;
-
-            hdr_bytes[68] = cur_timestamp & 0xFF;
-            hdr_bytes[69] = (cur_timestamp >> 8) & 0xFF;
-            hdr_bytes[70] = (cur_timestamp >> 16) & 0xFF;
-            hdr_bytes[71] = (cur_timestamp >> 24) & 0xFF;
-
-            miner.set_header(std::span<const uint8_t>(
-                hdr_bytes.data(), 80));
+        // Join all threads
+        for (auto& t : gpu_threads) {
+            if (t.joinable()) t.join();
         }
 
         auto block_elapsed = std::chrono::steady_clock::now() - block_start;
         double block_secs = std::chrono::duration<double>(
             block_elapsed).count();
 
-        if (!found) {
+        if (!g_solution_found) {
             if (g_stop) break;
             continue;
         }
 
-        // 4. Submit solution
-        tui_log("BLOCK FOUND  height " + std::to_string(height) +
+        // 5. Submit solution
+        uint32_t winning_nonce = g_solution_nonce.load();
+        uint32_t winning_timestamp = g_solution_timestamp.load();
+        int winning_gpu = g_solution_gpu.load();
+
+        tui_log("BLOCK FOUND by GPU " + std::to_string(winning_gpu) +
+                "  height " + std::to_string(height) +
                 "  solve " + format_duration(block_secs));
         tui_redraw(state);
 
@@ -1017,7 +1221,7 @@ int main(int argc, char* argv[]) {
             rpc_host, rpc_port, "submitwork",
             "[" + std::to_string(winning_nonce) + "," +
             std::to_string(work_id) + "," +
-            std::to_string(cur_timestamp) + "]");
+            std::to_string(winning_timestamp) + "]");
 
         if (submit_resp.empty()) {
             ++state.blocks_rejected;
@@ -1064,14 +1268,16 @@ int main(int argc, char* argv[]) {
     tui_redraw(state);  // final update
 
     double session_secs = state.uptime();
+    uint64_t total_hashes = state.total_session_hashes();
     double session_rate = session_secs > 0.01
-        ? static_cast<double>(state.session_hashes) / session_secs : 0;
+        ? static_cast<double>(total_hashes) / session_secs : 0;
 
     std::cout << "\n"
               << "=== Session Summary ===\n"
+              << "GPUs:     " << workers.size() << "\n"
               << "Uptime:   " << format_duration(session_secs) << "\n"
               << "Avg rate: " << format_hashrate(session_rate) << "\n"
-              << "Hashes:   " << format_number(state.session_hashes) << "\n"
+              << "Hashes:   " << format_number(total_hashes) << "\n"
               << "Found:    " << state.blocks_found;
     if (state.blocks_rejected > 0) {
         std::cout << "  Rejected: " << state.blocks_rejected;
