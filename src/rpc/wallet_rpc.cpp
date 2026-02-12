@@ -108,18 +108,13 @@ RpcResponse rpc_getnewaddress(const RpcRequest& req, wallet::Wallet* wallet) {
 
     std::string addr = result.value();
 
-    // Also return the private key (WIF + hex) in the same response.
+    // Also return the private key (WIF) in the same response.
     JsonValue obj(JsonValue::Object{});
     obj["address"] = JsonValue(addr);
 
     auto key_result = wallet->key_manager().export_key(addr);
     if (key_result.ok()) {
-        std::string wif = key_result.value();
-        obj["wif"] = JsonValue(wif);
-        auto secret = wallet::KeyManager::decode_wif(wif);
-        if (secret.ok()) {
-            obj["hex"] = JsonValue(hex_encode(secret.value().data(), 32));
-        }
+        obj["wif"] = JsonValue(key_result.value());
     }
 
     LOG_INFO(core::LogCategory::RPC, "getnewaddress: " + addr);
@@ -261,17 +256,7 @@ RpcResponse rpc_dumpprivkey(const RpcRequest& req, wallet::Wallet* wallet) {
                           req.id);
     }
 
-    // Also provide the raw hex private key.
-    std::string wif = result.value();
-    auto secret = wallet::KeyManager::decode_wif(wif);
-
-    JsonValue obj(JsonValue::Object{});
-    obj["wif"] = JsonValue(wif);
-    if (secret.ok()) {
-        obj["hex"] = JsonValue(hex_encode(secret.value().data(), 32));
-    }
-
-    return make_result(std::move(obj), req.id);
+    return make_result(JsonValue(result.value()), req.id);
 }
 
 // ===========================================================================
@@ -336,7 +321,7 @@ void register_wallet_rpcs(RpcServer& server, wallet::Wallet* wallet) {
         {"getnewaddress",
          [wallet](const RpcRequest& r) { return rpc_getnewaddress(r, wallet); },
          "getnewaddress ( \"label\" )\n"
-         "Returns a new FTC address with private key (address, wif, hex).",
+         "Returns a new FTC address with private key (address, wif).",
          "wallet"},
 
         {"sendtoaddress",
@@ -360,7 +345,7 @@ void register_wallet_rpcs(RpcServer& server, wallet::Wallet* wallet) {
         {"dumpprivkey",
          [wallet](const RpcRequest& r) { return rpc_dumpprivkey(r, wallet); },
          "dumpprivkey \"address\"\n"
-         "Reveals the private key corresponding to 'address' in WIF and hex format.",
+         "Reveals the private key (WIF format) corresponding to 'address'.",
          "wallet"},
 
         {"importprivkey",
