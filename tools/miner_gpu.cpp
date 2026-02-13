@@ -1229,9 +1229,13 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < num_gpus; ++i) {
             uint32_t nonce_start = static_cast<uint32_t>(
                 static_cast<uint64_t>(i) * stride);
-            uint32_t nonce_count = (i == num_gpus - 1)
-                ? static_cast<uint32_t>(total_nonces - i * stride)
-                : static_cast<uint32_t>(stride);
+            // Cap to UINT32_MAX to prevent overflow when num_gpus == 1
+            // (total_nonces = 0x100000000 doesn't fit in uint32_t)
+            uint64_t count64 = (i == num_gpus - 1)
+                ? (total_nonces - static_cast<uint64_t>(i) * stride)
+                : stride;
+            if (count64 > UINT32_MAX) count64 = UINT32_MAX;
+            uint32_t nonce_count = static_cast<uint32_t>(count64);
 
             gpu_threads.emplace_back(gpu_mine_thread,
                 std::ref(*workers[i]),
