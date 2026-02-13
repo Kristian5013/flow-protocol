@@ -52,6 +52,7 @@
     inline void close_sock(sock_t s) { closesocket(s); }
 #else
     #include <netdb.h>
+    #include <sys/ioctl.h>
     #include <sys/socket.h>
     #include <unistd.h>
     using sock_t = int;
@@ -63,6 +64,19 @@
 // Terminal support
 // ---------------------------------------------------------------------------
 static bool g_ansi = false;  // true if terminal supports ANSI cursor codes
+
+static int term_rows() {
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
+        return csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+#else
+    struct winsize w{};
+    if (ioctl(fileno(stdout), TIOCGWINSZ, &w) == 0 && w.ws_row > 0)
+        return w.ws_row;
+#endif
+    return 30;  // fallback
+}
 
 static void term_init() {
 #ifdef _WIN32
@@ -605,6 +619,14 @@ static void tui_redraw(TuiState& st) {
     double expected = st.difficulty * 4294967296.0;
     double eta = (rate > 0 && expected > 0) ? expected / rate : 0;
 
+    // Calculate how many log lines fit on screen
+    int rows = term_rows();
+    // Header: title + blank + hashrate + block + node + blank = 6
+    // GPUs: workers.size() lines + optional total line + separator = N + 1 or 2
+    int header_lines = 6 + static_cast<int>(st.workers.size())
+                     + (st.workers.size() > 1 ? 1 : 0) + 1;
+    int max_log = std::max(2, rows - header_lines - 1);
+
     std::ostringstream buf;
 
     if (g_ansi) buf << "\033[H";  // cursor home
@@ -684,8 +706,12 @@ static void tui_redraw(TuiState& st) {
     if (g_ansi) buf << "\033[K";
     buf << "\n";
 
-    // Event log
-    for (const auto& line : g_tui_log) {
+    // Event log — only show the most recent lines that fit on screen
+    size_t log_start = 0;
+    if (static_cast<int>(g_tui_log.size()) > max_log)
+        log_start = g_tui_log.size() - static_cast<size_t>(max_log);
+    for (size_t i = log_start; i < g_tui_log.size(); ++i) {
+        const auto& line = g_tui_log[i];
         // Colorize important log events
         if (line.find("BLOCK FOUND") != std::string::npos ||
             line.find("Accepted") != std::string::npos) {
