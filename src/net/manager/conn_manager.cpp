@@ -363,10 +363,10 @@ void ConnManager::send_to(uint64_t peer_id, net::Message msg) {
 
     auto result = peer.conn.send_message(msg);
     if (!result.ok()) {
-        LOG_WARN(core::LogCategory::NET,
-                 "Failed to send " + msg.header.get_command() +
-                 " to peer " + std::to_string(peer_id) + ": " +
-                 result.error().message());
+        LOG_DEBUG(core::LogCategory::NET,
+                  "Failed to send " + msg.header.get_command() +
+                  " to peer " + std::to_string(peer_id) + ": " +
+                  result.error().message());
         // Schedule disconnect outside the lock to avoid recursion.
         // We set the state and close the socket; the read loop will
         // detect the closure and emit the DISCONNECTED event.
