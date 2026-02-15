@@ -451,49 +451,9 @@ void NetManager::dns_seed_lookup() {
 
     if (addresses.empty()) {
         LOG_WARN(core::LogCategory::NET,
-                 "DNS seed resolution returned no addresses, "
-                 "falling back to hardcoded seeds");
-
-        // Fall back to hardcoded seed nodes.
-        const auto& seeds = net::get_seed_nodes();
-        for (const auto& seed : seeds) {
-            // Parse the host:port from the seed entry.
-            std::string host = seed;
-            uint16_t port = ConnManager::DEFAULT_PORT;
-
-            size_t bracket_close = seed.find(']');
-            if (bracket_close != std::string::npos) {
-                host = seed.substr(1, bracket_close - 1);
-                if (bracket_close + 1 < seed.size() &&
-                    seed[bracket_close + 1] == ':') {
-                    port = static_cast<uint16_t>(
-                        std::stoul(seed.substr(bracket_close + 2)));
-                }
-            } else {
-                size_t colon_pos = seed.rfind(':');
-                if (colon_pos != std::string::npos) {
-                    size_t first_colon = seed.find(':');
-                    if (first_colon == colon_pos) {
-                        host = seed.substr(0, colon_pos);
-                        port = static_cast<uint16_t>(
-                            std::stoul(seed.substr(colon_pos + 1)));
-                    }
-                }
-            }
-
-            // Add to address manager as a seed.
-            auto addr_result = net::NetAddress::from_string(host);
-            if (addr_result.ok()) {
-                AddressWithPort awp;
-                awp.addr = addr_result.value();
-                awp.port = port;
-                awp.timestamp = core::get_time();
-                awp.services = net::NODE_NETWORK | net::NODE_WITNESS;
-                addrman_.add(awp, NetAddress());  // unknown source for seed
-            }
-        }
+                 "DNS seed resolution returned no addresses");
     } else {
-        LOG_DEBUG(core::LogCategory::NET,
+        LOG_INFO(core::LogCategory::NET,
                  "DNS seeds returned " + std::to_string(addresses.size()) +
                  " addresses");
 
@@ -507,6 +467,45 @@ void NetManager::dns_seed_lookup() {
                 awp.services = net::NODE_NETWORK;
                 addrman_.add(awp, NetAddress());
             }
+        }
+    }
+
+    // Always add hardcoded seed nodes to AddrMan (not just as fallback).
+    // DNS seeds may return only a subset; hardcoded seeds ensure we
+    // always know about the core infrastructure nodes.
+    const auto& seeds = net::get_seed_nodes();
+    for (const auto& seed : seeds) {
+        std::string host = seed;
+        uint16_t port = ConnManager::DEFAULT_PORT;
+
+        size_t bracket_close = seed.find(']');
+        if (bracket_close != std::string::npos) {
+            host = seed.substr(1, bracket_close - 1);
+            if (bracket_close + 1 < seed.size() &&
+                seed[bracket_close + 1] == ':') {
+                port = static_cast<uint16_t>(
+                    std::stoul(seed.substr(bracket_close + 2)));
+            }
+        } else {
+            size_t colon_pos = seed.rfind(':');
+            if (colon_pos != std::string::npos) {
+                size_t first_colon = seed.find(':');
+                if (first_colon == colon_pos) {
+                    host = seed.substr(0, colon_pos);
+                    port = static_cast<uint16_t>(
+                        std::stoul(seed.substr(colon_pos + 1)));
+                }
+            }
+        }
+
+        auto addr_result = net::NetAddress::from_string(host);
+        if (addr_result.ok()) {
+            AddressWithPort awp;
+            awp.addr = addr_result.value();
+            awp.port = port;
+            awp.timestamp = core::get_time();
+            awp.services = net::NODE_NETWORK | net::NODE_WITNESS;
+            addrman_.add(awp, NetAddress());
         }
     }
 

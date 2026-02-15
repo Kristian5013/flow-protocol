@@ -64,7 +64,7 @@ const std::vector<std::string>& get_dns_seeds() {
 const std::vector<std::string>& get_seed_nodes() {
     static const std::vector<std::string> nodes = {
         // Seoul seed (seed.flowprotocol.net)
-        "3.35.208.160:9333",
+        "52.78.231.127:9333",
         // Virginia seed (seed.flowcoin.org)
         "44.221.81.40:9333",
     };
