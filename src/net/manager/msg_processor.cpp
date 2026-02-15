@@ -704,6 +704,16 @@ void MsgProcessor::handle_addr(uint64_t peer_id,
     int64_t now = core::get_time();
     int addresses_added = 0;
 
+    // Get the peer's address as source for AddrMan bucketing.
+    // Using the actual peer address (not the announced address) ensures
+    // proper bucket distribution and prevents collisions.
+    NetAddress source_addr;
+    Peer* sender = conn_manager_.get_peer(peer_id);
+    if (sender) {
+        auto sa = NetAddress::from_string(sender->conn.remote_address());
+        if (sa.ok()) source_addr = sa.value();
+    }
+
     for (uint64_t i = 0; i < count; ++i) {
         try {
             auto addr = AddressWithPort::deserialize(reader);
@@ -720,9 +730,7 @@ void MsgProcessor::handle_addr(uint64_t peer_id,
 
             // Only add routable addresses.
             if (addr.addr.is_routable()) {
-                // Source is the peer's address (approximated as the addr itself
-                // since we don't have the peer's NetAddress handy here).
-                addrman_.add(addr, addr.addr);
+                addrman_.add(addr, source_addr);
                 ++addresses_added;
             }
         } catch (const std::exception& e) {

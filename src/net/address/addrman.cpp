@@ -560,8 +560,10 @@ std::optional<AddressWithPort> AddrMan::select(bool new_only) const {
         }
     }
 
-    // Weighted random selection with up to 50 iterations.
-    constexpr int MAX_ITERATIONS = 50;
+    // Weighted random selection.  With a sparse table (few addresses
+    // in 65k+ slots) more iterations are needed for random bucket
+    // selection to find populated slots before falling back to linear scan.
+    constexpr int MAX_ITERATIONS = 300;
 
     for (int iter = 0; iter < MAX_ITERATIONS; ++iter) {
         if (use_new) {

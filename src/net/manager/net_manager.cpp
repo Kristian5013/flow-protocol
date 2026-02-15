@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace net {
@@ -310,7 +311,7 @@ void NetManager::event_loop(std::stop_token stoken) {
             if (config_.dns_seed && (now - start_time) >= DNS_SEED_DELAY) {
                 if (!dns_seed_done) {
                     dns_seed_done = true;
-                    if (conn_manager_->peer_count() < 2) {
+                    if (conn_manager_->outbound_count() < 2) {
                         dns_seed_lookup();
                     }
                 } else if (conn_manager_->outbound_count() == 0 &&
@@ -322,10 +323,17 @@ void NetManager::event_loop(std::stop_token stoken) {
                 }
             }
 
-            // Periodically try to open outbound connections.
+            // Periodically try to open outbound connections in a
+            // background thread so blocking connect() calls don't stall
+            // the event loop.
             if ((now - last_outbound_attempt) >= OUTBOUND_RETRY_INTERVAL) {
                 last_outbound_attempt = now;
-                open_outbound_connections();
+                if (!outbound_connecting_.exchange(true)) {
+                    std::thread([this]() {
+                        open_outbound_connections();
+                        outbound_connecting_.store(false);
+                    }).detach();
+                }
             }
         }
     }
