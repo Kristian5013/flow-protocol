@@ -511,32 +511,27 @@ void NetManager::dns_seed_lookup() {
         }
     }
 
-    // When isolated (no outbound connections), connect directly to the
-    // resolved addresses instead of relying on AddrMan random bucket
-    // selection.  With only a few addresses in a 65K-slot table, random
-    // selection has an extremely low hit rate and frequently fails.
-    if (conn_manager_->outbound_count() == 0) {
-        auto all_addrs = addrman_.get_addr_all(50);
-        for (const auto& addr : all_addrs) {
-            if (static_cast<int>(conn_manager_->outbound_count()) >=
-                config_.conn_config.max_outbound) {
-                break;
-            }
-            std::string host = addr.addr.to_string();
-            uint16_t port = addr.port;
-            auto result = conn_manager_->connect_to(host, port);
-            if (result.ok()) {
-                LOG_DEBUG(core::LogCategory::NET,
-                         "Direct connection to seed " + host + ":" +
-                         std::to_string(port));
-            }
+    // Connect directly to all known addresses instead of relying on
+    // AddrMan random bucket selection.  With only a few addresses in a
+    // 65K-slot table, random selection has an extremely low hit rate.
+    // connect_to() already rejects duplicates, so this is safe to call
+    // even if some addresses are already connected.
+    auto all_addrs = addrman_.get_addr_all(50);
+    for (const auto& addr : all_addrs) {
+        if (static_cast<int>(conn_manager_->outbound_count()) >=
+            config_.conn_config.max_outbound) {
+            break;
+        }
+        std::string host = addr.addr.to_string();
+        uint16_t port = addr.port;
+        auto result = conn_manager_->connect_to(host, port);
+        if (result.ok()) {
+            LOG_INFO(core::LogCategory::NET,
+                     "Opened outbound connection to " + host + ":" +
+                     std::to_string(port) +
+                     " (peer " + std::to_string(result.value()) + ")");
         }
     }
-
-    // The event loop will call open_outbound_connections() in a
-    // background thread once dns_seed_done is set — no need to call
-    // it here (doing so would block the event loop and cause duplicate
-    // connection attempts).
 }
 
 void NetManager::open_outbound_connections() {
