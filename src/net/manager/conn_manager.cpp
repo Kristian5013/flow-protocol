@@ -501,27 +501,7 @@ void ConnManager::handle_accept(net::Socket socket) {
     uint16_t remote_port = socket.remote_port();
     std::string remote = remote_addr + ":" + std::to_string(remote_port);
 
-    // 1) Rate limiting: max N new inbound connections per minute.
-    {
-        std::lock_guard lock(rate_mutex_);
-        int64_t now = core::get_time();
-        // Prune timestamps older than the window.
-        std::erase_if(inbound_timestamps_, [&](int64_t ts) {
-            return (now - ts) > RATE_LIMIT_WINDOW;
-        });
-        if (static_cast<int>(inbound_timestamps_.size()) >=
-            MAX_INBOUND_PER_MINUTE) {
-            LOG_DEBUG(core::LogCategory::NET,
-                      "Rejecting inbound from " + remote +
-                      ": rate limit exceeded (" +
-                      std::to_string(MAX_INBOUND_PER_MINUTE) + "/min)");
-            socket.close();
-            return;
-        }
-        inbound_timestamps_.push_back(now);
-    }
-
-    // 2) Per-IP limit: max 1 inbound connection per IP (like Bitcoin Core).
+    // 1) Per-IP limit: max 1 inbound connection per IP (like Bitcoin Core).
     {
         std::lock_guard lock(peers_mutex_);
         for (const auto& [_, peer] : peers_) {
@@ -645,6 +625,9 @@ void ConnManager::peer_read_loop(std::stop_token stoken, uint64_t peer_id) {
 
         if (!msg_result.ok()) {
             // Connection closed or error -- push disconnect event.
+            LOG_INFO(core::LogCategory::NET,
+                     "Read error on peer " + std::to_string(peer_id) +
+                     ": " + msg_result.error().message());
             if (!stoken.stop_requested()) {
                 PeerEvent event;
                 event.type = PeerEventType::DISCONNECTED;

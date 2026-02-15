@@ -213,12 +213,6 @@ private:
     std::unordered_set<std::string> self_addresses_;
     mutable std::mutex self_addr_mutex_;
 
-    // Inbound connection rate limiting: max 5 new connections per 60 seconds.
-    static constexpr int MAX_INBOUND_PER_MINUTE = 5;
-    static constexpr int RATE_LIMIT_WINDOW = 60;  // seconds
-    std::vector<int64_t> inbound_timestamps_;
-    std::mutex rate_mutex_;
-
     // Listen socket for accepting inbound connections.
     net::Socket listen_socket_;
 
