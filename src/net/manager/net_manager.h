@@ -184,6 +184,7 @@ private:
     static constexpr int64_t DNS_RESEED_INTERVAL = 60;      // re-seed every 60s when isolated
 
     int64_t last_dns_reseed_ = 0;
+    std::atomic<bool> outbound_connecting_{false};  // guard for async outbound thread
 };
 
 } // namespace net
