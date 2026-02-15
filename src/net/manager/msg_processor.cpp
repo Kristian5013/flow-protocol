@@ -739,10 +739,10 @@ void MsgProcessor::handle_addr(uint64_t peer_id,
         }
     }
 
-    LOG_DEBUG(core::LogCategory::NET,
-              "Received " + std::to_string(count) + " addresses from peer " +
-              std::to_string(peer_id) + ", added " +
-              std::to_string(addresses_added));
+    LOG_INFO(core::LogCategory::NET,
+             "Received " + std::to_string(count) + " addresses from peer " +
+             std::to_string(peer_id) + ", added " +
+             std::to_string(addresses_added) + " to AddrMan");
 }
 
 // ===========================================================================

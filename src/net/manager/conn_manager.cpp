@@ -341,6 +341,18 @@ size_t ConnManager::inbound_count() const {
     return count;
 }
 
+std::unordered_set<std::string> ConnManager::get_connected_addresses() const {
+    std::lock_guard lock(peers_mutex_);
+    std::unordered_set<std::string> addrs;
+    for (const auto& [_, peer] : peers_) {
+        if (peer->state != PeerState::DISCONNECTING &&
+            peer->state != PeerState::DISCONNECTED) {
+            addrs.insert(peer->conn.remote_address());
+        }
+    }
+    return addrs;
+}
+
 // ===========================================================================
 // Message sending
 // ===========================================================================
