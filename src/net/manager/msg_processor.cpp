@@ -63,7 +63,7 @@ void MsgProcessor::on_peer_connected(uint64_t peer_id, bool inbound) {
 }
 
 void MsgProcessor::on_peer_disconnected(uint64_t peer_id) {
-    LOG_DEBUG(core::LogCategory::NET,
+    LOG_INFO(core::LogCategory::NET,
              "Peer " + std::to_string(peer_id) + " disconnected");
 
     // If the disconnected peer was our sync peer, try to find a new one.

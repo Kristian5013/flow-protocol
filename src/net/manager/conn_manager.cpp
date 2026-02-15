@@ -266,7 +266,7 @@ void ConnManager::disconnect(uint64_t peer_id, DisconnectReason reason) {
         return;
     }
 
-    LOG_DEBUG(core::LogCategory::NET,
+    LOG_INFO(core::LogCategory::NET,
              "Disconnecting peer " + std::to_string(peer_id) +
              " (" + peer.conn.remote_address() +
              "): " + std::string(disconnect_reason_name(reason)));
