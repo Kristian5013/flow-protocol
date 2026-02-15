@@ -514,8 +514,14 @@ void NetManager::dns_seed_lookup() {
     // Connect directly to all known addresses instead of relying on
     // AddrMan random bucket selection.  With only a few addresses in a
     // 65K-slot table, random selection has an extremely low hit rate.
-    // connect_to() already rejects duplicates, so this is safe to call
-    // even if some addresses are already connected.
+    // Deduplicate locally since get_addr_all() may return the same IP
+    // from both the "new" and "tried" tables.
+    //
+    // Block the background open_outbound_connections() thread while we
+    // connect here, to prevent concurrent duplicate connect_to() calls.
+    outbound_connecting_.store(true);
+
+    auto connected = conn_manager_->get_connected_addresses();
     auto all_addrs = addrman_.get_addr_all(50);
     for (const auto& addr : all_addrs) {
         if (static_cast<int>(conn_manager_->outbound_count()) >=
@@ -524,14 +530,18 @@ void NetManager::dns_seed_lookup() {
         }
         std::string host = addr.addr.to_string();
         uint16_t port = addr.port;
+        if (connected.count(host)) continue;
         auto result = conn_manager_->connect_to(host, port);
         if (result.ok()) {
+            connected.insert(host);
             LOG_INFO(core::LogCategory::NET,
                      "Opened outbound connection to " + host + ":" +
                      std::to_string(port) +
                      " (peer " + std::to_string(result.value()) + ")");
         }
     }
+
+    outbound_connecting_.store(false);
 }
 
 void NetManager::open_outbound_connections() {
