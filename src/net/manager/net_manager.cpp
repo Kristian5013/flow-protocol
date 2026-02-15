@@ -533,8 +533,10 @@ void NetManager::dns_seed_lookup() {
         }
     }
 
-    // Also try AddrMan-based selection for additional connections.
-    open_outbound_connections();
+    // The event loop will call open_outbound_connections() in a
+    // background thread once dns_seed_done is set — no need to call
+    // it here (doing so would block the event loop and cause duplicate
+    // connection attempts).
 }
 
 void NetManager::open_outbound_connections() {
@@ -575,7 +577,7 @@ void NetManager::open_outbound_connections() {
         // select(false) returns a random address from either table.
         auto candidate_opt = addrman_.select(false);
         if (!candidate_opt.has_value()) {
-            LOG_INFO(core::LogCategory::NET,
+            LOG_DEBUG(core::LogCategory::NET,
                      "No candidate addresses in AddrMan for outbound connections");
             break;
         }
@@ -599,7 +601,7 @@ void NetManager::open_outbound_connections() {
             continue;
         }
 
-        LOG_INFO(core::LogCategory::NET,
+        LOG_DEBUG(core::LogCategory::NET,
                  "Trying outbound connection to " + host + ":" +
                  std::to_string(port));
 
