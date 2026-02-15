@@ -308,9 +308,11 @@ void NetManager::event_loop(std::stop_token stoken) {
             // DNS seed lookup after a short delay to allow explicit peers
             // to connect first.  Also re-seed if we have zero outbound
             // connections (node is isolated and needs new peers).
-            if (config_.dns_seed && (now - start_time) >= DNS_SEED_DELAY) {
+            if (config_.dns_seed && config_.connect_nodes.empty() &&
+                (now - start_time) >= DNS_SEED_DELAY) {
                 if (!dns_seed_done) {
                     dns_seed_done = true;
+                    last_dns_reseed_ = now;
                     if (conn_manager_->outbound_count() < 2) {
                         dns_seed_lookup();
                     }
