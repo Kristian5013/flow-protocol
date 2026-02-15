@@ -175,6 +175,9 @@ public:
     /// Number of inbound peers.
     size_t inbound_count() const;
 
+    /// Return the set of currently connected remote IP addresses.
+    std::unordered_set<std::string> get_connected_addresses() const;
+
     // -- Self-connection prevention ------------------------------------------
 
     /// Mark an address as our own (detected via nonce during VERSION exchange).

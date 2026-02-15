@@ -325,8 +325,10 @@ void NetManager::event_loop(std::stop_token stoken) {
 
             // Periodically try to open outbound connections in a
             // background thread so blocking connect() calls don't stall
-            // the event loop.
-            if ((now - last_outbound_attempt) >= OUTBOUND_RETRY_INTERVAL) {
+            // the event loop.  Wait until DNS seeding has run at least
+            // once so AddrMan has addresses to select from.
+            if (dns_seed_done &&
+                (now - last_outbound_attempt) >= OUTBOUND_RETRY_INTERVAL) {
                 last_outbound_attempt = now;
                 if (!outbound_connecting_.exchange(true)) {
                     std::thread([this]() {
@@ -559,9 +561,13 @@ void NetManager::open_outbound_connections() {
               std::to_string(current_outbound) + "/" +
               std::to_string(max_outbound) + ")");
 
+    // Collect currently connected addresses to skip them.
+    auto connected_addrs = conn_manager_->get_connected_addresses();
+
     // Try to connect to addresses from the address manager.
     int attempts = 0;
     int max_attempts = needed * 4;
+    int skipped = 0;
 
     while (current_outbound < max_outbound && attempts < max_attempts) {
         ++attempts;
@@ -569,8 +575,8 @@ void NetManager::open_outbound_connections() {
         // select(false) returns a random address from either table.
         auto candidate_opt = addrman_.select(false);
         if (!candidate_opt.has_value()) {
-            LOG_DEBUG(core::LogCategory::NET,
-                      "No candidate addresses available for outbound connections");
+            LOG_INFO(core::LogCategory::NET,
+                     "No candidate addresses in AddrMan for outbound connections");
             break;
         }
 
@@ -578,16 +584,31 @@ void NetManager::open_outbound_connections() {
         std::string host = candidate.addr.to_string();
         uint16_t port = candidate.port;
 
+        // Skip already-connected peers (don't waste attempts or
+        // penalize seed addresses with mark_attempt).
+        if (connected_addrs.count(host)) {
+            ++skipped;
+            // Avoid infinite loop when all known addresses are
+            // already connected.
+            if (skipped > max_attempts * 2) break;
+            continue;
+        }
+
         // Check the ban list.
         if (banman_.is_banned(candidate.addr)) {
             continue;
         }
 
+        LOG_INFO(core::LogCategory::NET,
+                 "Trying outbound connection to " + host + ":" +
+                 std::to_string(port));
+
         // Try to connect.
         auto result = conn_manager_->connect_to(host, port);
         if (result.ok()) {
             ++current_outbound;
-            LOG_DEBUG(core::LogCategory::NET,
+            connected_addrs.insert(host);
+            LOG_INFO(core::LogCategory::NET,
                      "Opened outbound connection to " +
                      host + ":" + std::to_string(port) +
                      " (peer " + std::to_string(result.value()) + ")");
