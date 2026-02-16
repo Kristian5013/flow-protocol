@@ -501,22 +501,7 @@ void ConnManager::handle_accept(net::Socket socket) {
     uint16_t remote_port = socket.remote_port();
     std::string remote = remote_addr + ":" + std::to_string(remote_port);
 
-    // 1) Per-IP limit: max 1 inbound connection per IP (like Bitcoin Core).
-    {
-        std::lock_guard lock(peers_mutex_);
-        for (const auto& [_, peer] : peers_) {
-            if (peer->inbound &&
-                peer->conn.remote_address() == remote_addr) {
-                LOG_DEBUG(core::LogCategory::NET,
-                          "Rejecting inbound from " + remote +
-                          ": already connected from this IP");
-                socket.close();
-                return;
-            }
-        }
-    }
-
-    // 3) Check inbound slot availability.  If full, try to evict the
+    // Check inbound slot availability.  If full, try to evict the
     //    worst inbound peer (highest banscore, then oldest with least
     //    bytes transferred) to make room — like Bitcoin Core eviction.
     if (static_cast<int>(inbound_count()) >= config_.max_inbound) {
