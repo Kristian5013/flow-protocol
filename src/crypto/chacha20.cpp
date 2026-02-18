@@ -146,7 +146,7 @@ core::Result<ChaCha20Encrypted> chacha20_poly1305_encrypt(
             "failed to get Poly1305 tag");
     }
 
-    return std::move(result);
+    return result;
 }
 
 core::Result<std::vector<uint8_t>> chacha20_poly1305_decrypt(
@@ -231,7 +231,7 @@ core::Result<std::vector<uint8_t>> chacha20_poly1305_decrypt(
     plaintext.resize(
         static_cast<size_t>(out_len + final_len));
 
-    return std::move(plaintext);
+    return plaintext;
 }
 
 // -----------------------------------------------------------

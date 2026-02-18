@@ -19,7 +19,7 @@
 #   include <winsock2.h>
 #   include <ws2tcpip.h>
 #   include <mstcpip.h>   // For SIO_KEEPALIVE_VALS on older SDKs
-#   pragma comment(lib, "ws2_32.lib")
+    // ws2_32 linked via CMake PLATFORM_LIBS
 #else
 #   include <arpa/inet.h>
 #   include <cerrno>

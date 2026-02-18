@@ -332,8 +332,7 @@ std::string base64_encode(std::string_view input) {
 
         uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
 
-        size_t remaining = input.size() - (i - (i < input.size() ? 0 : (octet_c ? 0 : (octet_b ? 1 : 2))));
-        // Simpler approach:
+        // Encode triple to 4 base64 characters:
         out += B64_TABLE[(triple >> 18) & 0x3F];
         out += B64_TABLE[(triple >> 12) & 0x3F];
         out += B64_TABLE[(triple >> 6) & 0x3F];

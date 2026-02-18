@@ -158,7 +158,7 @@ core::Result<AESEncrypted> aes256_gcm_encrypt(
             "failed to get GCM tag");
     }
 
-    return std::move(result);
+    return result;
 }
 
 core::Result<std::vector<uint8_t>> aes256_gcm_decrypt(
@@ -241,7 +241,7 @@ core::Result<std::vector<uint8_t>> aes256_gcm_decrypt(
     plaintext.resize(
         static_cast<size_t>(out_len + final_len));
 
-    return std::move(plaintext);
+    return plaintext;
 }
 
 // -----------------------------------------------------------
@@ -293,7 +293,7 @@ core::Result<std::vector<uint8_t>> aes256_cbc_encrypt(
     ciphertext.resize(
         static_cast<size_t>(out_len + final_len));
 
-    return std::move(ciphertext);
+    return ciphertext;
 }
 
 core::Result<std::vector<uint8_t>> aes256_cbc_decrypt(

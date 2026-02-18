@@ -146,24 +146,6 @@ std::string bytes_to_hex(const uint8_t* data, size_t len) {
     return result;
 }
 
-/// Convert hex string to bytes.
-std::vector<uint8_t> hex_to_bytes(const std::string& hex) {
-    std::vector<uint8_t> result;
-    result.reserve(hex.size() / 2);
-    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
-        uint8_t high = 0, low = 0;
-        if (hex[i] >= '0' && hex[i] <= '9') high = hex[i] - '0';
-        else if (hex[i] >= 'a' && hex[i] <= 'f') high = hex[i] - 'a' + 10;
-        else if (hex[i] >= 'A' && hex[i] <= 'F') high = hex[i] - 'A' + 10;
-
-        if (hex[i+1] >= '0' && hex[i+1] <= '9') low = hex[i+1] - '0';
-        else if (hex[i+1] >= 'a' && hex[i+1] <= 'f') low = hex[i+1] - 'a' + 10;
-        else if (hex[i+1] >= 'A' && hex[i+1] <= 'F') low = hex[i+1] - 'A' + 10;
-
-        result.push_back(static_cast<uint8_t>((high << 4) | low));
-    }
-    return result;
-}
 
 } // anonymous namespace
 

@@ -5,6 +5,9 @@
 #include "gpu/gpu_miner.h"
 #include "kernel_source.h"
 
+#ifndef CL_TARGET_OPENCL_VERSION
+#define CL_TARGET_OPENCL_VERSION 120
+#endif
 #include <CL/cl.h>
 
 #include <array>

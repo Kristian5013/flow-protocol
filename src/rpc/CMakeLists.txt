@@ -26,3 +26,7 @@ target_link_libraries(ftc_rpc PUBLIC
     Threads::Threads
     ${PLATFORM_LIBS}
 )
+
+if(WIN32)
+    target_link_libraries(ftc_rpc PRIVATE psapi)
+endif()

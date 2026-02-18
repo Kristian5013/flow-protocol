@@ -70,21 +70,7 @@ bool signals_rbf(const primitives::Transaction& tx) {
     return false;
 }
 
-/// Check if a specific input signals RBF.
-static bool input_signals_rbf(const primitives::TxInput& input) {
-    return input.sequence <= MAX_BIP125_SEQUENCE;
-}
 
-/// Count how many inputs signal RBF in a transaction.
-static size_t count_rbf_signaling_inputs(const primitives::Transaction& tx) {
-    size_t count = 0;
-    for (const auto& input : tx.vin()) {
-        if (input_signals_rbf(input)) {
-            ++count;
-        }
-    }
-    return count;
-}
 
 // ---------------------------------------------------------------------------
 // compute_rbf_min_fee
@@ -145,8 +131,6 @@ bool check_no_new_unconfirmed(
     // For each input of the replacement transaction, check if it spends
     // an unconfirmed output that does not belong to a conflict.
     for (const auto& input : new_tx.vin()) {
-        const core::uint256* spender = pool.get_spender(input.prevout);
-
         // If the input's prevout txid is in the mempool but not a conflict,
         // this is a new unconfirmed parent.
         if (pool.exists(input.prevout.txid)) {

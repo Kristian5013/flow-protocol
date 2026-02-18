@@ -668,8 +668,6 @@ core::Result<AddressWithPort> AddressWithPort::from_string(
 
     std::string_view addr_part;
     uint16_t port = default_port;
-    bool has_port = false;
-
     if (!str.empty() && str.front() == '[') {
         // Bracketed IPv6: "[::1]:9333"
         auto close = str.find(']');
@@ -701,7 +699,7 @@ core::Result<AddressWithPort> AddressWithPort::from_string(
                                    "port out of range: " + std::string(port_str));
             }
             port = static_cast<uint16_t>(parsed);
-            has_port = true;
+            // port was parsed successfully
         }
     } else {
         // Non-bracketed: could be "1.2.3.4:9333" or just "1.2.3.4".
@@ -733,7 +731,7 @@ core::Result<AddressWithPort> AddressWithPort::from_string(
                                        "port out of range: " + std::string(port_str));
                 }
                 port = static_cast<uint16_t>(parsed);
-                has_port = true;
+                // port was parsed successfully
             }
         } else {
             // Zero colons (plain IPv4 / hostname) or multiple colons (bare IPv6).

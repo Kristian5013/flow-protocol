@@ -18,7 +18,7 @@ namespace net {
 namespace {
 
 /// Returns the maximum meaningful prefix length for a given network type.
-uint8_t max_prefix_for_network(Network net) noexcept {
+uint16_t max_prefix_for_network(Network net) noexcept {
     switch (net) {
         case Network::IPV4:  return 32;
         case Network::IPV6:  return 128;
@@ -52,23 +52,6 @@ bool match_prefix(const uint8_t* a, const uint8_t* b,
     }
 
     return true;
-}
-
-/// Zero out the host portion of an address byte array past `prefix_bits`.
-void mask_bytes(uint8_t* bytes, size_t total_bytes, uint8_t prefix_bits) noexcept {
-    uint8_t full_bytes = prefix_bits / 8;
-    uint8_t remaining_bits = prefix_bits % 8;
-
-    if (remaining_bits > 0 && full_bytes < total_bytes) {
-        uint8_t mask = static_cast<uint8_t>(0xFF << (8 - remaining_bits));
-        bytes[full_bytes] &= mask;
-        full_bytes += 1;
-    }
-
-    // Zero remaining bytes.
-    if (full_bytes < total_bytes) {
-        std::memset(bytes + full_bytes, 0, total_bytes - full_bytes);
-    }
 }
 
 /// Returns the byte count used by a network type for address data.

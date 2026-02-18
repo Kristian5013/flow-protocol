@@ -18,7 +18,7 @@
     #endif
     #include <winsock2.h>
     #include <ws2tcpip.h>
-    #pragma comment(lib, "ws2_32.lib")
+    // ws2_32 linked via CMake PLATFORM_LIBS
 #else
     #include <netdb.h>
     #include <sys/types.h>

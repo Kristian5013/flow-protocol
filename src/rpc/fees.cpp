@@ -73,10 +73,6 @@ RpcResponse rpc_estimaterawfee(const RpcRequest& req,
         conf_target = mempool::MAX_TARGET;
     }
 
-    // Get detailed estimation
-    auto est = fee_estimator.estimate_fee_detailed(
-        static_cast<int>(conf_target));
-
     JsonValue result(JsonValue::Object{});
 
     // Short horizon estimate

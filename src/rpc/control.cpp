@@ -21,7 +21,7 @@
     #endif
     #include <windows.h>
     #include <psapi.h>
-    #pragma comment(lib, "psapi.lib")
+    // Link psapi via CMake; pragma comment not supported on MinGW
 #else
     #include <sys/resource.h>
     #include <unistd.h>
