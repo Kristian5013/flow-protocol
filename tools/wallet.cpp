@@ -482,7 +482,9 @@ static void cmd_addresses(const std::string& wallet_file) {
 // ---------------------------------------------------------------------------
 static std::vector<Utxo> fetch_utxos(
     const std::string& host, uint16_t port,
-    const std::vector<WalletKey>& keys) {
+    const std::vector<WalletKey>& keys,
+    bool include_immature = false,
+    int64_t* out_chain_height = nullptr) {
 
     if (keys.empty()) return {};
 
@@ -527,6 +529,7 @@ static std::vector<Utxo> fetch_utxos(
             }
         } catch (...) {}
     }
+    if (out_chain_height) *out_chain_height = chain_height;
 
     auto& result = json["result"];
     std::vector<Utxo> utxos;
@@ -542,8 +545,8 @@ static std::vector<Utxo> fetch_utxos(
                             ? u["coinbase"].get_bool() : false;
             utxo.script_pubkey = u["scriptPubKey"].get_string();
 
-            // Skip immature coinbase outputs
-            if (utxo.coinbase &&
+            // Skip immature coinbase outputs unless caller wants them
+            if (!include_immature && utxo.coinbase &&
                 (chain_height - utxo.height) < COINBASE_MATURITY) {
                 continue;
             }
@@ -567,15 +570,32 @@ static void cmd_balance(const std::string& wallet_file,
         return;
     }
 
-    auto utxos = fetch_utxos(host, port, keys);
+    int64_t chain_height = 0;
+    auto all_utxos = fetch_utxos(host, port, keys, true, &chain_height);
 
-    int64_t total = 0;
-    for (const auto& u : utxos) {
-        total += u.amount;
+    int64_t spendable = 0;
+    int64_t immature = 0;
+    int spendable_count = 0;
+    int immature_count = 0;
+    for (const auto& u : all_utxos) {
+        if (u.coinbase &&
+            (chain_height - u.height) < COINBASE_MATURITY) {
+            immature += u.amount;
+            ++immature_count;
+        } else {
+            spendable += u.amount;
+            ++spendable_count;
+        }
     }
 
-    std::cout << "Balance: " << format_ftc(total) << " FTC"
-              << "  (" << utxos.size() << " UTXOs)" << std::endl;
+    std::cout << "Balance: " << format_ftc(spendable) << " FTC"
+              << "  (" << spendable_count << " UTXOs)" << std::endl;
+    if (immature > 0) {
+        std::cout << "Immature: " << format_ftc(immature) << " FTC"
+                  << "  (" << immature_count << " coinbase, "
+                  << COINBASE_MATURITY << " confirmations required)"
+                  << std::endl;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -589,7 +609,8 @@ static void cmd_listunspent(const std::string& wallet_file,
         return;
     }
 
-    auto utxos = fetch_utxos(host, port, keys);
+    int64_t chain_height = 0;
+    auto utxos = fetch_utxos(host, port, keys, true, &chain_height);
     if (utxos.empty()) {
         std::cout << "No unspent outputs." << std::endl;
         return;
@@ -598,11 +619,17 @@ static void cmd_listunspent(const std::string& wallet_file,
     std::cout << "Unspent outputs (" << utxos.size() << "):" << std::endl;
     int64_t total = 0;
     for (const auto& u : utxos) {
+        int64_t confs = chain_height - u.height;
+        bool is_immature = u.coinbase && confs < COINBASE_MATURITY;
         std::cout << "  " << u.txid << ":" << u.vout
                   << "  " << format_ftc(u.amount) << " FTC"
-                  << "  height=" << u.height
-                  << (u.coinbase ? " [coinbase]" : "")
-                  << std::endl;
+                  << "  height=" << u.height;
+        if (u.coinbase) {
+            std::cout << " [coinbase " << confs << "/"
+                      << COINBASE_MATURITY << " conf]";
+            if (is_immature) std::cout << " (immature)";
+        }
+        std::cout << std::endl;
         total += u.amount;
     }
     std::cout << "Total: " << format_ftc(total) << " FTC" << std::endl;
