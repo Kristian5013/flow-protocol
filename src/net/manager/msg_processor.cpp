@@ -303,10 +303,13 @@ void MsgProcessor::on_tick(int64_t now) {
         if (tip != nullptr) {
             int64_t tip_time = static_cast<int64_t>(tip->time);
             if ((now - tip_time) > STALE_TIP_THRESHOLD) {
-                LOG_INFO(core::LogCategory::NET,
-                         "Stale tip detected (tip time " +
-                         core::format_iso8601(tip_time) +
-                         "), attempting resync");
+                if (!stale_tip_logged_) {
+                    LOG_INFO(core::LogCategory::NET,
+                             "Stale tip detected (tip time " +
+                             core::format_iso8601(tip_time) +
+                             "), attempting resync");
+                    stale_tip_logged_ = true;
+                }
                 maybe_start_sync();
 
                 // If no outbound peers, probe ALL connected peers
@@ -320,6 +323,8 @@ void MsgProcessor::on_tick(int64_t now) {
                         }
                     }
                 }
+            } else {
+                stale_tip_logged_ = false;
             }
         }
     }

@@ -38,8 +38,8 @@ public:
     static constexpr int64_t BLOCK_INTERVAL = 600;
 
     /// A tip is considered stale if no block has been received for this
-    /// many seconds (30 minutes = 3 block intervals).
-    static constexpr int64_t STALE_TIP_THRESHOLD = 30 * 60;
+    /// many seconds (45 minutes = 4.5 block intervals).
+    static constexpr int64_t STALE_TIP_THRESHOLD = 45 * 60;
 
     /// Minimum interval between stale tip checks in seconds.
     /// Prevents flooding the network with header requests.

@@ -126,7 +126,8 @@ private:
     // -- Block download parameters (Bitcoin Core style) ----------------------
 
     static constexpr int64_t STALE_TIP_CHECK_INTERVAL = 30;     // seconds
-    static constexpr int64_t STALE_TIP_THRESHOLD = 30 * 60;     // 30 minutes
+    static constexpr int64_t STALE_TIP_THRESHOLD = 45 * 60;     // 45 minutes
+    bool stale_tip_logged_ = false;  // suppress repeated stale tip log spam
     static constexpr int     MAX_BLOCKS_IN_TRANSIT_PER_PEER = 128;
 
     /// Stalling timeout: when a peer is blocking the download pipeline for
