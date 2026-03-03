@@ -41,7 +41,6 @@ namespace net {
 
 const std::vector<std::string>& get_dns_seeds() {
     static const std::vector<std::string> seeds = {
-        "seed.flowprotocol.net",
         "flowcoin.org",
     };
     return seeds;
