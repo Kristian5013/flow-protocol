@@ -62,7 +62,7 @@ const std::vector<std::string>& get_dns_seeds() {
 
 const std::vector<std::string>& get_seed_nodes() {
     static const std::vector<std::string> nodes = {
-        // Primary seed (seed.flowprotocol.net)
+        // Primary seed (flowcoin.org)
         "188.137.227.180:9333",
     };
     return nodes;

@@ -835,8 +835,8 @@ int main(int argc, char* argv[]) {
                   << "  --wallet=FILE       Wallet file (default: wallet.keys)\n\n"
                   << "Examples:\n"
                   << "  ftc-wallet newaddress\n"
-                  << "  ftc-wallet --rpc-host=seed.flowprotocol.net balance\n"
-                  << "  ftc-wallet --rpc-host=seed.flowprotocol.net send 1A73... 0.001\n";
+                  << "  ftc-wallet --rpc-host=flowcoin.org balance\n"
+                  << "  ftc-wallet --rpc-host=flowcoin.org send 1A73... 0.001\n";
         return 0;
     }
 
