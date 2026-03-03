@@ -41,8 +41,8 @@ namespace net {
 
 const std::vector<std::string>& get_dns_seeds() {
     static const std::vector<std::string> seeds = {
-        "seed.flowcoin.org",
         "seed.flowprotocol.net",
+        "flowcoin.org",
     };
     return seeds;
 }
@@ -58,15 +58,13 @@ const std::vector<std::string>& get_dns_seeds() {
 // crawler against the live network and selecting nodes that have been
 // continuously reachable for at least 30 days.
 //
-// Last updated: 2026-01-15
+// Last updated: 2026-03-03
 // ---------------------------------------------------------------------------
 
 const std::vector<std::string>& get_seed_nodes() {
     static const std::vector<std::string> nodes = {
-        // Seoul seed (seed.flowprotocol.net)
-        "52.78.231.127:9333",
-        // Virginia seed (seed.flowcoin.org)
-        "44.221.81.40:9333",
+        // Primary seed (seed.flowprotocol.net)
+        "188.137.227.180:9333",
     };
     return nodes;
 }
