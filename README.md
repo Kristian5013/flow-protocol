@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://flowcoin.org">flowcoin.org</a> &bull;
   <a href="https://flowprotocol.net">flowprotocol.net</a> &bull;
-  <a href="https://t.me/flowcoin_main">Telegram</a> &bull;
+  <a href="https://t.me/kristianpilatovich">Telegram</a> &bull;
   <a href="https://github.com/Kristian5013/flow-protocol">GitHub</a>
 </p>
 
